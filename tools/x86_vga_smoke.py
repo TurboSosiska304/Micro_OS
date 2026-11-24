@@ -312,6 +312,25 @@ SHOTS_DIR = None
 FONT_SOURCE = os.path.join(ROOT, "ports/port_x86_64/src/font_spleen.c")
 
 
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "ports/port_x86_64/src/kmain.c")
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 def load_font() -> dict:
     """The 8x16 font the picture is made of, read from its table in the tree.
 
@@ -1163,7 +1182,7 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
             # banner in the transcript is a line that is already on the
             # picture; the dump is taken at once, before the rest of the boot
             # covers it.
-            banner = machine.wait_serial("board: qemu_x86_64", timeout)
+            banner = machine.wait_serial(board_line(), timeout)
             expect("the boot reaches the banner", banner, "the banner never reached COM1")
 
             first = machine.picture(workdir)

@@ -100,8 +100,27 @@ FATAL_SMP = [
 # The lines of the boot that have to be in the banner. A session that starts
 # the load on a machine without its filesystem or its shell would exercise
 # nothing.
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "ports/port_x86_64/src/kmain.c")
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 BOOT_EXPECT = [
-    "board: qemu_x86_64",
+    board_line(),
     "the kernel is up",
     "vfs: '/' is mounted",
     "x86-64: the root volume is ata0p1",
