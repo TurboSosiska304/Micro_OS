@@ -540,9 +540,106 @@ static void test_journal_rename(void)
     volume_free();
 }
 
+/*
+ * Fill the stack of this thread with a pattern and return. The call after it
+ * - the rename - walks frames of the same depth, and a byte that a structure
+ * of the filesystem forgot to write shows up as the pattern and not as a
+ * zero of a lucky frame.
+ */
+static void stack_noise(void)
+{
+    volatile k_u8_t noise[8192];
+    k_size_t i;
+
+    for (i = 0; i < sizeof(noise); i++) {
+        noise[i] = (k_u8_t)0x5Au;
+    }
+}
+
+/*
+ * The two properties a block of the metadata cannot lose without a byte of
+ * the medium being undefined:
+ *
+ *   - the header of the volume is the same bytes when the same volume is
+ *     formatted twice: every field of it is written, and its checksum is
+ *     taken over bytes the format defines (no padding of a structure);
+ *   - the reserved byte of a directory entry - the byte after the type - is
+ *     zero, whatever object wrote the entry. A rename takes the entry of the
+ *     lookup and writes it again, and the lookup does not fill the reserved
+ *     byte; the writer itself has to zero it, or the journal checksums a byte
+ *     of a stack frame (the defect the valgrind pass of 1.9 found).
+ */
+static void test_journal_bytes(void)
+{
+    struct mfs_file file;
+    k_u8_t first[MFS_BLOCK_SIZE];
+    k_u32_t block;
+    k_u32_t offset;
+    k_u32_t entries = 0;
+
+    ktest_begin("mfs journal: the metadata carries no byte that nobody wrote");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+
+    /* The header of a volume is the bytes of its fields: format it again and
+     * the block is the same. */
+    KT_CHECK_INT_EQ(cut_read(NULL, CUT_BLOCKS - 1u, first, 1), 0);
+    KT_CHECK_INT_EQ(mfs_format_ex(&g_device, 256, MFS_FORMAT_JOURNAL), MFS_OK);
+    {
+        k_u8_t again[MFS_BLOCK_SIZE];
+
+        KT_CHECK_INT_EQ(cut_read(NULL, CUT_BLOCKS - 1u, again, 1), 0);
+        KT_CHECK(memcmp(first, again, MFS_BLOCK_SIZE) == 0);
+    }
+
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/a.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/a.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK(mfs_write(&file, "hello", 5) == 5);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    stack_noise();
+    KT_CHECK_INT_EQ(mfs_rename("/a.txt", "/b.txt"), MFS_OK);
+    mfs_unmount();
+
+    /* The entry of b.txt on the medium: the eight bytes of its header and the
+     * name. Every one of them is a byte the format names, and the reserved
+     * one is zero. */
+    for (block = 0; block < CUT_BLOCKS; block++) {
+        const k_u8_t *data = g_volume + (k_size_t)block * MFS_BLOCK_SIZE;
+
+        for (offset = 0; offset + 8u + 5u <= MFS_BLOCK_SIZE; offset++) {
+            k_u16_t name_len;
+
+            memcpy(&name_len, data + offset + 4, sizeof(name_len));
+
+            if (name_len != 5u || memcmp(data + offset + 8u, "b.txt", 5u) != 0) {
+                continue;
+            }
+
+            entries++;
+            KT_CHECK_INT_EQ(data[offset + 4], 5u);
+            KT_CHECK_INT_EQ(data[offset + 5], 0u);
+            KT_CHECK_INT_EQ(data[offset + 7], 0u);
+            KT_CHECK_INT_EQ(data[offset + 6] & MFS_INODE_DIR, 0u);
+        }
+    }
+
+    KT_CHECK(entries > 0u);
+
+    volume_free();
+}
+
 void test_mfs_journal(void)
 {
     test_journal_format();
+    test_journal_bytes();
     test_journal_cut();
     test_journal_rename();
 }

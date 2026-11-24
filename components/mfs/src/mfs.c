@@ -2169,6 +2169,7 @@ static int dir_entries(const struct dir_buffer *buf, struct mfs_dirent *out, k_s
         struct mfs_dirent entry;
         k_size_t name_len;
 
+        memset(&entry, 0, sizeof(entry));
         memcpy(&entry.inode, buf->data + offset, sizeof(entry.inode));
         memcpy(&entry.name_len, buf->data + offset + 4, sizeof(entry.name_len));
         entry.type = buf->data[offset + 6];
@@ -2232,6 +2233,7 @@ static int dir_find(const struct dir_buffer *buf, const char *name, struct mfs_d
         if (entry.name_len == name_len &&
             memcmp(buf->data + offset + sizeof(struct mfs_dirent_header), name, name_len) == 0) {
             if (out != NULL) {
+                memset(out, 0, sizeof(*out));
                 memcpy(out->name, buf->data + offset + sizeof(struct mfs_dirent_header), name_len);
                 out->name[name_len] = '\0';
                 out->inode = entry.inode;
@@ -2250,7 +2252,8 @@ static int dir_find(const struct dir_buffer *buf, const char *name, struct mfs_d
 /* Add an entry to a directory. */
 static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
 {
-    k_size_t need = sizeof(struct mfs_dirent_header) + entry->name_len;
+    struct mfs_dirent_header header;
+    k_size_t need = sizeof(header) + entry->name_len;
 
     /*
      * The buffer of the directory is the room of the directory: a person
@@ -2262,8 +2265,21 @@ static int dir_add(struct dir_buffer *buf, const struct mfs_dirent *entry)
         return MFS_ENOSPC;
     }
 
-    memcpy(buf->data + buf->size, entry, sizeof(struct mfs_dirent_header));
-    memcpy(buf->data + buf->size + sizeof(struct mfs_dirent_header), entry->name, entry->name_len);
+    /*
+     * The bytes of the entry are built here and not copied from the caller:
+     * a `struct mfs_dirent` has fields a lookup does not fill - `reserved`
+     * among them - and a block of a directory that carries a byte nobody
+     * wrote is a block the journal checksums over undefined memory (ADR
+     * 0047, and the valgrind pass of the suite). The reserved byte of the
+     * format is zero, and it is zero here.
+     */
+    memset(&header, 0, sizeof(header));
+    header.inode = entry->inode;
+    header.name_len = entry->name_len;
+    header.type = entry->type;
+
+    memcpy(buf->data + buf->size, &header, sizeof(header));
+    memcpy(buf->data + buf->size + sizeof(header), entry->name, entry->name_len);
     buf->size += need;
 
     return MFS_OK;
