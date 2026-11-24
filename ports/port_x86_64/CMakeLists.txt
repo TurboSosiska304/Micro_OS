@@ -1563,7 +1563,7 @@ endif()
 
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
-    KERNEL_BOARD_DESC="QEMU x86-64 machine"
+    KERNEL_BOARD_DESC="x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
     KERNEL_SMP=$<BOOL:${KERNEL_SMP}>
