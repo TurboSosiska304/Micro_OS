@@ -468,8 +468,10 @@ static const struct settings_known g_known[] = {
     {"display", "# the screen\nrotation=0\ninvert=1\nbrightness=100\ntheme=dark\n",
      "rotation invert brightness theme"},
     {"font", "# the font\nscale=1\ncolumns=0\nrows=0\nline_gap=0\n", "scale columns rows line_gap"},
-    {"console", "# the console\ninvert=0\ntheme=dark\nink=theme\npaper=theme\n",
-     "invert theme ink paper"},
+    {"console",
+     "# the console\ninvert=0\ntheme=dark\nink=theme\npaper=theme\n"
+     "clock=24h\nutc_offset=0\n",
+     "invert theme ink paper clock utc_offset"},
 };
 
 k_size_t settings_known_count(void)
