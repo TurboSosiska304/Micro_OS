@@ -54,4 +54,16 @@ struct mkfs_mfs_entry {
 int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
                          const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch);
 
+/*
+ * The same with the flags of the format: `MKFS_MFS_JOURNAL` writes a version
+ * 4 volume, the format of ADR 0047, and 0 writes the version 3 volume of
+ * 1.8. The image of the machine asks for the journal; a test that wants the
+ * old format asks for none.
+ */
+#define MKFS_MFS_JOURNAL 0x1u
+
+int mkfs_mfs_build_image_ex(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
+                            const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch,
+                            k_u32_t flags);
+
 #endif /* MICRO_OS_TOOLS_MKFS_MFS_H */
