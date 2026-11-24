@@ -498,7 +498,7 @@ of an older copy knows what changed.
 * **The window of x86-64 is 16 MiB, not 32 MiB.** `docs/ports/x86_64/README.md`
   said "the window is 32 MiB at 32 MiB"; it starts at 32 MiB and ends at
   48 MiB.
-## K15 - The machine that switches itself off (ADR 0050)
+## K20 - The machine that switches itself off (ADR 0050)
 
 `shutdown`, `poweroff`, `halt` and `reboot` bring the machine down in an
 order that keeps the volume clean, and the port owns the last step:

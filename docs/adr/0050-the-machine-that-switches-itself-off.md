@@ -95,7 +95,7 @@ before a task is touched, so a disk that refuses costs a sentence and not the
 boot. A refusal **after** the signals (step 4 or 5) cannot bring back the
 tasks the SIGTERM ended; the shell of the call is still there and the reason
 is the line of the log. That price of the order is written in
-`docs/debts.md` (K15) rather than hidden.
+`docs/debts.md` (K20) rather than hidden.
 
 The shell prints its own sentence (`shutdown: the clean end of the machine
 (off)`) and the kernel log carries the steps, so both the person at the
