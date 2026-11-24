@@ -386,18 +386,29 @@ right, and the two runs after it were green again.
 
 ## K15 - The wakeup of a wait, and the window of its registration
 
-`k_wait_block` registers the waiter **after** the caller has looked at the
-object. A wake that arrives between the look and the registration finds no
-record of that task and is lost: with a wait that has no deadline, the waiter
-sleeps for as long as the machine is up. It is the shape of the failure that
+`k_wait_block` registered the waiter **after** the caller had looked at the
+object. A wake that arrived between the look and the registration found no
+record of that task and was lost: with a wait that had no deadline, the waiter
+slept for as long as the machine was up. It is the shape of the failure that
 the unit test of the host showed under a slow runner of the cloud: a case of
 the shell's pipelines never finished and the suite died on its timeout of 120
 seconds, with no failed check and no sentence - a hang, not a wrong answer.
+1.8 closed it with a bound and not with its cause.
+
+**Closed in 1.9 (ADR 0046).** `k_wait_arm` registers the waiter under the lock
+of the object, `k_wait_sleep` looks at the record and marks the task as
+sleeping in one critical section (`k_sched_sleep_unless`), `k_wait_disarm`
+drops it. `k_wait_block` is gone, so no caller can rebuild the shape; the pipe,
+`poll` and the console use the three calls. The case of the window is in the
+suite (`tests/cases/test_wait.c`: the waiter gives the CPU back between the arm
+and the sleep, the wake arrives in that moment, and the wait answers WOKEN).
 
 | Debt | Where | Status | What it needs |
 |---|---|---|---|
-| The window is closed by a bound and not by the cause: a pipe and a `poll(-1)` now wait twenty milliseconds at a time (`KFILE_WAIT_CHUNK_MS`), so a lost wakeup costs a turn of the loop instead of the line. The cause - register, then look, then sleep, and give the waiter back its place when the look says the state is already the one it wants - is the arm/sleep/disarm pair of the kernel API and the lock of the object taken across it. | `components/kernel/src/wait.c`, `src/kfile.c`, `src/ksys.c`, `components/kernel/include/kernel/{wait,kfile}.h` | open | `k_wait_arm` / `k_wait_sleep` / `k_wait_disarm` with the object's lock held across the arm and the look, a case that puts the two tasks in the window on purpose (the wake needs a moment of the scheduler between them), and the wake of the port by the line of the timer instead of by the tick - the same lane that takes the latency of a pipe from 1.006 ms to under 100 µs (`docs/bench.md`). |
-| The latency of a wake is one tick: `k_wait_wake` moves `wake_tick` to the present and the sleeping task becomes runnable at the next tick of the timer, so a round trip of a pipe of the host or of the board is 1.006 ms. | `components/kernel/src/wait.c` (`wake_locked`), `src/sched.c` | open | The wake runs the queue of the core (or sends the IPI of K8), and the port's sleep is cut by the wake itself; the bench of `make bench` and `tools/x86_bench.py` show the two halves. |
+| The window of the registration. | `components/kernel/src/wait.c`, `src/kfile.c`, `src/ksys.c`, `components/kernel/include/kernel/{wait,kfile}.h`, `tests/cases/test_wait.c` | **fixed in 1.9** | Nothing: the arm is taken under the lock of the object and the sleep is skipped when the record is already woken. `KFILE_WAIT_CHUNK_MS` and the twenty milliseconds of 1.8 are removed with it. |
+| The latency of a wake was one tick: `k_wait_wake` moved `wake_tick` to the present and the sleeping task became runnable at the next tick of the timer, so a round trip of a pipe was 1.006 ms. | `components/kernel/src/wait.c` (`wake_and_flush`), `src/sched.c` (`k_sched_wake_task_locked`, `k_sched_wake_flush`), `ports/port_host/src/port_host.c`, `ports/port_x86_64/src/port_x86_64_task.c` | **fixed in 1.9 on x86-64 and the host** | Nothing for those two ports: the waiter leaves the sleeping table, enters the run queue of its core in the call of the waker, the core is told with the IPI of ADR 0034 when it is another one, and the sleep of the port is cut (the condition of the task on the host; the state of the task on x86-64). `lat_pipe_p50` is 19 968 ns against 1 005 056 ns, and the same round trip is 3 µs on the host. |
+| The **board** keeps the nineteen-millisecond chunk: its wait looks at its record every ten milliseconds (`WAIT_CHUNK_MS`), because `k_port_task_sleep_ms` is `vTaskDelay` and `k_port_task_sleep_cuttable()` answers false through the weak default. | `components/port_esp32/src/port_esp32.c`, `components/kernel/src/wait.c` (`k_wait_sleep`), `components/kernel/src/port_task_default.c` | open, and a decision of the compatibility port (ADR 0018) | A door over the notification of a FreeRTOS task (`ulTaskNotifyTake` as the sleep, `xTaskNotifyGive` as the wake), which needs the registry of the port to be protected by one lock for the wake and for the end of a task - the handle of a slot that has just been freed is the hazard, and the board is not a machine this tree can test from the host. A CPU round trip of a pipe of the board is 10 ms at worst and a line of the shell is 10 ms of a person's time; the port is honest about it instead of pretending. |
+| A woken task does not preempt a **running** task of the same or a lower priority in the middle of its slice: it becomes runnable at once and runs at the next scheduling point of the waker (a block, a sleep, a yield, the end of a quantum). | `components/kernel/src/sched.c`, `ports/port_x86_64/src/interrupts.S` (the return of a call) | open, and a lane of its own | A `TIF_NEED_RESCHED` of the kernel: a flag set by `k_sched_wake_task_locked` when the woken task outranks the running one, and a check at the return of a system call - the one point of the port where nothing of the kernel is held. The pipe does not need it (the writer blocks on its ack a few instructions later, which is where the reader is picked), and a machine whose quantum is ten milliseconds pays a switch for a task that would have run in the same millisecond anyway; the case of the desk and the soak of the many cores are what a lane of the flag needs. |
 
 ## Decisions, not debts
 
