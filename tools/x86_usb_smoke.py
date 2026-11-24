@@ -788,6 +788,10 @@ def main(argv: list) -> int:
             print(f"{'ok  ' if ok else 'FAIL'} {name}")
             if not ok and detail:
                 print(f"     {detail}")
+            elif args.verbose and isinstance(detail, str) and detail and len(detail) <= 120:
+                # A number a check compared (a digest, a count of sectors, the
+                # size of a medium) is the evidence of the line above it.
+                print(f"     {detail}")
 
     if failed:
         print(f"FAILED: {len(failed)} of {len(checks)} check(s) did not pass")
