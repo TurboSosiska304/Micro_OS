@@ -421,3 +421,76 @@ k_size_t k_input_hid_decode(struct k_input_hid_state *state, const k_u8_t *repor
 
     return count < max ? count : max;
 }
+
+/* --- the mouse of the boot protocol --------------------------------------- */
+
+void k_input_hid_mouse_init(struct k_input_hid_mouse_state *state)
+{
+    if (state == NULL) {
+        return;
+    }
+
+    state->buttons = 0u;
+}
+
+/* One event of the mouse, dropped when the answer is full. */
+static k_size_t mouse_emit(struct k_input_hid_event *out, k_size_t max, k_size_t count, k_u16_t key,
+                           k_u16_t value)
+{
+    if (count < max) {
+        out[count].key = key;
+        out[count].value = value;
+        out[count].character = 0;
+        out[count].repeat = false;
+    }
+
+    return count + 1u;
+}
+
+k_size_t k_input_hid_mouse_decode(struct k_input_hid_mouse_state *state, const k_u8_t *report,
+                                  k_size_t length, struct k_input_hid_event *out, k_size_t max)
+{
+    k_size_t count = 0;
+    k_i8_t dx;
+    k_i8_t dy;
+    bool left;
+
+    if (state == NULL || report == NULL || out == NULL || max == 0u || length < 3u) {
+        return 0;
+    }
+
+    dx = (k_i8_t)report[1];
+    dy = (k_i8_t)report[2];
+
+    if (dx != 0) {
+        count = mouse_emit(out, max, count, K_INPUT_KEY_POINTER_X, (k_u16_t)(k_i16_t)dx);
+    }
+
+    /* The device counts up and the screen counts down, as the mouse of the
+     * PS/2 does (src/ps2.c); the difference of zero is not an event. */
+    if (dy != 0) {
+        count = mouse_emit(out, max, count, K_INPUT_KEY_POINTER_Y, (k_u16_t)(k_i16_t)-dy);
+    }
+
+    if (length >= 4u && (k_i8_t)report[3] != 0) {
+        count = mouse_emit(out, max, count, K_INPUT_KEY_POINTER_WHEEL,
+                           (k_u16_t)(k_i16_t)(k_i8_t)report[3]);
+    }
+
+    /*
+     * The left button is the one of the contract (docs/desktop.md): the right
+     * and the middle are buttons of the device that no program of this
+     * release reads, and a number of a key is not spent on them. The edge is
+     * what is pushed and not the level.
+     */
+    left = (report[0] & 0x01u) != 0u;
+
+    if (left != ((state->buttons & 0x01u) != 0u)) {
+        count = mouse_emit(out, max, count, K_INPUT_KEY_BUTTON_LEFT,
+                           left ? INPUT_VALUE_PRESS : INPUT_VALUE_RELEASE);
+    }
+
+    state->buttons = report[0];
+
+    return count < max ? count : max;
+}

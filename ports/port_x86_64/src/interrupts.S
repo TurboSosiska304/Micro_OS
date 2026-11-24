@@ -264,6 +264,14 @@ isr_irq isr_irq_ata, port_x86_64_irq_ata
 isr_irq isr_irq_virtio_blk, port_x86_64_irq_virtio_blk
 
 /*
+ * The line of the controller of the USB (ADR 0040, M1 of 1.8): a message of
+ * MSI into the local APIC, or the INTx pin of the function on a machine of
+ * the 8259. The body clears the pending bit of the interrupter and tells the
+ * console that the event ring has news.
+ */
+isr_irq isr_irq_xhci, port_x86_64_irq_xhci
+
+/*
  * The three vectors of the 8259 that no device owns - the cascade and the two
  * spurious ones: the acknowledge of a request that has nothing behind it, the
  * price of a level-triggered line of the PCI bus. The handler acknowledges and

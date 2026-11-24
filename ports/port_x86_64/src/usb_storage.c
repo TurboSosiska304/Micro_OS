@@ -721,3 +721,32 @@ const char *port_x86_64_usb_storage_root(void)
 {
     return g_root;
 }
+
+/*
+ * The stick left. The partitions are given back before the disk, because the
+ * children read through the cache of the disk; a medium that is mounted is a
+ * case the VFS has no call to ask, and the reads of a volume that lost its
+ * device fail with the rule of the block layer instead of a panic.
+ */
+void port_x86_64_usb_storage_detach(struct port_x86_64_usb_device *device)
+{
+    const struct k_blockdev *disk;
+
+    if (device == NULL || g_storage.device != device) {
+        return;
+    }
+
+    disk = k_blockdev_find(g_usb_device.name);
+
+    if (disk != NULL) {
+        partition_release(disk);
+    }
+
+    (void)k_blockdev_unregister(&g_usb_device);
+
+    kinfo("usb0: the stick on the port %u is gone", (unsigned)device->port);
+
+    g_root = NULL;
+    g_usb_device.sectors = 0;
+    memset(&g_storage, 0, sizeof(g_storage));
+}

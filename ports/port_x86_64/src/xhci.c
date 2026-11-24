@@ -28,13 +28,24 @@
  * (kernel/input_hid.c) turns them into the keys and the characters of the
  * machine, and the rings of this file are shaped like the ones of src/ps2.c
  * so that the console and /dev/input0 read one kind of event whichever
- * keyboard a person has under the hands.
+ * keyboard a person has under the hands. The mouse of the boot protocol is
+ * the second user of that decoder family: its report is three or four bytes
+ * of differences and buttons, and the events it makes are the pointer events
+ * of the PS/2 mouse.
  *
- * The interrupts of the controller are off (USBCMD.INTE) and the event ring
- * is read by the console and by the reader of /dev/input0 when they are
- * asked for a key: a boot of this release has one keyboard and no need of a
- * line of its own, and a driver that polls is a driver that cannot lose the
- * machine to a storm of interrupts from a device it does not understand.
+ * A device is not always in a port of the controller: the laptop of these
+ * years puts its keyboard and its stick behind the hub of a dock. The hub is
+ * the class 09, its ports are powered and polled, and a device behind it is
+ * addressed with the route string of the slot context. The ports of the
+ * controller and of the hubs are scanned after the boot, so a device that
+ * arrives later is enumerated and one that leaves is taken away.
+ *
+ * The controller owns a line: the message of MSI or MSI-X of the PCI
+ * function, or its legacy pin on a machine that kept the 8259. The handler
+ * acknowledges the interrupter and wakes the console; the event ring itself
+ * is read by the pump in the task that asked, because a second reader of the
+ * ring in the handler would take a completion from under a command that is
+ * waiting for it.
  */
 #include "port_x86_64_xhci.h"
 
@@ -43,14 +54,20 @@
 #include "kernel/console.h"
 #include "kernel/input.h"
 #include "kernel/input_hid.h"
+#include "kernel/lock.h"
 #include "kernel/log.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/mem.h"
 #include "kernel/port/time.h"
+#include "kernel/port_task.h"
 #include "port_x86_64.h"
+#include "port_x86_64_apic.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_pci.h"
+
+/* The stub of the line of the controller in the table of interrupts.S. */
+extern void isr_irq_xhci(void);
 
 /* --- the registers of the controller -------------------------------------- */
 
@@ -80,11 +97,44 @@
 
 #define XHCI_CMD_RUN 0x00000001u
 #define XHCI_CMD_RESET 0x00000002u
+#define XHCI_CMD_INTE 0x00000004u
 
 #define XHCI_STS_HALTED 0x00000001u
 #define XHCI_STS_ERROR 0x00000004u
 #define XHCI_STS_EVENT 0x00000008u
 #define XHCI_STS_CNR 0x00000800u
+
+/* The interrupter: the pending bit of the interrupt and its enable, both of
+ * the management register. The pending bit is written with a one to clear it,
+ * as the end of an interrupt does. */
+#define XHCI_IMAN_IP 0x00000001u
+#define XHCI_IMAN_IE 0x00000002u
+#define XHCI_ERDP_EHB 0x00000008u
+
+/* The vector of the line of the controller: it sits above the window of the
+ * 8259 and of the local APIC timer (0x20..0x2F, 0x50..0x51) and below the
+ * door of the programs (0x80). */
+#define XHCI_VECTOR 0x60u
+
+/* The interrupt of the PCI function: the capability list of the
+ * configuration space, the identifier of a message-signalled interrupt and
+ * the address of the local APIC in the physical map of the machine. */
+#define PCI_CAP_PTR 0x34u
+#define PCI_STATUS 0x06u
+#define PCI_STATUS_CAP 0x0010u
+#define PCI_CAP_ID_MSI 0x05u
+#define PCI_CAP_ID_MSIX 0x11u
+#define PCI_MSI_CTRL 0x02u
+#define PCI_MSI_ADDR 0x04u
+#define PCI_MSI_ADDR_HIGH 0x08u
+#define PCI_MSI_DATA 0x0Cu
+#define PCI_MSI_64BIT 0x0080u
+#define PCI_MSI_ENABLE 0x0001u
+#define PCI_MSIX_TABLE 0x04u
+#define PCI_MSIX_ENABLE 0x8000u
+#define PCI_MSIX_ENTRY 16u
+#define PCI_MSI_CAP_MAX 48u
+#define PCI_APIC_ADDRESS 0xFEE00000u
 
 /* One port: the bits of PORTSC this driver reads and writes. */
 #define XHCI_PORT_CCS 0x00000001u
@@ -159,7 +209,8 @@ enum xhci_trb_type {
 #define XHCI_CMD_TRBS 16u
 #define XHCI_EVENT_TRBS 64u
 #define XHCI_EP_TRBS 8u
-#define XHCI_DEVICES 4u
+#define XHCI_DEVICES 8u
+#define XHCI_HUBS 4u
 #define XHCI_KBD_BUFFERS (XHCI_EP_TRBS - 1u)
 
 /* The command ring and the event ring: sixteen bytes a TRB, aligned to the
@@ -175,6 +226,22 @@ static k_u64_t g_erst[2] __attribute__((aligned(64)));
  * buffers of the controller. */
 static k_u64_t g_dcbaa[65] __attribute__((aligned(64)));
 
+/*
+ * A slot of the driver: the number the controller gave it and the state of
+ * the ring of its endpoint 0. The controller numbers its slots from one, and
+ * the pool below is what the driver has contexts for; the slot of a device is
+ * not its place in the pool, because a hub arrives before the devices behind
+ * it and a device that leaves gives its number back.
+ */
+struct xhci_slot_state {
+    bool used;
+    k_u8_t slot;
+    k_u32_t ep0_index;
+    k_u32_t ep0_cycle;
+};
+
+static struct xhci_slot_state g_slot_pool[XHCI_DEVICES];
+
 /* The context of a device, 2 KiB, and its ring of the endpoint 0. */
 static k_u8_t g_device_ctx[XHCI_DEVICES][2048] __attribute__((aligned(64)));
 static struct xhci_trb g_ep0_ring[XHCI_DEVICES][XHCI_EP_TRBS] __attribute__((aligned(64)));
@@ -189,6 +256,16 @@ static k_u8_t g_input[1056] __attribute__((aligned(64)));
 static k_u8_t g_desc[512] __attribute__((aligned(64)));
 static k_u8_t g_kbd_report[XHCI_KBD_BUFFERS][K_INPUT_HID_REPORT] __attribute__((aligned(64)));
 static struct xhci_trb g_kbd_ring[XHCI_EP_TRBS] __attribute__((aligned(64)));
+
+/* The report of the mouse: three bytes of the boot protocol and the fourth
+ * of the wheel, and its own ring of seven places. */
+static k_u8_t g_mouse_report[XHCI_KBD_BUFFERS][K_INPUT_HID_MOUSE_REPORT]
+    __attribute__((aligned(64)));
+static struct xhci_trb g_mouse_ring[XHCI_EP_TRBS] __attribute__((aligned(64)));
+
+/* The descriptor of a hub: the longest form of it, twelve bytes for a hub of
+ * the SuperSpeed and nine of the other one with the variable tail. */
+static k_u8_t g_hub_desc[16] __attribute__((aligned(64)));
 
 /* The scratchpad buffers of a controller that asks for them: the array of
  * their addresses, which the controller reads, and the pages themselves,
@@ -214,8 +291,22 @@ static k_u32_t g_cmd_cycle;
 static k_u32_t g_evt_index;
 static k_u32_t g_evt_cycle;
 
-static k_u32_t g_ep0_index[XHCI_DEVICES];
-static k_u32_t g_ep0_cycle[XHCI_DEVICES];
+/* The device of the USB is one at a time in a command: the enumeration and
+ * the scan of the ports take this lock, and so does a transfer of a class,
+ * because the command ring and the event ring are the state of the machine
+ * and two writers of it are a lost completion. The boot takes it before the
+ * scheduler exists, when nobody contends. */
+static k_mutex_t g_xhci_lock = K_MUTEX_INITIALIZER;
+
+/* Where a device hangs: its root port, its route string (the port numbers of
+ * the hubs above it, four bits a tier), how many hubs that is, and the slot
+ * of the hub it is attached to (0 for the root). */
+struct xhci_where {
+    k_u8_t root_port;
+    k_u8_t depth;
+    k_u8_t parent_slot;
+    k_u32_t route;
+};
 
 /* The keyboard of the machine: the slot and the endpoint of the reports, and
  * the producer of the ring of them. */
@@ -227,9 +318,58 @@ static struct {
     k_u16_t max_packet;
     k_u32_t index;
     k_u32_t cycle;
+    struct xhci_where where;
 } g_keyboard;
 
 static struct k_input_hid_state g_hid;
+
+/* The mouse of the machine: the same shape, with a report of three bytes (the
+ * fourth of the wheel is read when the device sends it) and a decoder of the
+ * boot protocol of a mouse. */
+static struct {
+    bool present;
+    k_u8_t slot;
+    k_u8_t dci;
+    k_u8_t interface;
+    k_u16_t max_packet;
+    k_u32_t index;
+    k_u32_t cycle;
+    struct xhci_where where;
+} g_mouse;
+
+static struct k_input_hid_mouse_state g_mouse_hid;
+
+/* A hub of the machine: its slot, where it hangs, the ports it has and
+ * whether it speaks the SuperSpeed protocol (whose port status has another
+ * layout). The ports are polled; the interrupt endpoint of the hub is not
+ * configured, because the ports of a dock change at the pace of a hand. */
+struct xhci_hub {
+    bool used;
+    k_u8_t slot;
+    k_u8_t root_port;
+    k_u32_t route;
+    k_u8_t depth;
+    k_u8_t parent_slot;
+    k_u8_t ports;
+    bool superspeed;
+    k_u32_t scanned_ms;
+};
+
+static struct xhci_hub g_hubs[XHCI_HUBS];
+
+/* The scan of the ports: the root ports of the controller at every pump (a
+ * register read), and the ports below a hub four times a second (a control
+ * transfer each, which is the price of a hub whose interrupt endpoint this
+ * driver does not read). */
+#define XHCI_HUB_SCAN_MS 250u
+static k_u32_t g_next_hub_scan_ms;
+
+/* The line of the controller: true when the function gave this driver an
+ * interrupt, and the vector it arrived on. */
+static bool g_irq;
+static k_u32_t g_irq_vector;
+static bool g_irq_first_seen;
+static k_u32_t g_irq_count;
 
 /* The rings of the characters and the events, shaped as the ones of the
  * PS/2: a task reads them and the console is told that a key is there. */
@@ -270,6 +410,48 @@ static void rt_write64(k_u32_t offset, k_u64_t value)
 {
     rt_write(offset, (k_u32_t)value);
     rt_write(offset + 4u, (k_u32_t)(value >> 32));
+}
+
+/* --- the pool of the slots -------------------------------------------------- */
+
+static struct xhci_slot_state *slot_state_of(k_u32_t slot)
+{
+    k_u32_t index;
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (g_slot_pool[index].used && g_slot_pool[index].slot == slot) {
+            return &g_slot_pool[index];
+        }
+    }
+
+    return NULL;
+}
+
+/* The place of the pool for a slot the controller just enabled. */
+static struct xhci_slot_state *slot_take(k_u32_t slot)
+{
+    k_u32_t index;
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (!g_slot_pool[index].used) {
+            memset(&g_slot_pool[index], 0, sizeof(g_slot_pool[index]));
+            g_slot_pool[index].used = true;
+            g_slot_pool[index].slot = (k_u8_t)slot;
+            g_slot_pool[index].ep0_cycle = 1u;
+            return &g_slot_pool[index];
+        }
+    }
+
+    return NULL;
+}
+
+static void slot_release(k_u32_t slot)
+{
+    struct xhci_slot_state *state = slot_state_of(slot);
+
+    if (state != NULL) {
+        state->used = false;
+    }
 }
 
 /* The doorbell of a slot: the endpoint is the index of the context of the
@@ -356,6 +538,92 @@ static void event_pop(void)
     rt_write64(XHCI_RT_ERDP, trb_phys(&g_event_ring[g_evt_index]) | 0x8u);
 }
 
+/*
+ * The ring is one queue for every consumer of the controller, and a consumer
+ * cannot skip an event of another one: the head of the ring is the order. The
+ * pump below is the only reader: it decodes the reports of the keyboard and
+ * of the mouse itself, and leaves a transfer event of a class and the
+ * completion of a command in two small queues of their own, where the call
+ * that waits for one finds it. Without that, a console poll in the middle of
+ * a frame of the network would take the completion of the frame and the wait
+ * would time out.
+ */
+#define XHCI_XFER_QUEUE 16u
+#define XHCI_CMD_QUEUE 8u
+
+static struct xhci_trb g_xfer_queue[XHCI_XFER_QUEUE];
+static k_u32_t g_xfer_head;
+static k_u32_t g_xfer_tail;
+static struct xhci_trb g_cmd_queue[XHCI_CMD_QUEUE];
+static k_u32_t g_cmd_head;
+static k_u32_t g_cmd_tail;
+
+static void queue_put(struct xhci_trb *queue, k_u32_t *head, k_u32_t *tail, k_u32_t size,
+                      const struct xhci_trb *event)
+{
+    k_u32_t next = (*head + 1u) % size;
+
+    if (next == *tail) {
+        /* A queue that is full loses its oldest event: a completion nobody
+         * has read for a whole transfer of the driver is a wait that has
+         * already timed out. */
+        *tail = (*tail + 1u) % size;
+    }
+
+    queue[*head] = *event;
+    *head = next;
+}
+
+/* Take one event of a queue that the caller names, or false when it is not
+ * there yet. The order of the queue is kept for the consumers behind. */
+static bool queue_take(struct xhci_trb *queue, k_u32_t *head, k_u32_t *tail, k_u32_t size,
+                       bool (*match)(const struct xhci_trb *event, const void *wanted),
+                       const void *wanted, struct xhci_trb *out)
+{
+    k_u32_t index = *tail;
+    k_u32_t position = *tail;
+
+    while (index != *head) {
+        if (match(&queue[index], wanted)) {
+            *out = queue[index];
+
+            for (position = index; (position + 1u) % size != *head;
+                 position = (position + 1u) % size) {
+                queue[position] = queue[(position + 1u) % size];
+            }
+
+            *head = position;
+            return true;
+        }
+
+        index = (index + 1u) % size;
+    }
+
+    return false;
+}
+
+static void usb_service(void);
+
+static bool match_command(const struct xhci_trb *event, const void *wanted)
+{
+    return XHCI_TRB_GET_TYPE(event->control) == XHCI_TRB_COMMAND_COMPLETION &&
+           event->param == *(const k_u64_t *)wanted;
+}
+
+struct xhci_transfer_wanted {
+    k_u32_t slot;
+    k_u32_t dci;
+};
+
+static bool match_transfer(const struct xhci_trb *event, const void *wanted)
+{
+    const struct xhci_transfer_wanted *id = (const struct xhci_transfer_wanted *)wanted;
+
+    return XHCI_TRB_GET_TYPE(event->control) == XHCI_TRB_TRANSFER &&
+           XHCI_TRB_SLOT(event->control) == id->slot &&
+           XHCI_TRB_ENDPOINT(event->control) == id->dci;
+}
+
 /* --- the command ring ------------------------------------------------------ */
 
 /* The last entry of a ring is a link to its first: the controller follows it
@@ -400,26 +668,15 @@ static bool command_wait(const struct xhci_trb *trb, k_u8_t *code, k_u32_t *slot
     k_u64_t deadline = k_port_uptime_ms() + 500u;
 
     for (;;) {
-        struct xhci_trb *event = event_peek();
+        struct xhci_trb event;
 
-        if (event != NULL) {
-            k_u32_t type = XHCI_TRB_GET_TYPE(event->control);
-            k_u64_t param = event->param;
-            k_u32_t status = event->status;
-            k_u32_t control = event->control;
+        usb_service();
 
-            event_pop();
-
-            if (type == XHCI_TRB_COMMAND_COMPLETION && param == address) {
-                *code = (k_u8_t)XHCI_TRB_CODE(status);
-                *slot_out = XHCI_TRB_SLOT(control);
-                return true;
-            }
-
-            /* A port status change of a device that arrived at the same
-             * moment is not the answer and is not lost: the driver reset
-             * its ports already, and the pump reads the rest. */
-            continue;
+        if (queue_take(g_cmd_queue, &g_cmd_head, &g_cmd_tail, XHCI_CMD_QUEUE, match_command,
+                       &address, &event)) {
+            *code = (k_u8_t)XHCI_TRB_CODE(event.status);
+            *slot_out = XHCI_TRB_SLOT(event.control);
+            return true;
         }
 
         if (k_port_uptime_ms() > deadline) {
@@ -460,13 +717,20 @@ static void context_put32(k_u8_t *context, k_u32_t offset, k_u32_t value)
     *word = value;
 }
 
-/* The slot context of an input context: the speed, the port and how many
- * endpoint contexts follow it (1 for the endpoint 0, the highest index for a
- * device with an endpoint 1 IN). */
-static void slot_context(k_u8_t *input, k_u32_t speed, k_u32_t port, k_u32_t entries)
+/* The slot context of an input context: the route from the root port through
+ * the hubs above the device, the speed, the root port and how many endpoint
+ * contexts follow it (1 for the endpoint 0, the highest index for a device
+ * with an endpoint 1 IN). A hub says how many ports it has and marks itself
+ * as a hub; the fields of the transaction translator are zero, because this
+ * driver speaks to the devices of a hub of the full speed and not to a
+ * full-speed one behind a high-speed hub (docs/debts.md). */
+static void slot_context(k_u8_t *input, k_u32_t speed, const struct xhci_where *where,
+                         k_u32_t entries, k_u32_t hub_ports)
 {
-    context_put32(input, 32u, (entries << 27) | (speed << 20));
-    context_put32(input, 36u, port << 16);
+    context_put32(input, 32u,
+                  (entries << 27) | ((hub_ports != 0u ? 1u : 0u) << 26) | (speed << 20) |
+                      (where->route & 0xFFFFFu));
+    context_put32(input, 36u, (hub_ports << 24) | ((k_u32_t)where->root_port << 16));
 }
 
 /* One endpoint context: the interval, the error count, the type and the
@@ -499,19 +763,32 @@ static k_u32_t ep0_packet(k_u32_t speed)
     return 8u;
 }
 
+static k_u32_t slot_index_of(k_u32_t slot)
+{
+    struct xhci_slot_state *state = slot_state_of(slot);
+
+    return state != NULL ? (k_u32_t)(state - g_slot_pool) : XHCI_DEVICES;
+}
+
 /* The address of the device: the slot is given its context and the ring of
- * its endpoint 0, and the controller sends SET_ADDRESS to it. */
-static bool address_device(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t packet)
+ * its endpoint 0, and the controller sends SET_ADDRESS to it. The route and
+ * the root port are the way the controller finds a device behind a hub. */
+static bool address_device(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                           k_u32_t packet, k_u32_t hub_ports)
 {
     struct xhci_trb trb;
     k_u8_t code = 0;
     k_u32_t answer = 0;
-    k_u32_t index = slot - 1u;
+    k_u32_t index = slot_index_of(slot);
+
+    if (index >= XHCI_DEVICES) {
+        return false;
+    }
 
     memset(g_input, 0, sizeof(g_input));
     context_put32(g_input, 0u, 0u);                    /* the contexts to drop */
     context_put32(g_input, 4u, (1u << 0) | (1u << 1)); /* the slot and the endpoint 0 */
-    slot_context(g_input, speed, port, 1u);
+    slot_context(g_input, speed, where, 1u, hub_ports);
     endpoint_context(g_input, 1u, XHCI_EP_TYPE_CONTROL, 0u, packet, g_ep0_ring[index]);
 
     trb.param = trb_phys(g_input);
@@ -546,19 +823,24 @@ static bool address_device(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t pa
 
 /* The context of the endpoint 0 with a larger packet: a device of the full
  * speed says its own in the first eight bytes of its descriptor. */
-static bool evaluate_ep0(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t packet)
+static bool evaluate_ep0(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                         k_u32_t packet)
 {
     struct xhci_trb trb;
     k_u8_t code = 0;
     k_u32_t answer = 0;
-    k_u32_t index = slot - 1u;
+    k_u32_t index = slot_index_of(slot);
+
+    if (index >= XHCI_DEVICES) {
+        return false;
+    }
 
     /* The slot and the endpoint 0 are the two contexts of this command: the
      * add flags say which of them the controller reads. */
     memset(g_input, 0, sizeof(g_input));
     context_put32(g_input, 0u, 0u);
     context_put32(g_input, 4u, (1u << 0) | (1u << 1));
-    slot_context(g_input, speed, port, 1u);
+    slot_context(g_input, speed, where, 1u, 0u);
     endpoint_context(g_input, 1u, XHCI_EP_TYPE_CONTROL, 0u, packet, g_ep0_ring[index]);
 
     trb.param = trb_phys(g_input);
@@ -580,25 +862,68 @@ static bool evaluate_ep0(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t pack
     return code == XHCI_CODE_SUCCESS;
 }
 
-/* The endpoint of the reports: the context of the endpoint 1 IN and its
- * ring, and the device is configured with it. */
-static bool configure_keyboard(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_t dci,
-                               k_u32_t interval, k_u32_t max_packet)
+/* The hub is a hub to the controller and not only to the driver: the slot
+ * context says how many ports it has, and the command that changes it is the
+ * one of a context that is already addressed. */
+static bool evaluate_hub(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                         k_u32_t packet, k_u32_t ports)
+{
+    struct xhci_trb trb;
+    k_u8_t code = 0;
+    k_u32_t answer = 0;
+    k_u32_t index = slot_index_of(slot);
+
+    if (index >= XHCI_DEVICES) {
+        return false;
+    }
+
+    memset(g_input, 0, sizeof(g_input));
+    context_put32(g_input, 0u, 0u);
+    context_put32(g_input, 4u, (1u << 0) | (1u << 1));
+    slot_context(g_input, speed, where, 1u, ports);
+    endpoint_context(g_input, 1u, XHCI_EP_TYPE_CONTROL, 0u, packet, g_ep0_ring[index]);
+
+    trb.param = trb_phys(g_input);
+    trb.status = 0;
+    trb.control = XHCI_TRB_TYPE(XHCI_TRB_EVALUATE_CONTEXT) | (slot << 24);
+
+    __asm__ volatile("" : : : "memory");
+    {
+        struct xhci_trb *posted = command_put(&trb);
+
+        __asm__ volatile("" : : : "memory");
+        doorbell(0, 0);
+
+        if (!command_wait(posted, &code, &answer)) {
+            return false;
+        }
+    }
+
+    return code == XHCI_CODE_SUCCESS;
+}
+
+/* One endpoint of the reports, of the keyboard or of the mouse: its context,
+ * its ring, and the device configured with it. The ring of the caller is
+ * cleared and linked before the command, because a slot the controller has
+ * seen before may still hold the dequeue of a device that left. */
+static bool configure_interrupt(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                                k_u32_t dci, k_u32_t interval, k_u32_t max_packet,
+                                struct xhci_trb *ring, k_u32_t *index_out, k_u32_t *cycle_out)
 {
     struct xhci_trb trb;
     k_u8_t code = 0;
     k_u32_t answer = 0;
 
-    g_keyboard.index = 0;
-    g_keyboard.cycle = 1;
-    memset(g_kbd_ring, 0, sizeof(g_kbd_ring));
-    ring_link(g_kbd_ring, XHCI_EP_TRBS, g_keyboard.cycle);
+    *index_out = 0;
+    *cycle_out = 1u;
+    memset(ring, 0, XHCI_EP_TRBS * sizeof(*ring));
+    ring_link(ring, XHCI_EP_TRBS, *cycle_out);
 
     memset(g_input, 0, sizeof(g_input));
     context_put32(g_input, 0u, 0u);
     context_put32(g_input, 4u, (1u << 0) | (1u << dci));
-    slot_context(g_input, speed, port, dci);
-    endpoint_context(g_input, dci, XHCI_EP_TYPE_INTERRUPT_IN, interval, max_packet, g_kbd_ring);
+    slot_context(g_input, speed, where, dci, 0u);
+    endpoint_context(g_input, dci, XHCI_EP_TYPE_INTERRUPT_IN, interval, max_packet, ring);
 
     trb.param = trb_phys(g_input);
     trb.status = 0;
@@ -624,17 +949,24 @@ static bool configure_keyboard(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u32_
 static struct xhci_trb *ep0_put(k_u32_t index, const struct xhci_trb *trb)
 {
     struct xhci_trb *slot;
+    struct xhci_slot_state *state;
 
-    if (g_ep0_index[index] == XHCI_EP_TRBS - 1u) {
-        ring_link(g_ep0_ring[index], XHCI_EP_TRBS, g_ep0_cycle[index]);
-        g_ep0_cycle[index] ^= 1u;
-        g_ep0_index[index] = 0;
+    if (index >= XHCI_DEVICES) {
+        return NULL;
     }
 
-    slot = &g_ep0_ring[index][g_ep0_index[index]];
+    state = &g_slot_pool[index];
+
+    if (state->ep0_index == XHCI_EP_TRBS - 1u) {
+        ring_link(g_ep0_ring[index], XHCI_EP_TRBS, state->ep0_cycle);
+        state->ep0_cycle ^= 1u;
+        state->ep0_index = 0;
+    }
+
+    slot = &g_ep0_ring[index][state->ep0_index];
     *slot = *trb;
-    slot->control |= g_ep0_cycle[index];
-    g_ep0_index[index]++;
+    slot->control |= state->ep0_cycle;
+    state->ep0_index++;
 
     return slot;
 }
@@ -646,25 +978,21 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
                           k_u32_t *left)
 {
     k_u64_t deadline = k_port_uptime_ms() + timeout_ms;
+    struct xhci_transfer_wanted wanted;
+
+    wanted.slot = slot;
+    wanted.dci = dci;
 
     for (;;) {
-        struct xhci_trb *event = event_peek();
+        struct xhci_trb event;
 
-        if (event != NULL) {
-            k_u32_t type = XHCI_TRB_GET_TYPE(event->control);
-            k_u32_t status = event->status;
-            k_u32_t control = event->control;
+        usb_service();
 
-            event_pop();
-
-            if (type == XHCI_TRB_TRANSFER && XHCI_TRB_SLOT(control) == slot &&
-                XHCI_TRB_ENDPOINT(control) == dci) {
-                *code = (k_u8_t)XHCI_TRB_CODE(status);
-                *left = XHCI_TRB_LENGTH(status);
-                return true;
-            }
-
-            continue;
+        if (queue_take(g_xfer_queue, &g_xfer_head, &g_xfer_tail, XHCI_XFER_QUEUE, match_transfer,
+                       &wanted, &event)) {
+            *code = (k_u8_t)XHCI_TRB_CODE(event.status);
+            *left = XHCI_TRB_LENGTH(event.status);
+            return true;
         }
 
         if (k_port_uptime_ms() > deadline) {
@@ -687,10 +1015,14 @@ static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, 
     struct xhci_trb trb;
     k_u8_t setup[8];
     k_u64_t word = 0;
-    k_u32_t ring_index = slot - 1u;
+    k_u32_t ring_index = slot_index_of(slot);
     bool in = (request_type & 0x80u) != 0u;
     k_u8_t code = 0;
     k_u32_t left = 0;
+
+    if (ring_index >= XHCI_DEVICES) {
+        return false;
+    }
 
     setup[0] = request_type;
     setup[1] = request;
@@ -738,7 +1070,7 @@ static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, 
 
 /* --- the configuration descriptor ----------------------------------------- */
 
-struct usb_keyboard {
+struct usb_hid_interface {
     k_u8_t interface;
     k_u8_t endpoint;
     k_u16_t max_packet;
@@ -746,16 +1078,18 @@ struct usb_keyboard {
     bool found;
 };
 
-/* The interface of a keyboard of the boot protocol and its endpoint of the
- * reports: class 3 (HID), sub-class 1 and protocol 1, and an interrupt
- * endpoint of the device to the host. */
-static void parse_configuration(const k_u8_t *descriptor, k_u32_t length,
-                                struct usb_keyboard *keyboard)
+/* The interface of a HID of the boot protocol and its endpoint of the
+ * reports: class 3 (HID), sub-class 1, the protocol of the device (1 for a
+ * keyboard, 2 for a mouse) and an interrupt endpoint of the device to the
+ * host. A configuration with two such interfaces - a keyboard and a mouse in
+ * one device - answers the one asked for. */
+static void parse_hid(const k_u8_t *descriptor, k_u32_t length, k_u8_t protocol,
+                      struct usb_hid_interface *hid)
 {
     k_u32_t offset = 0;
-    bool in_keyboard = false;
+    bool in_hid = false;
 
-    keyboard->found = false;
+    hid->found = false;
 
     while (offset + 2u <= length) {
         k_u8_t size = descriptor[offset];
@@ -766,22 +1100,22 @@ static void parse_configuration(const k_u8_t *descriptor, k_u32_t length,
         }
 
         if (type == 4u && size >= 9u) {
-            in_keyboard = descriptor[offset + 5u] == 3u && descriptor[offset + 6u] == 1u &&
-                          descriptor[offset + 7u] == 1u;
+            in_hid = descriptor[offset + 5u] == 3u && descriptor[offset + 6u] == 1u &&
+                     descriptor[offset + 7u] == protocol;
 
-            if (in_keyboard) {
-                keyboard->interface = descriptor[offset + 2u];
+            if (in_hid) {
+                hid->interface = descriptor[offset + 2u];
             }
-        } else if (type == 5u && size >= 7u && in_keyboard) {
+        } else if (type == 5u && size >= 7u && in_hid) {
             k_u8_t address = descriptor[offset + 2u];
             k_u8_t attributes = descriptor[offset + 3u];
 
             if ((address & 0x80u) != 0u && (attributes & 0x03u) == 0x03u) {
-                keyboard->endpoint = address;
-                keyboard->max_packet =
+                hid->endpoint = address;
+                hid->max_packet =
                     (k_u16_t)(descriptor[offset + 4u] | ((k_u16_t)descriptor[offset + 5u] << 8));
-                keyboard->interval = descriptor[offset + 6u];
-                keyboard->found = true;
+                hid->interval = descriptor[offset + 6u];
+                hid->found = true;
                 return;
             }
         }
@@ -828,10 +1162,11 @@ static k_u32_t endpoint_interval(k_u8_t interval, k_u32_t speed)
  * call this file for a transfer; the rings, the contexts, the doorbells and
  * the physical addresses stay here.
  *
- * The pool is four devices, as the pool of the slots is: a machine of the
- * release has a keyboard, a stick and a wire. The rings are sixteen TRBs and
- * a bulk transfer of this driver is at most fifteen of them, so a transfer
- * never wraps the ring between its first and its last TRB.
+ * The pool is eight devices, as the pool of the slots is: a machine of the
+ * release has a keyboard, a mouse, a stick, a wire and the hubs between them.
+ * The rings are sixteen TRBs and a bulk transfer of this driver is at most
+ * fifteen of them, so a transfer never wraps the ring between its first and
+ * its last TRB.
  */
 #define XHCI_DEV_EP 4u
 #define XHCI_DEV_EP_RING 16u
@@ -841,8 +1176,10 @@ static k_u32_t endpoint_interval(k_u8_t interval, k_u32_t speed)
 enum xhci_usb_class {
     XHCI_USB_NONE = 0,
     XHCI_USB_KEYBOARD,
+    XHCI_USB_MOUSE,
     XHCI_USB_STORAGE,
     XHCI_USB_NET,
+    XHCI_USB_HUB,
 };
 
 struct xhci_endpoint_state {
@@ -860,6 +1197,8 @@ struct xhci_class_device {
     bool used;
     k_u8_t slot;
     k_u8_t port;
+    enum xhci_usb_class kind;
+    struct xhci_where where;
     k_u32_t speed;
     k_u16_t vendor;
     k_u16_t product;
@@ -908,9 +1247,9 @@ static struct xhci_endpoint_state *class_endpoint(struct xhci_class_device *devi
 
 /*
  * Which class the interfaces of a configuration carry, in the order the
- * devices of this release are wanted: a keyboard of the boot protocol of
- * HID, a stick of the Bulk-Only Transport, a wire of CDC-ECM. A device of
- * another class is enumerated and gives its slot back.
+ * devices of this release are wanted: a keyboard and a mouse of the boot
+ * protocol of HID, a hub, a stick of the Bulk-Only Transport, a wire of
+ * CDC-ECM. A device of another class is enumerated and gives its slot back.
  */
 static enum xhci_usb_class classify_configuration(const k_u8_t *descriptor, k_u32_t length)
 {
@@ -931,6 +1270,14 @@ static enum xhci_usb_class classify_configuration(const k_u8_t *descriptor, k_u3
 
             if (base == 3u && sub == 1u && protocol == 1u) {
                 return XHCI_USB_KEYBOARD;
+            }
+
+            if (base == 3u && sub == 1u && protocol == 2u) {
+                return XHCI_USB_MOUSE;
+            }
+
+            if (base == 9u && sub == 0u) {
+                return XHCI_USB_HUB;
             }
 
             if (base == 8u && sub == 6u && protocol == 0x50u) {
@@ -998,7 +1345,7 @@ static bool class_configure(struct xhci_class_device *device)
 
     context_put32(g_input, 0u, 0u);
     context_put32(g_input, 4u, add);
-    slot_context(g_input, device->speed, device->port, entries);
+    slot_context(g_input, device->speed, &device->where, entries, 0u);
 
     for (index = 0; index < XHCI_DEV_EP; index++) {
         if (device->eps[index].used) {
@@ -1047,8 +1394,8 @@ static k_u64_t usb_phys(k_u64_t address)
 
 /* --- the calls a class driver makes --------------------------------------- */
 
-int port_x86_64_xhci_endpoint(struct port_x86_64_usb_device *device, k_u8_t address, bool bulk,
-                              k_u8_t interval, k_u16_t max_packet)
+static int endpoint_add(struct port_x86_64_usb_device *device, k_u8_t address, bool bulk,
+                        k_u8_t interval, k_u16_t max_packet)
 {
     struct xhci_class_device *class_device;
     struct xhci_endpoint_state *endpoint = NULL;
@@ -1127,20 +1474,49 @@ int port_x86_64_xhci_endpoint(struct port_x86_64_usb_device *device, k_u8_t addr
     return 0;
 }
 
-int port_x86_64_xhci_control(struct port_x86_64_usb_device *device, k_u8_t request_type,
-                             k_u8_t request, k_u16_t value, k_u16_t index, k_u16_t length,
-                             void *data)
+int port_x86_64_xhci_endpoint(struct port_x86_64_usb_device *device, k_u8_t address, bool bulk,
+                              k_u8_t interval, k_u16_t max_packet)
 {
+    int rc;
+
     if (device == NULL) {
         return -1;
     }
 
-    return control_transfer(device->slot, request_type, request, value, index, length, data) ? 0
-                                                                                             : -1;
+    if (k_mutex_lock(&g_xhci_lock) != 0) {
+        return -1;
+    }
+
+    rc = endpoint_add(device, address, bulk, interval, max_packet);
+
+    k_mutex_unlock(&g_xhci_lock);
+
+    return rc;
 }
 
-int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *buffer,
-                          k_u32_t length, k_u32_t timeout_ms, k_u32_t *moved)
+int port_x86_64_xhci_control(struct port_x86_64_usb_device *device, k_u8_t request_type,
+                             k_u8_t request, k_u16_t value, k_u16_t index, k_u16_t length,
+                             void *data)
+{
+    int rc;
+
+    if (device == NULL) {
+        return -1;
+    }
+
+    if (k_mutex_lock(&g_xhci_lock) != 0) {
+        return -1;
+    }
+
+    rc = control_transfer(device->slot, request_type, request, value, index, length, data) ? 0 : -1;
+
+    k_mutex_unlock(&g_xhci_lock);
+
+    return rc;
+}
+
+static int bulk_transfer(struct port_x86_64_usb_device *device, bool in, void *buffer,
+                         k_u32_t length, k_u32_t timeout_ms, k_u32_t *moved)
 {
     struct xhci_class_device *class_device;
     struct xhci_endpoint_state *endpoint;
@@ -1215,6 +1591,26 @@ int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *
     return 0;
 }
 
+int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *buffer,
+                          k_u32_t length, k_u32_t timeout_ms, k_u32_t *moved)
+{
+    int rc;
+
+    if (device == NULL) {
+        return -1;
+    }
+
+    if (k_mutex_lock(&g_xhci_lock) != 0) {
+        return -1;
+    }
+
+    rc = bulk_transfer(device, in, buffer, length, timeout_ms, moved);
+
+    k_mutex_unlock(&g_xhci_lock);
+
+    return rc;
+}
+
 /* --- one device ------------------------------------------------------------ */
 
 /* Give a slot back when the device is not the one this release wants. */
@@ -1238,7 +1634,14 @@ static void disable_slot(k_u32_t slot)
     }
 
     g_dcbaa[slot] = 0;
+    slot_release(slot);
 }
+
+/* The enumeration below reaches the ports of a hub and the ports reach the
+ * enumeration: the two calls are one story and the forward names say so. */
+static bool enumerate_device(const struct xhci_where *where, k_u32_t speed);
+static k_u32_t detach_below(k_u32_t root_port, k_u32_t route, k_u32_t bits);
+static void hub_scan_ports(struct xhci_hub *hub);
 
 /*
  * The keyboard of the boot protocol: the configuration of the device is in
@@ -1246,26 +1649,27 @@ static void disable_slot(k_u32_t slot)
  * one the class of the HID of the boot protocol names. The answer is true
  * when the keyboard is armed and the console can read its reports.
  */
-static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t vendor,
-                            k_u16_t product, k_u32_t length)
+static bool keyboard_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                            k_u16_t vendor, k_u16_t product, k_u32_t length)
 {
     /* The parser fills the fields it finds and the caller reads the ones it
      * asked for; a compiler that cannot see the two in one pass wants the
      * whole of the record written first (GCC 11 of the cloud, -O2). */
-    struct usb_keyboard keyboard = {0};
+    struct usb_hid_interface keyboard = {0};
     k_u32_t index;
     k_u32_t dci;
     k_u32_t interval;
     k_u32_t max_packet;
 
-    parse_configuration(g_config, length, &keyboard);
+    parse_hid(g_config, length, 1u, &keyboard);
 
     if (!keyboard.found) {
         return false;
     }
 
     if (g_keyboard.present) {
-        kinfo("usb: a second keyboard of the boot protocol on port %u is not used", (unsigned)port);
+        kinfo("usb: a second keyboard of the boot protocol on port %u is not used",
+              (unsigned)where->root_port);
         return false;
     }
 
@@ -1280,8 +1684,10 @@ static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t v
     interval = endpoint_interval(keyboard.interval, speed);
     max_packet = keyboard.max_packet & 0x07FFu;
 
-    if (!configure_keyboard(slot, port, speed, dci, interval, max_packet)) {
-        kinfo("usb: port %u: the endpoint of the reports did not come up", (unsigned)port);
+    if (!configure_interrupt(slot, where, speed, dci, interval, max_packet, g_kbd_ring,
+                             &g_keyboard.index, &g_keyboard.cycle)) {
+        kinfo("usb: port %u: the endpoint of the reports did not come up",
+              (unsigned)where->root_port);
         return false;
     }
 
@@ -1290,6 +1696,7 @@ static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t v
     g_keyboard.dci = (k_u8_t)dci;
     g_keyboard.interface = keyboard.interface;
     g_keyboard.max_packet = (k_u16_t)max_packet;
+    g_keyboard.where = *where;
     k_input_hid_init(&g_hid);
 
     /* Seven reports are in the ring of the endpoint before the first key
@@ -1313,11 +1720,404 @@ static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t v
     doorbell(slot, dci);
 
     kinfo("usb: keyboard %04x:%04x on port %u, slot %u, interface %u, %u bytes", (unsigned)vendor,
-          (unsigned)product, (unsigned)port, (unsigned)slot, (unsigned)keyboard.interface,
-          (unsigned)max_packet);
+          (unsigned)product, (unsigned)where->root_port, (unsigned)slot,
+          (unsigned)keyboard.interface, (unsigned)max_packet);
 
     return true;
 }
+
+/*
+ * The mouse of the boot protocol: the same shape as the keyboard, with a
+ * report of three bytes and the fourth of the wheel. The device is armed with
+ * seven places, as the keyboard is, because a movement that finds no buffer
+ * is a movement the device NAKs until the next poll.
+ */
+static bool mouse_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t speed,
+                         k_u16_t vendor, k_u16_t product, k_u32_t length)
+{
+    struct usb_hid_interface mouse;
+    k_u32_t index;
+    k_u32_t dci;
+    k_u32_t interval;
+    k_u32_t max_packet;
+
+    parse_hid(g_config, length, 2u, &mouse);
+
+    if (!mouse.found) {
+        return false;
+    }
+
+    if (g_mouse.present) {
+        kinfo("usb: a second mouse of the boot protocol on port %u is not used",
+              (unsigned)where->root_port);
+        return false;
+    }
+
+    if (!control_transfer(slot, 0x21u, 0x0Bu, 0u, mouse.interface, 0u, NULL)) {
+        kwarn("usb: the mouse did not take the boot protocol, its report is the one of the HID");
+    }
+
+    dci = endpoint_dci(mouse.endpoint);
+    interval = endpoint_interval(mouse.interval, speed);
+    max_packet = mouse.max_packet & 0x07FFu;
+
+    if (max_packet < 3u) {
+        kinfo("usb: port %u: the mouse names an endpoint packet of %u byte(s)",
+              (unsigned)where->root_port, (unsigned)max_packet);
+        return false;
+    }
+
+    /* The endpoint of a mouse of the boot protocol carries a report of three
+     * bytes, or four with a wheel, whatever the largest packet of the device
+     * is: the transfer asks for the report and the device answers a short
+     * packet when it has fewer bytes to give. The context keeps the packet of
+     * the descriptor. */
+    {
+        k_u32_t report_length =
+            max_packet >= K_INPUT_HID_MOUSE_REPORT ? K_INPUT_HID_MOUSE_REPORT : 3u;
+
+        if (!configure_interrupt(slot, where, speed, dci, interval, max_packet, g_mouse_ring,
+                                 &g_mouse.index, &g_mouse.cycle)) {
+            kinfo("usb: port %u: the endpoint of the mouse did not come up",
+                  (unsigned)where->root_port);
+            return false;
+        }
+
+        g_mouse.present = true;
+        g_mouse.slot = (k_u8_t)slot;
+        g_mouse.dci = (k_u8_t)dci;
+        g_mouse.interface = mouse.interface;
+        g_mouse.max_packet = (k_u16_t)report_length;
+        g_mouse.where = *where;
+        k_input_hid_mouse_init(&g_mouse_hid);
+    }
+
+    for (index = 0; index < XHCI_KBD_BUFFERS; index++) {
+        k_u32_t cursor = g_mouse.index;
+        struct xhci_trb *trb = &g_mouse_ring[cursor];
+
+        memset(g_mouse_report[cursor], 0, K_INPUT_HID_MOUSE_REPORT);
+        trb->param = trb_phys(g_mouse_report[cursor]);
+        trb->status = g_mouse.max_packet;
+        trb->control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC | g_mouse.cycle;
+        g_mouse.index++;
+    }
+
+    __asm__ volatile("" : : : "memory");
+    doorbell(slot, dci);
+
+    kinfo("usb: mouse %04x:%04x on port %u, slot %u, interface %u, %u byte report",
+          (unsigned)vendor, (unsigned)product, (unsigned)where->root_port, (unsigned)slot,
+          (unsigned)mouse.interface, (unsigned)g_mouse.max_packet);
+
+    return true;
+}
+
+/* --- the hub (class 09) ----------------------------------------------------- */
+
+/* The requests of a hub (USB 2.0, 11.24 and USB 3.0, 10.16). */
+#define USB_CLASS_HUB 9u
+#define USB_DT_HUB 0x29u
+#define HUB_PORT_POWER 8u
+#define HUB_PORT_RESET 4u
+#define HUB_CLEAR_CONNECTION 16u
+#define HUB_CLEAR_ENABLE 17u
+#define HUB_CLEAR_SUSPEND 18u
+#define HUB_CLEAR_OVER_CURRENT 19u
+#define HUB_CLEAR_RESET 20u
+
+#define HUB_PORT_STAT_CONNECTION 0x0001u
+#define HUB_PORT_STAT_ENABLE 0x0002u
+#define HUB_PORT_STAT_RESET 0x0010u
+#define HUB_PORT_STAT_POWER 0x0100u
+#define HUB_PORT_STAT_LOW_SPEED 0x0200u
+#define HUB_PORT_STAT_HIGH_SPEED 0x0400u
+
+/* The change bits of wPortChange, which are not the selectors of the
+ * features that clear them. */
+#define HUB_CHANGE_CONNECTION 0x0001u
+#define HUB_CHANGE_ENABLE 0x0002u
+#define HUB_CHANGE_SUSPEND 0x0004u
+#define HUB_CHANGE_OVER_CURRENT 0x0008u
+#define HUB_CHANGE_RESET 0x0010u
+
+/* The most ports of a hub this driver walks and the most tiers of them: the
+ * route string has five nibbles and this release takes four of them. */
+#define XHCI_HUB_PORTS 8u
+#define XHCI_HUB_LEVELS 4u
+
+/* The answer of GET_PORT_STATUS: the status and the change bits. */
+static bool hub_status(struct xhci_hub *hub, k_u32_t port, k_u16_t *status, k_u16_t *change)
+{
+    k_u8_t data[4];
+
+    if (!control_transfer(hub->slot, 0xA3u, 0u, 0u, (k_u16_t)port, sizeof(data), data)) {
+        return false;
+    }
+
+    *status = (k_u16_t)(data[0] | ((k_u16_t)data[1] << 8));
+    *change = (k_u16_t)(data[2] | ((k_u16_t)data[3] << 8));
+
+    return true;
+}
+
+/* A feature of one port: SET_FEATURE and CLEAR_FEATURE of the hub class. */
+static bool hub_set_port(struct xhci_hub *hub, k_u32_t port, k_u16_t feature, bool set)
+{
+    return control_transfer(hub->slot, 0x23u, set ? 3u : 1u, feature, (k_u16_t)port, 0u, NULL);
+}
+
+/* The speed of a port as the controller names it: the status of a hub of the
+ * USB 2.0 has a bit for the low and one for the high speed, and the device of
+ * a SuperSpeed hub is a SuperSpeed one whatever the field says. */
+static k_u32_t hub_port_speed(struct xhci_hub *hub, k_u16_t status)
+{
+    if (hub->superspeed) {
+        return XHCI_SPEED_SUPER;
+    }
+
+    if ((status & HUB_PORT_STAT_LOW_SPEED) != 0u) {
+        return XHCI_SPEED_LOW;
+    }
+
+    if ((status & HUB_PORT_STAT_HIGH_SPEED) != 0u) {
+        return XHCI_SPEED_HIGH;
+    }
+
+    return XHCI_SPEED_FULL;
+}
+
+/* The reset of a port of a hub: the class request, the wait of the change bit
+ * and the clear of the two changes it leaves (the reset and the enable). */
+static bool hub_port_reset(struct xhci_hub *hub, k_u32_t port)
+{
+    k_u64_t deadline;
+    k_u16_t status = 0;
+    k_u16_t change = 0;
+    k_u32_t guard;
+
+    if (!hub_set_port(hub, port, HUB_PORT_RESET, true)) {
+        return false;
+    }
+
+    deadline = k_port_uptime_ms() + 500u;
+
+    for (guard = 0; guard < 100000u; guard++) {
+        if (!hub_status(hub, port, &status, &change)) {
+            return false;
+        }
+
+        if ((change & HUB_CHANGE_RESET) != 0u || k_port_uptime_ms() > deadline) {
+            break;
+        }
+    }
+
+    (void)hub_set_port(hub, port, HUB_CLEAR_RESET, false);
+    (void)hub_set_port(hub, port, HUB_CLEAR_ENABLE, false);
+
+    if (!hub_status(hub, port, &status, &change)) {
+        return false;
+    }
+
+    /* QEMU sets the enable of a port on the reset; a real hub does too, and a
+     * port that did not enable is a device that does not speak yet. */
+    if ((status & HUB_PORT_STAT_ENABLE) == 0u) {
+        delay_ms(20u);
+        (void)hub_status(hub, port, &status, &change);
+    }
+
+    return (status & HUB_PORT_STAT_CONNECTION) != 0u;
+}
+
+/* The change bits of a port are cleared one at a time: the write of a feature
+ * of the hub class names it. A connection that arrives while the scan runs is
+ * a change of the next scan, and the bits below are read before they are
+ * cleared. */
+static void hub_clear_changes(struct xhci_hub *hub, k_u32_t port, k_u16_t change)
+{
+    if ((change & HUB_CHANGE_CONNECTION) != 0u) {
+        (void)hub_set_port(hub, port, HUB_CLEAR_CONNECTION, false);
+    }
+
+    if ((change & HUB_CHANGE_ENABLE) != 0u) {
+        (void)hub_set_port(hub, port, HUB_CLEAR_ENABLE, false);
+    }
+
+    if ((change & HUB_CHANGE_SUSPEND) != 0u) {
+        (void)hub_set_port(hub, port, HUB_CLEAR_SUSPEND, false);
+    }
+
+    if ((change & HUB_CHANGE_OVER_CURRENT) != 0u) {
+        (void)hub_set_port(hub, port, HUB_CLEAR_OVER_CURRENT, false);
+    }
+
+    if ((change & HUB_CHANGE_RESET) != 0u) {
+        (void)hub_set_port(hub, port, HUB_CLEAR_RESET, false);
+    }
+}
+
+/* The route of a device on a port of this hub: the bits of the hubs above it
+ * and the nibble of this port. */
+static k_u32_t hub_child_route(const struct xhci_hub *hub, k_u32_t port)
+{
+    return hub->route | (port << (4u * hub->depth));
+}
+
+/* One port of a hub changed: a device arrived or left, or a reset finished.
+ * The scan reads the status and the changes, clears the changes, and gives
+ * the port to the enumeration or takes its devices away. */
+static void hub_port_changed(struct xhci_hub *hub, k_u32_t port, k_u16_t status, k_u16_t change)
+{
+    k_u32_t route = hub_child_route(hub, port);
+    bool connected = (status & HUB_PORT_STAT_CONNECTION) != 0u;
+
+    hub_clear_changes(hub, port, change);
+
+    if ((change & (HUB_CHANGE_CONNECTION | HUB_CHANGE_ENABLE | HUB_CHANGE_RESET)) == 0u) {
+        return;
+    }
+
+    if (!connected) {
+        if (detach_below(hub->root_port, route, 4u * (hub->depth + 1u)) != 0u) {
+            kinfo("usb: the device on the port %u of the hub %u is gone", (unsigned)port,
+                  (unsigned)hub->slot);
+        }
+        return;
+    }
+
+    if ((change & (HUB_CHANGE_CONNECTION | HUB_CHANGE_RESET)) == 0u) {
+        return;
+    }
+
+    if (hub->depth + 1u >= XHCI_HUB_LEVELS) {
+        kinfo("usb: the hub %u is at the deepest level of the route string", (unsigned)hub->slot);
+        return;
+    }
+
+    if (!hub_port_reset(hub, port)) {
+        kinfo("usb: the port %u of the hub %u did not come up after its reset", (unsigned)port,
+              (unsigned)hub->slot);
+        return;
+    }
+
+    {
+        struct xhci_where child;
+
+        child.root_port = hub->root_port;
+        child.depth = (k_u8_t)(hub->depth + 1u);
+        child.parent_slot = hub->slot;
+        child.route = route;
+
+        (void)hub_status(hub, port, &status, &change);
+        (void)enumerate_device(&child, hub_port_speed(hub, status));
+    }
+}
+
+/* Every port of a hub, once: the status is a control transfer and a hub with
+ * eight ports is eight of them, which is why the scan is four times a second
+ * and not at every poll. */
+static void hub_scan_ports(struct xhci_hub *hub)
+{
+    k_u32_t port;
+
+    for (port = 1; port <= (k_u32_t)hub->ports; port++) {
+        k_u16_t status = 0;
+        k_u16_t change = 0;
+
+        if (!hub_status(hub, port, &status, &change)) {
+            continue;
+        }
+
+        if (change != 0u) {
+            hub_port_changed(hub, port, status, change);
+        }
+    }
+}
+
+/*
+ * The attach of a hub: its descriptor names the ports, every port is powered,
+ * and the ports that already carry a device are enumerated at once. The
+ * controller is told that the slot is a hub and how many ports it has; the
+ * ports are polled, because the interrupt endpoint of the hub is a second
+ * consumer of the event ring for a change at the pace of a hand.
+ */
+static bool hub_attach(k_u32_t slot, const struct xhci_where *where, k_u32_t speed, k_u32_t packet,
+                       k_u16_t vendor, k_u16_t product, k_u8_t protocol)
+{
+    struct xhci_hub *hub = NULL;
+    k_u32_t index;
+    k_u32_t port;
+    k_u32_t ports;
+    k_u32_t power_ms;
+
+    for (index = 0; index < XHCI_HUBS; index++) {
+        if (!g_hubs[index].used) {
+            hub = &g_hubs[index];
+            break;
+        }
+    }
+
+    if (hub == NULL) {
+        kinfo("usb: the pool of the hubs is full, the port %u is not used",
+              (unsigned)where->root_port);
+        return false;
+    }
+
+    if (!control_transfer(slot, 0xA0u, 6u, (k_u16_t)(USB_DT_HUB << 8), 0u, sizeof(g_hub_desc),
+                          g_hub_desc)) {
+        kinfo("usb: port %u: the hub did not answer its descriptor", (unsigned)where->root_port);
+        return false;
+    }
+
+    ports = g_hub_desc[2] & 0x0Fu;
+
+    if (ports == 0u) {
+        kinfo("usb: port %u: the hub has no ports", (unsigned)where->root_port);
+        return false;
+    }
+
+    if (ports > XHCI_HUB_PORTS) {
+        ports = XHCI_HUB_PORTS;
+    }
+
+    memset(hub, 0, sizeof(*hub));
+    hub->used = true;
+    hub->slot = (k_u8_t)slot;
+    hub->root_port = where->root_port;
+    hub->route = where->route;
+    hub->depth = where->depth;
+    hub->parent_slot = where->parent_slot;
+    hub->ports = (k_u8_t)ports;
+    hub->superspeed = protocol >= 2u;
+
+    /* The power of every port, and the time the hub asks for it: a port that
+     * is not powered is a port whose device does not answer. */
+    for (port = 1; port <= ports; port++) {
+        (void)hub_set_port(hub, port, HUB_PORT_POWER, true);
+    }
+
+    power_ms = (k_u32_t)g_hub_desc[5] * 2u;
+
+    if (power_ms < 10u) {
+        power_ms = 10u;
+    }
+
+    delay_ms(power_ms);
+
+    (void)evaluate_hub(slot, where, speed, packet, ports);
+
+    kinfo("usb: hub %04x:%04x on port %u, slot %u, %u port(s), %u level(s)", (unsigned)vendor,
+          (unsigned)product, (unsigned)where->root_port, (unsigned)slot, (unsigned)ports,
+          (unsigned)(where->depth + 1u));
+
+    /* The ports that were powered with a device already on them: the connect
+     * change of the moment is read and cleared by the scan. */
+    hub_scan_ports(hub);
+
+    return true;
+}
+
+/* --- a device of a class ---------------------------------------------------- */
 
 /*
  * A device of a class: the pool of the class devices takes it, the class
@@ -1325,8 +2125,8 @@ static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t v
  * of the driver is the answer of the enumeration. A device the class cannot
  * bring up gives its slot back.
  */
-static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, k_u32_t port, k_u32_t speed,
-                         k_u16_t vendor, k_u16_t product, k_u32_t length)
+static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, const struct xhci_where *where,
+                         k_u32_t speed, k_u16_t vendor, k_u16_t product, k_u32_t length)
 {
     struct port_x86_64_usb_config config;
     struct xhci_class_device *device = NULL;
@@ -1342,21 +2142,23 @@ static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, k_u32_t port, k
 
     if (device == NULL) {
         kinfo("usb: the pool of the class devices is full, the port %u is not used",
-              (unsigned)port);
+              (unsigned)where->root_port);
         return false;
     }
 
     memset(device, 0, sizeof(*device));
     device->used = true;
     device->slot = (k_u8_t)slot;
-    device->port = (k_u8_t)port;
+    device->port = where->root_port;
+    device->kind = kind;
+    device->where = *where;
     device->speed = speed;
     device->vendor = vendor;
     device->product = product;
     device->config = g_config[5];
 
     device->view.slot = (k_u8_t)slot;
-    device->view.port = (k_u8_t)port;
+    device->view.port = where->root_port;
     device->view.speed = speed;
     device->view.vendor = vendor;
     device->view.product = product;
@@ -1376,20 +2178,132 @@ static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, k_u32_t port, k
     return attached;
 }
 
+/* --- the removal of a device ------------------------------------------------ */
+
+static void class_detach(struct xhci_class_device *device)
+{
+    if (!device->used) {
+        return;
+    }
+
+    if (device->kind == XHCI_USB_STORAGE) {
+        port_x86_64_usb_storage_detach(&device->view);
+    } else if (device->kind == XHCI_USB_NET) {
+        port_x86_64_usb_net_detach(&device->view);
+    }
+
+    device->used = false;
+}
+
+/* A device left: the class forgets it, the rings of the keyboard and of the
+ * mouse are shut, and the slot goes back to the controller. The slot of a hub
+ * is given back after its children, which the caller has already taken. */
+static void detach_slot(k_u32_t slot)
+{
+    k_u32_t index;
+
+    if (g_keyboard.present && g_keyboard.slot == slot) {
+        g_keyboard.present = false;
+        kinfo("usb: the keyboard on the port %u is gone", (unsigned)g_keyboard.where.root_port);
+    }
+
+    if (g_mouse.present && g_mouse.slot == slot) {
+        g_mouse.present = false;
+        kinfo("usb: the mouse on the port %u is gone", (unsigned)g_mouse.where.root_port);
+    }
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (g_class_device[index].used && g_class_device[index].slot == slot) {
+            class_detach(&g_class_device[index]);
+        }
+    }
+
+    for (index = 0; index < XHCI_HUBS; index++) {
+        if (g_hubs[index].used && g_hubs[index].slot == slot) {
+            g_hubs[index].used = false;
+        }
+    }
+
+    disable_slot(slot);
+}
+
+static bool below_matches(k_u32_t root_port, k_u32_t route, k_u32_t bits, k_u32_t device_route)
+{
+    k_u32_t mask;
+
+    if (bits == 0u) {
+        return true;
+    }
+
+    if (bits >= 32u) {
+        return device_route == route;
+    }
+
+    mask = (1u << bits) - 1u;
+
+    return (device_route & mask) == (route & mask);
+}
+
 /*
- * The enumeration of the device of one port: a slot, an address, the
- * descriptor of the device and the configuration that carries a class this
- * release drives. A device of the USB has one or more configurations and the
- * first one is not always the one a driver wants - the network device of
- * QEMU carries RNDIS in the first and CDC-ECM in the second - so every
- * configuration is read until one names a class of this release.
- *
- * The answer is true when the device was brought up: a keyboard that reports,
- * a stick that is a block device, or a wire that is a network device.
+ * The devices of one port of a hub (or of a root port, where `bits` is zero):
+ * every record whose route starts with the port is taken away, a hub before
+ * the devices behind it or after them, because each slot is its own command.
+ * A list is made first, since the walk of the records must not change under
+ * the loop.
  */
-static bool enumerate_device(k_u32_t port, k_u32_t speed)
+static k_u32_t detach_below(k_u32_t root_port, k_u32_t route, k_u32_t bits)
+{
+    k_u8_t slots[XHCI_DEVICES + XHCI_HUBS + 2u];
+    k_u32_t count = 0;
+    k_u32_t index;
+
+    if (g_keyboard.present && g_keyboard.where.root_port == root_port &&
+        below_matches(root_port, route, bits, g_keyboard.where.route)) {
+        slots[count++] = g_keyboard.slot;
+    }
+
+    if (g_mouse.present && g_mouse.where.root_port == root_port &&
+        below_matches(root_port, route, bits, g_mouse.where.route)) {
+        slots[count++] = g_mouse.slot;
+    }
+
+    for (index = 0; index < XHCI_DEVICES; index++) {
+        if (g_class_device[index].used && g_class_device[index].port == root_port &&
+            below_matches(root_port, route, bits, g_class_device[index].where.route)) {
+            slots[count++] = g_class_device[index].slot;
+        }
+    }
+
+    for (index = 0; index < XHCI_HUBS; index++) {
+        if (g_hubs[index].used && g_hubs[index].root_port == root_port &&
+            below_matches(root_port, route, bits, g_hubs[index].route)) {
+            slots[count++] = g_hubs[index].slot;
+        }
+    }
+
+    for (index = 0; index < count; index++) {
+        detach_slot(slots[index]);
+    }
+
+    return count;
+}
+
+/*
+ * The enumeration of one device: a slot, an address, the descriptor of the
+ * device and the configuration that carries a class this release drives. A
+ * device of the USB has one or more configurations and the first one is not
+ * always the one a driver wants - the network device of QEMU carries RNDIS in
+ * the first and CDC-ECM in the second - so every configuration is read until
+ * one names a class of this release.
+ *
+ * The answer is true when the device was brought up: a keyboard or a mouse
+ * that reports, a hub with its ports, a stick that is a block device, or a
+ * wire that is a network device.
+ */
+static bool enumerate_device(const struct xhci_where *where, k_u32_t speed)
 {
     enum xhci_usb_class kind = XHCI_USB_NONE;
+    struct xhci_slot_state *state;
     k_u8_t code = 0;
     k_u32_t slot = 0;
     k_u32_t index;
@@ -1400,31 +2314,34 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
     k_u32_t configuration;
     k_u16_t vendor = 0;
     k_u16_t product = 0;
+    k_u8_t protocol = 0;
 
     if (!command_simple(XHCI_TRB_ENABLE_SLOT, 0, &code, &slot) || code != XHCI_CODE_SUCCESS ||
         slot == 0u) {
-        kwarn("xhci: the controller gave no slot for the port %u", (unsigned)port);
+        kwarn("xhci: the controller gave no slot for the port %u", (unsigned)where->root_port);
         return false;
     }
 
-    if (slot > XHCI_DEVICES) {
-        /* The pool of the contexts of this driver is small on purpose: four
-         * devices of a machine are a keyboard, a mouse and two ports of a
-         * hub that this release does not enumerate. */
+    state = slot_take(slot);
+
+    if (state == NULL) {
+        /* The pool of the contexts of this driver is small on purpose: eight
+         * devices of a machine are a keyboard, a mouse, a stick, a wire and
+         * the ports of the hubs that carry them. */
         kinfo("xhci: the slot %u is past the pool of the driver", (unsigned)slot);
         disable_slot(slot);
         return false;
     }
 
-    index = slot - 1u;
+    index = (k_u32_t)(state - g_slot_pool);
     memset(g_device_ctx[index], 0, 2048u);
     g_dcbaa[slot] = trb_phys(g_device_ctx[index]);
     memset(g_ep0_ring[index], 0, sizeof(g_ep0_ring[index]));
-    g_ep0_index[index] = 0;
-    g_ep0_cycle[index] = 1;
-    ring_link(g_ep0_ring[index], XHCI_EP_TRBS, g_ep0_cycle[index]);
+    state->ep0_index = 0;
+    state->ep0_cycle = 1u;
+    ring_link(g_ep0_ring[index], XHCI_EP_TRBS, state->ep0_cycle);
 
-    if (!address_device(slot, port, speed, packet)) {
+    if (!address_device(slot, where, speed, packet, 0u)) {
         disable_slot(slot);
         return false;
     }
@@ -1434,7 +2351,7 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
      * answers with sixteen or thirty-two needs a context of that size before
      * the rest of the descriptor can arrive without a babble. */
     if (!control_transfer(slot, 0x80u, 6u, 0x0100u, 0u, 8u, g_desc)) {
-        kinfo("usb: port %u: the device did not answer its descriptor", (unsigned)port);
+        kinfo("usb: port %u: the device did not answer its descriptor", (unsigned)where->root_port);
         disable_slot(slot);
         return false;
     }
@@ -1445,8 +2362,9 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
         if ((device_packet == 8u || device_packet == 16u || device_packet == 32u ||
              device_packet == 64u) &&
             device_packet != packet) {
-            if (!evaluate_ep0(slot, port, speed, device_packet)) {
-                kinfo("usb: port %u: the endpoint 0 did not take its size", (unsigned)port);
+            if (!evaluate_ep0(slot, where, speed, device_packet)) {
+                kinfo("usb: port %u: the endpoint 0 did not take its size",
+                      (unsigned)where->root_port);
                 disable_slot(slot);
                 return false;
             }
@@ -1456,13 +2374,14 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
     }
 
     if (!control_transfer(slot, 0x80u, 6u, 0x0100u, 0u, 18u, g_desc)) {
-        kinfo("usb: port %u: the device has no full descriptor", (unsigned)port);
+        kinfo("usb: port %u: the device has no full descriptor", (unsigned)where->root_port);
         disable_slot(slot);
         return false;
     }
 
     vendor = (k_u16_t)(g_desc[8] | ((k_u16_t)g_desc[9] << 8));
     product = (k_u16_t)(g_desc[10] | ((k_u16_t)g_desc[11] << 8));
+    protocol = g_desc[6];
     configurations = g_desc[17];
 
     for (configuration = 0; configuration < configurations && configuration < 4u; configuration++) {
@@ -1493,7 +2412,7 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
 
     if (kind == XHCI_USB_NONE) {
         kinfo("usb: port %u: %04x:%04x is not a device of a class this release drives",
-              (unsigned)port, (unsigned)vendor, (unsigned)product);
+              (unsigned)where->root_port, (unsigned)vendor, (unsigned)product);
         disable_slot(slot);
         return false;
     }
@@ -1501,16 +2420,25 @@ static bool enumerate_device(k_u32_t port, k_u32_t speed)
     /* SET_CONFIGURATION: the configuration of the descriptor, with no
      * payload and the value at byte five. */
     if (!control_transfer(slot, 0x00u, 9u, g_config[5], 0u, 0u, NULL)) {
-        kinfo("usb: port %u: the device refused its configuration", (unsigned)port);
+        kinfo("usb: port %u: the device refused its configuration", (unsigned)where->root_port);
         disable_slot(slot);
         return false;
     }
 
-    if (kind == XHCI_USB_KEYBOARD) {
-        if (keyboard_attach(slot, port, speed, vendor, product, chosen)) {
-            return true;
-        }
-    } else if (class_attach(kind, slot, port, speed, vendor, product, chosen)) {
+    if (kind == XHCI_USB_KEYBOARD && keyboard_attach(slot, where, speed, vendor, product, chosen)) {
+        return true;
+    }
+
+    if (kind == XHCI_USB_MOUSE && mouse_attach(slot, where, speed, vendor, product, chosen)) {
+        return true;
+    }
+
+    if (kind == XHCI_USB_HUB && hub_attach(slot, where, speed, packet, vendor, product, protocol)) {
+        return true;
+    }
+
+    if ((kind == XHCI_USB_STORAGE || kind == XHCI_USB_NET) &&
+        class_attach(kind, slot, where, speed, vendor, product, chosen)) {
         return true;
     }
 
@@ -1573,7 +2501,8 @@ static bool port_reset(k_u32_t port, k_u32_t *speed)
     state = op_read(address);
 
     if ((state & XHCI_PORT_PED) == 0u) {
-        kwarn("usb: the port %u is not enabled after its reset", (unsigned)port);
+        kwarn("usb: the port %u is not enabled after its reset (%x)", (unsigned)port,
+              (unsigned)state);
         return false;
     }
 
@@ -1585,6 +2514,59 @@ static bool port_reset(k_u32_t port, k_u32_t *speed)
     delay_ms(10u);
 
     return true;
+}
+
+/*
+ * The root ports of the controller, changed since the last look: the connect
+ * change bit of PORTSC is the hot-plug of a laptop. A port that has a device
+ * is reset and enumerated, a port that lost one has its devices taken away.
+ * The change bits are written back as ones, which is how the register clears
+ * them, before the reset reads the port again.
+ */
+static void root_port_scan(void)
+{
+    k_u32_t port;
+
+    for (port = 1; port <= g_max_ports; port++) {
+        k_u32_t address = g_port_base + (port - 1u) * 16u;
+        k_u32_t state = op_read(address);
+        k_u32_t change = state & XHCI_PORT_CHANGE;
+
+        if (change == 0u) {
+            continue;
+        }
+
+        op_write(address, state | change);
+
+        if ((state & XHCI_PORT_CSC) == 0u) {
+            continue;
+        }
+
+        if ((state & XHCI_PORT_CCS) == 0u) {
+            if (detach_below(port, 0u, 0u) != 0u) {
+                kinfo("xhci: the device on the port %u is gone", (unsigned)port);
+            }
+            continue;
+        }
+
+        {
+            struct xhci_where where;
+            k_u32_t speed = 0;
+
+            if (!port_reset(port, &speed)) {
+                continue;
+            }
+
+            kinfo("xhci: port %u: a device arrived at speed %u", (unsigned)port, (unsigned)speed);
+
+            where.root_port = (k_u8_t)port;
+            where.depth = 0u;
+            where.parent_slot = 0u;
+            where.route = 0u;
+
+            (void)enumerate_device(&where, speed);
+        }
+    }
 }
 
 /* --- the controller -------------------------------------------------------- */
@@ -1750,9 +2732,9 @@ static bool controller_init(k_u64_t base, k_u32_t size)
     rt_write64(XHCI_RT_ERSTBA, trb_phys(g_erst));
     rt_write64(XHCI_RT_ERDP, trb_phys(g_event_ring));
 
-    /* The interrupts of the controller stay off: the console polls the
-     * event ring. A controller that does not run is a controller without a
-     * driver. */
+    /* The interrupts of the controller are enabled by the caller, after the
+     * line of the PCI function is known and has a body in the table. A
+     * controller that does not run is a controller without a driver. */
     op_write(XHCI_OP_USBCMD, XHCI_CMD_RUN);
 
     if (!wait_until(XHCI_OP_USBSTS, XHCI_STS_HALTED, 0u, 500u, 10000000u)) {
@@ -1773,7 +2755,236 @@ static bool controller_init(k_u64_t base, k_u32_t size)
     return true;
 }
 
-/* --- the reports of the keyboard ------------------------------------------- */
+/* --- the line of the controller -------------------------------------------- */
+
+/*
+ * The message-signalled interrupt of the function: a message written into the
+ * configuration space and delivered by the local APIC of a core, with no
+ * line of the 8259 to share and no redirection entry of the I/O APIC to
+ * program for a PCI line whose polarity the firmware does not describe. The
+ * capability is a record of the list at 0x34; the control word says whether
+ * the address is 32 or 64 bits and the enable bit is its lowest.
+ *
+ * The answer is false when the function has no MSI: the legacy INTx line of
+ * the PCI bus is the other way and it is taken below.
+ */
+static bool msi_enable(const struct port_x86_64_pci_device *device, k_u32_t vector)
+{
+    k_u16_t status = port_x86_64_pci_read16(device, PCI_STATUS);
+    k_u32_t pointer;
+    k_u32_t guard;
+
+    if ((status & PCI_STATUS_CAP) == 0u) {
+        return false;
+    }
+
+    pointer = port_x86_64_pci_read16(device, PCI_CAP_PTR) & 0xFCu;
+
+    for (guard = 0; guard < PCI_MSI_CAP_MAX && pointer >= 0x40u; guard++) {
+        k_u32_t header = port_x86_64_pci_read32(device, (k_u8_t)pointer);
+        k_u8_t id = (k_u8_t)(header & 0xFFu);
+
+        if (id == PCI_CAP_ID_MSI) {
+            k_u16_t control = (k_u16_t)((header >> 16) & 0xFFFFu);
+            bool wide = (control & PCI_MSI_64BIT) != 0u;
+            k_u32_t destination = PCI_APIC_ADDRESS | (port_x86_64_apic_id() << 12);
+
+            port_x86_64_pci_write32(device, (k_u8_t)(pointer + PCI_MSI_ADDR), destination);
+
+            if (wide) {
+                port_x86_64_pci_write32(device, (k_u8_t)(pointer + PCI_MSI_ADDR_HIGH), 0u);
+            }
+
+            port_x86_64_pci_write32(
+                device, (k_u8_t)(pointer + (wide ? PCI_MSI_DATA + 4u : PCI_MSI_DATA)), vector);
+            port_x86_64_pci_write16(device, (k_u8_t)(pointer + PCI_MSI_CTRL),
+                                    (k_u16_t)(control | PCI_MSI_ENABLE));
+
+            return true;
+        }
+
+        pointer = (header >> 8) & 0xFCu;
+    }
+
+    return false;
+}
+
+/*
+ * The message table of MSI-X, which is the other form of the same idea: the
+ * capability names a table in one of the windows of the function, the entry
+ * of vector 0 is a message and a mask, and the enable bit of the control is
+ * the switch. The window is the one the controller already has mapped, so
+ * the write of an entry is a store into g_cap at the offset the capability
+ * names (the base address register 0 is the window this driver reads).
+ */
+static bool msix_enable(const struct port_x86_64_pci_device *device, k_u32_t vector)
+{
+    k_u16_t status = port_x86_64_pci_read16(device, PCI_STATUS);
+    k_u32_t pointer;
+    k_u32_t guard;
+
+    if ((status & PCI_STATUS_CAP) == 0u) {
+        return false;
+    }
+
+    pointer = port_x86_64_pci_read16(device, PCI_CAP_PTR) & 0xFCu;
+
+    for (guard = 0; guard < PCI_MSI_CAP_MAX && pointer >= 0x40u; guard++) {
+        k_u32_t header = port_x86_64_pci_read32(device, (k_u8_t)pointer);
+        k_u8_t id = (k_u8_t)(header & 0xFFu);
+
+        if (id == PCI_CAP_ID_MSIX) {
+            k_u16_t control = (k_u16_t)((header >> 16) & 0xFFFFu);
+            k_u32_t table = port_x86_64_pci_read32(device, (k_u8_t)(pointer + PCI_MSIX_TABLE));
+            volatile k_u32_t *entry;
+            k_u32_t destination = PCI_APIC_ADDRESS | (port_x86_64_apic_id() << 12);
+
+            /* The table has to be window 0 of the function: this driver maps
+             * that window and not the others of the configuration space. */
+            if (((table >> 29) & 0x7u) != 0u) {
+                return false;
+            }
+
+            entry = (volatile k_u32_t *)(g_cap + (table & 0xFFFFFFF8u));
+
+            entry[0] = destination;
+            entry[1] = 0u;
+            entry[2] = vector;
+            entry[3] = 0u; /* the vector is open */
+
+            __asm__ volatile("" : : : "memory");
+
+            port_x86_64_pci_write16(device, (k_u8_t)(pointer + PCI_MSI_CTRL),
+                                    (k_u16_t)(control | PCI_MSIX_ENABLE));
+
+            return true;
+        }
+
+        pointer = (header >> 8) & 0xFCu;
+    }
+
+    return false;
+}
+
+/*
+ * The line of a function that has no MSI: the INTx pin the firmware routed,
+ * read out of the configuration space. The 8259 takes it when the port kept
+ * the legacy chip; a machine whose two lines are on the I/O APIC does not
+ * have a redirection entry for a PCI line that this port can describe (the
+ * table of the firmware names the ISA lines only), and the controller keeps
+ * the poll rather than an interrupt that arrives with the wrong polarity.
+ */
+static bool legacy_enable(const struct port_x86_64_pci_device *device)
+{
+    k_u16_t line_and_pin = port_x86_64_pci_read16(device, 0x3Cu);
+    k_u8_t line = (k_u8_t)(line_and_pin & 0xFFu);
+    k_u8_t pin = (k_u8_t)((line_and_pin >> 8) & 0xFFu);
+
+    if (pin == 0u || pin == 0xFFu || line >= 16u) {
+        return false;
+    }
+
+    if (port_x86_64_irq_on_ioapic()) {
+        kinfo("xhci: the function names the line %u, but the machine routes its lines on the "
+              "I/O APIC and no entry describes a PCI line; the event ring is polled",
+              (unsigned)line);
+        return false;
+    }
+
+    port_x86_64_idt_set(0x20u + line, isr_irq_xhci);
+    port_x86_64_irq_unmask(line);
+
+    return true;
+}
+
+/* The handler of the line: the pending bit of the interrupter is cleared and
+ * the event handler is told (the end of the interrupt is the busy bit of the
+ * event ring, written with the dequeue the pump has). The ring itself is not
+ * read here: this driver sends one command at a time and waits for its
+ * completion in the task that asked, and a second reader of the ring in the
+ * handler would take an event from under that wait. The pump of the console
+ * is the reader, and the interrupt is what makes an idle core answer a key
+ * before its next nap. */
+void port_x86_64_irq_xhci(k_u64_t *frame)
+{
+    K_UNUSED(frame);
+
+    if (g_running) {
+        /* The pending bit is written with a one to clear it (RW1C) and the
+         * enable with a one to keep it: a zero there would shut the line. */
+        rt_write(XHCI_RT_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
+
+        /*
+         * The busy bit of the event ring is written only when there is
+         * nothing left in it. A completion the pump has not read yet is an
+         * event the controller still calls "not consumed", and writing the
+         * dequeue behind it asks QEMU (and a real controller) for another
+         * interrupt at once - a storm of one event. The pump clears the bit
+         * with the event it reads (event_pop writes ERDP).
+         */
+        if (event_peek() == NULL) {
+            rt_write64(XHCI_RT_ERDP, trb_phys(&g_event_ring[g_evt_index]) | XHCI_ERDP_EHB);
+        }
+
+        g_irq_count++;
+
+        /* The kernel of the boot has no task to wake and no console of a
+         * person yet: the flag is read by the pump once the machine is up. */
+        if (k_port_task_current() != NULL) {
+            k_console_input_notify();
+        }
+    }
+
+    port_x86_64_apic_eoi();
+}
+
+/* The vector of the line is in the table and the function raises it: the
+ * interrupter is told to report, and the pending bit of the controller is
+ * cleared with the one of an event that was never read. */
+static void controller_irq_start(void)
+{
+    rt_write(XHCI_RT_IMAN, XHCI_IMAN_IP | XHCI_IMAN_IE);
+    op_write(XHCI_OP_USBSTS, XHCI_STS_EVENT);
+    op_write(XHCI_OP_USBCMD, op_read(XHCI_OP_USBCMD) | XHCI_CMD_INTE);
+}
+
+/*
+ * The line of the controller, in the order of the price: MSI (one vector,
+ * one message, no shared line), then the INTx pin of the function on a
+ * machine that kept the 8259, then the poll the driver has always had. The
+ * event ring is consumed by the pump either way.
+ */
+static void controller_line(const struct port_x86_64_pci_device *device)
+{
+    g_irq_vector = XHCI_VECTOR;
+
+    if (msi_enable(device, g_irq_vector)) {
+        port_x86_64_idt_set(g_irq_vector, isr_irq_xhci);
+        controller_irq_start();
+        g_irq = true;
+        kinfo("xhci: the line of the controller is MSI, vector %u", (unsigned)g_irq_vector);
+        return;
+    }
+
+    if (msix_enable(device, g_irq_vector)) {
+        port_x86_64_idt_set(g_irq_vector, isr_irq_xhci);
+        controller_irq_start();
+        g_irq = true;
+        kinfo("xhci: the line of the controller is MSI-X, vector %u", (unsigned)g_irq_vector);
+        return;
+    }
+
+    if (legacy_enable(device)) {
+        controller_irq_start();
+        g_irq = true;
+        kinfo("xhci: the line of the controller is INTx, vector %u", (unsigned)g_irq_vector);
+        return;
+    }
+
+    kinfo("xhci: the controller has no line this port can open, the event ring is polled");
+}
+
+/* --- the reports of the devices -------------------------------------------- */
 
 static void usb_event_push(k_u16_t code, k_u16_t value)
 {
@@ -1799,7 +3010,13 @@ static void usb_char_push(k_u8_t character)
 
     g_in_chars[g_in_char_head] = character;
     g_in_char_head = next;
-    k_console_input_notify();
+
+    /* A character that arrives before the scheduler exists (the boot of a
+     * person who types at a hub's port while it is enumerated) has no task to
+     * wake: the ring keeps it for the console. */
+    if (k_port_task_current() != NULL) {
+        k_console_input_notify();
+    }
 }
 
 /* One report of the keyboard: the events of the interface and the characters
@@ -1820,6 +3037,28 @@ static void keyboard_report(k_u32_t buffer)
 
         if (events[index].character != 0 && !g_capture) {
             usb_char_push((k_u8_t)events[index].character);
+        }
+    }
+}
+
+/* One report of the mouse: the two differences, the button and the wheel, as
+ * the ring of `/dev/input0` names them. The mouse types no character. */
+static void mouse_report(k_u32_t buffer, k_u32_t length)
+{
+    struct k_input_hid_event events[8];
+    k_size_t count;
+    k_size_t index;
+
+    if (length > K_INPUT_HID_MOUSE_REPORT) {
+        length = K_INPUT_HID_MOUSE_REPORT;
+    }
+
+    count = k_input_hid_mouse_decode(&g_mouse_hid, g_mouse_report[buffer], (k_size_t)length, events,
+                                     sizeof(events) / sizeof(events[0]));
+
+    for (index = 0; index < count; index++) {
+        if (events[index].key != K_INPUT_KEY_NONE) {
+            usb_event_push(events[index].key, events[index].value);
         }
     }
 }
@@ -1846,11 +3085,92 @@ static void keyboard_arm(void)
     g_keyboard.index = index + 1u;
 }
 
+static void mouse_arm(void)
+{
+    k_u32_t index = g_mouse.index;
+    struct xhci_trb *trb;
+
+    if (index == XHCI_EP_TRBS - 1u) {
+        ring_link(g_mouse_ring, XHCI_EP_TRBS, g_mouse.cycle);
+        g_mouse.cycle ^= 1u;
+        g_mouse.index = 0;
+        index = 0;
+    }
+
+    trb = &g_mouse_ring[index];
+    trb->param = trb_phys(g_mouse_report[index]);
+    trb->status = g_mouse.max_packet;
+    trb->control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | XHCI_TRB_IOC | g_mouse.cycle;
+    g_mouse.index = index + 1u;
+}
+
+/* The report of a ring of the reports: the buffer is the one the completion
+ * names, and the event answers how many bytes the device sent (a mouse
+ * without a wheel sends three of the four). */
+static void report_event(k_u32_t slot, k_u32_t dci, k_u64_t param, k_u32_t status, k_u32_t code)
+{
+    if (g_keyboard.present && g_keyboard.slot == slot && g_keyboard.dci == dci) {
+        k_u64_t ring = trb_phys(g_kbd_ring);
+        k_u32_t buffer;
+
+        if (param < ring || param >= ring + (k_u64_t)XHCI_KBD_BUFFERS * 16u ||
+            (param - ring) % 16u != 0u) {
+            keyboard_arm();
+            return;
+        }
+
+        buffer = (k_u32_t)((param - ring) / 16u);
+
+        if (code == XHCI_CODE_SUCCESS || code == XHCI_CODE_SHORT) {
+            keyboard_report(buffer);
+        } else if (code != XHCI_CODE_STALL) {
+            kwarn("usb: a report of the keyboard ended with the code %u", (unsigned)code);
+        }
+
+        memset(g_kbd_report[buffer], 0, K_INPUT_HID_REPORT);
+        keyboard_arm();
+
+        __asm__ volatile("" : : : "memory");
+        doorbell(g_keyboard.slot, g_keyboard.dci);
+
+        return;
+    }
+
+    if (g_mouse.present && g_mouse.slot == slot && g_mouse.dci == dci) {
+        k_u64_t ring = trb_phys(g_mouse_ring);
+        k_u32_t buffer;
+        k_u32_t left = XHCI_TRB_LENGTH(status);
+
+        if (param < ring || param >= ring + (k_u64_t)XHCI_KBD_BUFFERS * 16u ||
+            (param - ring) % 16u != 0u) {
+            mouse_arm();
+            return;
+        }
+
+        buffer = (k_u32_t)((param - ring) / 16u);
+
+        if (code == XHCI_CODE_SUCCESS || code == XHCI_CODE_SHORT) {
+            k_u32_t length = left <= g_mouse.max_packet ? g_mouse.max_packet - left : 0u;
+
+            mouse_report(buffer, length);
+        } else if (code != XHCI_CODE_STALL) {
+            kwarn("usb: a report of the mouse ended with the code %u", (unsigned)code);
+        }
+
+        memset(g_mouse_report[buffer], 0, K_INPUT_HID_MOUSE_REPORT);
+        mouse_arm();
+
+        __asm__ volatile("" : : : "memory");
+        doorbell(g_mouse.slot, g_mouse.dci);
+    }
+}
+
 /*
  * Read the event ring and do what the events say. A transfer event of the
- * keyboard names the TRB that completed, and the report is the buffer of
- * that TRB; the TRB goes back to the ring with the next report before the
- * caller returns, so the device is never left without a place to put a key.
+ * keyboard or of the mouse names the TRB that completed, and the report is
+ * the buffer of that TRB; the TRB goes back to the ring with the next report
+ * before the caller returns, so the device is never left without a place to
+ * put a key or a movement.
  *
  * The call is the pump of the driver and it runs in the task that asks for a
  * key: the critical section keeps two readers of the console of two cores
@@ -1859,54 +3179,129 @@ static void keyboard_arm(void)
 static void usb_service(void)
 {
     struct xhci_trb *event;
-    k_u64_t ring = trb_phys(g_kbd_ring);
 
-    if (!g_running || !g_keyboard.present) {
+    if (!g_running) {
         return;
     }
 
+    k_port_enter_critical();
+
     while ((event = event_peek()) != NULL) {
         k_u32_t type = XHCI_TRB_GET_TYPE(event->control);
-        k_u64_t param = event->param;
-        k_u32_t status = event->status;
-        k_u32_t control = event->control;
-        k_u32_t buffer;
+        k_u32_t slot = XHCI_TRB_SLOT(event->control);
+        k_u32_t dci = XHCI_TRB_ENDPOINT(event->control);
 
+        if (type == XHCI_TRB_TRANSFER) {
+            if ((g_keyboard.present && g_keyboard.slot == slot && g_keyboard.dci == dci) ||
+                (g_mouse.present && g_mouse.slot == slot && g_mouse.dci == dci)) {
+                k_u64_t param = event->param;
+                k_u32_t status = event->status;
+
+                event_pop();
+                report_event(slot, dci, param, status, XHCI_TRB_CODE(status));
+                continue;
+            }
+
+            /* A transfer of a class: the completion belongs to a call that
+             * waits for it, and the pump leaves it in the queue instead of
+             * reading it as one of its own. */
+            if ((g_xfer_head + 1u) % XHCI_XFER_QUEUE == g_xfer_tail) {
+                break;
+            }
+
+            {
+                struct xhci_trb copy = *event;
+
+                event_pop();
+                queue_put(g_xfer_queue, &g_xfer_head, &g_xfer_tail, XHCI_XFER_QUEUE, &copy);
+            }
+
+            continue;
+        }
+
+        if (type == XHCI_TRB_COMMAND_COMPLETION) {
+            if ((g_cmd_head + 1u) % XHCI_CMD_QUEUE == g_cmd_tail) {
+                break;
+            }
+
+            {
+                struct xhci_trb copy = *event;
+
+                event_pop();
+                queue_put(g_cmd_queue, &g_cmd_head, &g_cmd_tail, XHCI_CMD_QUEUE, &copy);
+            }
+
+            continue;
+        }
+
+        /* A port status change is the news the scan of the ports reads out
+         * of the registers; the event itself is consumed and dropped. */
         event_pop();
+    }
 
-        if (type != XHCI_TRB_TRANSFER) {
-            continue;
-        }
+    k_port_exit_critical();
+}
 
-        if (XHCI_TRB_SLOT(control) != g_keyboard.slot ||
-            XHCI_TRB_ENDPOINT(control) != g_keyboard.dci) {
-            continue;
-        }
+/* --- the hot-plug of the ports --------------------------------------------- */
 
-        if (param < ring || param >= ring + (k_u64_t)XHCI_KBD_BUFFERS * 16u ||
-            (param - ring) % 16u != 0u) {
-            keyboard_arm();
-            continue;
-        }
+static bool g_scanning;
 
-        buffer = (k_u32_t)((param - ring) / 16u);
-        {
-            k_u32_t code = XHCI_TRB_CODE(status);
+/*
+ * The scan of the ports after the boot: the root ports of the controller at
+ * every pump (a read of PORTSC each) and the ports below a hub four times a
+ * second. The scan issues commands of the controller, so it runs in the task
+ * and not inside the critical section of the pump; a second core that finds
+ * the flag set leaves the scan to the one that has it.
+ */
+static void usb_scan(void)
+{
+    k_u32_t now;
 
-            if (code == XHCI_CODE_SUCCESS || code == XHCI_CODE_SHORT) {
-                keyboard_report(buffer);
-            } else if (code != XHCI_CODE_STALL) {
-                kwarn("usb: a report of the keyboard ended with the code %u", (unsigned)code);
+    if (!g_running) {
+        return;
+    }
+
+    k_port_enter_critical();
+
+    if (g_scanning) {
+        k_port_exit_critical();
+        return;
+    }
+
+    g_scanning = true;
+    k_port_exit_critical();
+
+    if (k_mutex_lock(&g_xhci_lock) == 0) {
+        k_u32_t index;
+
+        root_port_scan();
+
+        now = (k_u32_t)k_port_uptime_ms();
+
+        if ((k_i32_t)(now - g_next_hub_scan_ms) >= 0) {
+            g_next_hub_scan_ms = now + XHCI_HUB_SCAN_MS;
+
+            for (index = 0; index < XHCI_HUBS; index++) {
+                if (g_hubs[index].used) {
+                    hub_scan_ports(&g_hubs[index]);
+                }
             }
         }
 
-        /* The report buffer is spent: the next one of the ring is armed with
-         * an empty buffer. */
-        memset(g_kbd_report[buffer], 0, K_INPUT_HID_REPORT);
-        keyboard_arm();
+        k_mutex_unlock(&g_xhci_lock);
+    }
 
-        __asm__ volatile("" : : : "memory");
-        doorbell(g_keyboard.slot, g_keyboard.dci);
+    k_port_enter_critical();
+    g_scanning = false;
+    k_port_exit_critical();
+
+    /* The first interrupt of the controller is a fact of the boot and the
+     * test reads it: the handler cannot log, because it may have interrupted
+     * the log itself. */
+    if (g_irq && !g_irq_first_seen && g_irq_count != 0u) {
+        g_irq_first_seen = true;
+        kinfo("xhci: the event ring raised the line %u (%u interrupt(s))", (unsigned)g_irq_vector,
+              (unsigned)g_irq_count);
     }
 }
 
@@ -1917,10 +3312,17 @@ bool port_x86_64_usb_keyboard(void)
     return g_keyboard.present;
 }
 
+bool port_x86_64_usb_pointer(void)
+{
+    return g_mouse.present;
+}
+
 int port_x86_64_usb_poll(void)
 {
     k_u32_t tail;
     int character = -1;
+
+    usb_scan();
 
     if (!g_keyboard.present) {
         return -1;
@@ -1943,9 +3345,11 @@ bool port_x86_64_usb_event(struct input_event *out)
 {
     k_u32_t tail;
 
-    if (out == NULL || !g_keyboard.present) {
+    if (out == NULL) {
         return false;
     }
+
+    usb_scan();
 
     k_port_enter_critical();
     usb_service();
@@ -1988,8 +3392,14 @@ void port_x86_64_xhci_init(void)
     k_u32_t speed = 0;
 
     g_keyboard.present = false;
+    g_mouse.present = false;
     g_running = false;
+    g_scanning = false;
+    g_irq = false;
+    g_irq_first_seen = false;
     memset(g_class_device, 0, sizeof(g_class_device));
+    memset(g_hubs, 0, sizeof(g_hubs));
+    memset(g_slot_pool, 0, sizeof(g_slot_pool));
 
     if (!port_x86_64_pci_find_class(0x0Cu, 0x03u, 0x30u, &device)) {
         kdebug("xhci: the machine has no USB 3.0 controller");
@@ -2012,19 +3422,37 @@ void port_x86_64_xhci_init(void)
         return;
     }
 
+    /* The line is opened before the ports: the enumeration of a hub takes
+     * long enough that a device behind it can raise its connect change in
+     * the middle of the boot. */
+    controller_line(&device);
+
     for (port = 1; port <= g_max_ports; port++) {
+        struct xhci_where where;
+
         if (!port_reset(port, &speed)) {
             continue;
         }
 
         kinfo("xhci: port %u: a device at speed %u", (unsigned)port, (unsigned)speed);
 
+        where.root_port = (k_u8_t)port;
+        where.depth = 0u;
+        where.parent_slot = 0u;
+        where.route = 0u;
+
         /* Every port is enumerated: a laptop has a keyboard and a stick at
          * the same time, and the second one is not a reason to stop. */
-        (void)enumerate_device(port, speed);
+        (void)enumerate_device(&where, speed);
     }
+
+    g_next_hub_scan_ms = (k_u32_t)k_port_uptime_ms() + XHCI_HUB_SCAN_MS;
 
     if (!g_keyboard.present) {
         kinfo("usb: the controller answered, no keyboard of the boot protocol on it");
+    }
+
+    if (!g_mouse.present) {
+        kdebug("usb: no mouse of the boot protocol on the controller");
     }
 }

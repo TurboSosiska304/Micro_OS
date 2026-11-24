@@ -60,17 +60,44 @@ address. The memory is in the image of the kernel and aligned to the 64 bytes
 the specification asks; nothing of it is allocated at the boot, so a
 controller that is not there costs not one byte.
 
-### 2. Polling, and no interrupt of the controller
+### 2. The line of the controller: polling first, then MSI/MSI-X
 
-`USBCMD.INTE` is off and the event ring is read by the tasks that ask for a
-key: `k_port_console_poll()` and the reader of `/dev/input0` call the pump of
-the driver, which takes the events that are there, decodes the reports and
-puts the next report of the keyboard in its ring. The port has no line per
-device yet (`docs/debts.md`, the interrupt a device cannot own), and a
-keyboard of eight bytes at ten milliseconds is not a device that needs one.
-The alternative - the legacy INTx line of the PCI function through the I/O
-APIC, or MSI-X - is a change of the port and not of this class, and it waits
-for the lane of the interrupts.
+The first iteration of M1 left `USBCMD.INTE` off and read the event ring from
+the tasks that ask for a key: `k_port_console_poll()` and the reader of
+`/dev/input0` call the pump of the driver, which takes the events that are
+there, decodes the reports and puts the next report of the keyboard in its
+ring. That was enough for one keyboard of eight bytes at ten milliseconds and
+it cost nothing on a machine of the release; it is not the design of the
+second iteration, because an idle core that is woken by a poll of the console
+has the latency of the poll and a disk of a gigabyte per second is not a
+keyboard.
+
+The controller now owns a line. The order of the price is **MSI**, then
+**MSI-X**, then the **INTx** pin of the PCI function, then the poll:
+
+* MSI is one vector, one message and no shared line: the capability at the
+  list of the configuration space names the address of the local APIC and the
+  data word is the vector (`0x60`, above the timer and the IPI and below the
+  door of the programs). The controller of QEMU of the test exposes MSI-X and
+  not MSI, so the second form is the one the gate exercises: a table in the
+  window of the function (base address register 0), the entry of vector 0
+  written with the same address and vector, the enable bit of the capability
+  set.
+* The INTx pin is the fallback of a function without a message capability and
+  it is taken only on a machine that kept the 8259. A machine whose timer and
+  keyboard are on the I/O APIC has no redirection entry for a PCI line that
+  the firmware table describes (it names the ISA lines and their polarity),
+  and a PCI line is level and active low: the driver keeps the poll rather
+  than an interrupt with the wrong trigger, and says so in the boot log.
+* The handler does not read the event ring. It clears the pending bit of the
+  interrupter (RW1C), writes the busy bit of the event ring only when the
+  ring is empty, counts the interrupt and wakes the console. The ring is read
+  by the pump in the task that asked, because this driver sends one command
+  at a time and waits for its completion in that task: a second reader in the
+  handler would take an event from under the wait. The first clear of the
+  busy bit was the defect of the lane - writing the dequeue behind an event
+  the pump had not read yet asks QEMU for another interrupt at once, and the
+  machine spends the boot in the handler (one event, a storm of messages).
 
 A real controller needs one thing the polling does not give it for free: the
 report ring of the endpoint must never be empty, or the device NAKs its
@@ -112,11 +139,13 @@ difference between two reports is the press and the release of a key. The
 report protocol would need a parser of the descriptor of every device, which
 is a program of drivers and not a driver of a keyboard.
 
-The pool of the driver is four slots and four device contexts: a machine of
-the release has a keyboard, maybe a mouse, and the ports of a hub that this
-lane does not enumerate are not devices of it. The context of a device is
-2 KiB and the pool is 8 KiB of the image - the price of a fixed size that no
-allocator has to be asked for at the boot.
+The pool of the driver is eight slots and eight device contexts: a machine of
+the release has a keyboard, a mouse, a stick, maybe a wire, and the hubs that
+carry them. The context of a device is 2 KiB and the pool is 16 KiB of the
+image - the price of a fixed size that no allocator has to be asked for at
+the boot. A slot is not its place in the pool: a hub arrives before the
+devices behind it and a device that leaves gives its number back, so the pool
+is searched by the number the controller gave.
 
 ### 4. The report is decoded by the portable kernel, not by the port
 
@@ -202,11 +231,11 @@ driver of the port.
 * The keyboard of the board is unchanged and the host tests do not need a
   controller: the decoder of the report is portable and tested with reports,
   and the driver of the controller is the port's.
-* What the line does **not** have yet: the HID mouse of the USB (the pointer
-  of the release is the PS/2 one), mass storage (the stick of M1's second
-  half), CDC-ECM/RNDIS, a hub with the ports below it, and the interrupt of
-  the controller. They are the rows of `docs/debts.md` and the next lanes of
-  1.8.
+* What the line does **not** have yet: RNDIS (the tethering of Android), the
+  notify endpoint of CDC-ECM, a hub of the SuperSpeed whose ports need the
+  layout of the USB 3.0 status and a transaction translator, and the block
+  device of a stick that is unplugged while a volume of it is mounted. They
+  are the rows of `docs/debts.md` and the next lanes of 1.8.
 * A device of another class on a port is enumerated and refused, and the
   controller is left with the slots of the devices it understood.
 
@@ -290,17 +319,18 @@ laptop with only the dongle has the dongle. The frames are polled: a receive
 asks the bulk endpoint with a timeout of two milliseconds and a device that
 has nothing answers "no frame", which is the shape the stack already had.
 
-### 8. What the line still does not have
+### 8. What the line still did not have
 
 * **the hub** (class 09): the ports of a controller are enumerated and the
   ports below a hub are not; a laptop whose keyboard is behind the hub of a
-  dock is a row of `docs/debts.md`;
+  dock is a row of `docs/debts.md` - **closed by §9 of the second
+  iteration**;
 * **RNDIS** and the telephone of Android;
 * **the write of the stick**: `WRITE(10)` is there and the door of the rule
   is the `mount -w` of M2;
 * **the interrupt of the controller**: the event ring is polled, which is
   enough for a keyboard and a wire of a few frames and is not the design of a
-  disk of a gigabyte per second.
+  disk of a gigabyte per second - **closed by §12 of the second iteration**.
 
 ## Consequences of the second half
 
@@ -324,3 +354,107 @@ has nothing answers "no frame", which is the shape the stack already had.
 * The network of the port is two drivers behind one seam, and
   `make x86-net-smoke` (virtio) and `make usb-smoke` (the wire) are the same
   stack on both.
+
+## The second iteration: the hub, the hot-plug, the mouse and the line
+
+### 9. The hub of the class 09, and the route string
+
+A dock of a laptop is a hub, and the keyboard, the stick and the wire of the
+person are behind it. The hub is a device of the class 09 whose configuration
+has one interface and one interrupt endpoint; the driver reads its descriptor
+(bNbrPorts, wHubCharacteristics, bPwrOn2PwrGood), powers every port
+(`SET_PORT_FEATURE(PORT_POWER)`), waits the time the hub asks for, and walks
+the ports with `GET_PORT_STATUS`. A port with a device is reset with the class
+request `PORT_RESET`, the change bit `C_PORT_RESET` is cleared, and the speed
+is read out of the status of the port.
+
+The devices behind the hub are addressed with a **route string**: four bits
+per tier, the port numbers of the hubs above the device, the first nibble for
+the hub that is directly on the root port. The slot context carries the route
+and the number of the root port, and `Address Device` finds the device the
+same way the controller does. The depth is four tiers and the width is eight
+ports, which is the ceiling of this driver and more than a dock has.
+
+The hub is told that it is one (`HUB` bit and the number of ports of the slot
+context, through `Evaluate Context`) and its descriptor gives the count. A
+hub of the SuperSpeed is recognized by the protocol of its device descriptor;
+its ports are read with the same four-byte status, and the speed of a device
+on one is SuperSpeed. The transaction translator of a high-speed hub with a
+full-speed device behind it is not programmed: the device of QEMU is a hub of
+the full speed, so the gate exercises the path that needs no split
+transaction, and the row of the debt names the rest.
+
+The ports of a hub are polled, not carried by its interrupt endpoint: the
+status of eight ports is eight control transfers, which is why the scan is
+four times a second and the root ports (a register read each) at every pump.
+The interrupt endpoint of the hub is a second consumer of the event ring for
+a change at the pace of a hand, and this release spends neither.
+
+### 10. The hot-plug of the ports
+
+`PORTSC.CSC` of a root port is the connect change of a laptop, and the
+`C_PORT_CONNECTION`, `C_PORT_ENABLE` and `C_PORT_RESET` bits of a hub port
+are the same news below it. The pump of the driver scans the root ports on
+every call of the console and the ports of the hubs four times a second; a
+port that changed is cleared, a port with a device is reset and enumerated,
+and a port whose connection is gone loses its devices: the keyboard and the
+mouse forget their slot, the stick leaves the block layer with its
+partitions, the wire answers "no link", and the slot goes back to the
+controller (`Disable Slot`).
+
+The scan issues commands of the controller, so it runs outside the critical
+section of the pump and behind the lock of the driver; a second core that
+finds the flag of the scan set leaves it to the one that has it. The devices
+of one hub port are found by the prefix of their route, and a hub that leaves
+takes the devices behind it with it.
+
+### 11. The mouse of the boot protocol
+
+A mouse of the boot protocol (HID 1.11, B.2) is three bytes - the buttons,
+the signed difference of the x axis and the signed difference of the y axis -
+and a mouse with a wheel adds a fourth. Its interface is the class 3,
+sub-class 1, protocol 2, and its endpoint is an interrupt IN as the
+keyboard's is. The decoder is portable (`kernel/input_hid.c`,
+`k_input_hid_mouse_decode`): it turns the differences into the pointer events
+of `/dev/input0` - `K_INPUT_KEY_POINTER_X`, `K_INPUT_KEY_POINTER_Y`, the
+button on its edge and `K_INPUT_KEY_POINTER_WHEEL`, the last number of the
+contract - and the y axis is turned over for the screen. A program reads one
+device and does not know whether the pointer is the PS/2 one or the USB one.
+
+### 12. The line, and what it costs
+
+MSI-X is the form of QEMU's controller and the one the gate reads:
+`xhci: the line of the controller is MSI-X, vector 96` and, after the first
+event, `xhci: the event ring raised the line 96 (N interrupt(s))`. The
+handler is a stub of `interrupts.S` and a body of `src/xhci.c`; the vector is
+0x60, the enable is `USBCMD.INTE` and `IMAN.IE`, and the end of it is the
+local APIC of the core 0 (`port_x86_64_apic_eoi()`), because a message of MSI
+is an edge and a PCI function of a machine whose lines are on the I/O APIC
+cannot be given a level entry from the firmware table.
+
+The gate of the second iteration is `make usb-smoke` with four more machines
+besides the three classes of the first half: a keyboard behind a hub (the
+route string, the port power and the status, and the keyboard taken out of
+the port of the hub), a keyboard added and taken away on a live machine
+(`device_add` and `device_del` of the monitor in a root port), a mouse behind
+the hub whose movements and button `/bin/keys` reads, and the boot line of
+the controller with the first event it raised. QEMU names a port of a USB
+bus by the path above it (`bus=xhci.0,port=1.1` is the port 1 of the hub that
+is on the root port 1), not by the identifier of the hub (`hub.0` of older
+documentation), and the tool uses the name the machine of the release has.
+
+### 13. What the second iteration does not have
+
+* RNDIS and the notify endpoint of CDC (unchanged from §7 and §8);
+* a high-speed hub with a full-speed device behind it: the fields of the
+  transaction translator of the slot context are zero (`docs/debts.md`);
+* the ports of a hub of the SuperSpeed read with the layout of the USB 3.0
+  status and its link states: the device of the gate is a hub of the full
+  speed and a hub of the USB 3.0 is a row of the debts;
+* a stick unplugged while a volume of it is mounted: the driver gives the
+  block device back and the reads of the mount fail, but the VFS has no call
+  that says which volume a point holds, so the table of the mounts is not
+  told anything and the volume is not unmounted;
+* the second `/dev/input` of a pointer of its own: the contract of ADR 0028
+  is one device of the person, and the mouse of the USB is the same one.
+
