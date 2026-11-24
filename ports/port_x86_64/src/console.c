@@ -84,6 +84,15 @@ static int s_column;
 static k_u8_t s_escape = CONSOLE_TEXT;
 static k_u8_t s_utf8 = CONSOLE_UTF8_NONE;
 
+/*
+ * The last cell of a line has been written and the next character has to wrap
+ * first: the "deferred wrap" of a terminal. A program of a screen fills the
+ * last column of a line - the status bar of an editor is exactly as wide as
+ * the screen - and a console that wrapped on the write instead of on the next
+ * character would scroll the screen a line for every one of them.
+ */
+static bool s_wrap;
+
 /* The state of the SGR sequences and the pair the plain text is written in. */
 static struct k_ansi s_ansi;
 static k_u8_t s_plain_fg = CONSOLE_BOOT_FG;
@@ -126,6 +135,7 @@ static void screen_clear(void)
 
     s_row = 0;
     s_column = 0;
+    s_wrap = false;
 
     cursor_update();
 }
@@ -133,6 +143,7 @@ static void screen_clear(void)
 static void next_line(void)
 {
     s_column = 0;
+    s_wrap = false;
     s_row++;
 
     if (s_row >= s_screen->rows) {
@@ -145,22 +156,31 @@ static void next_line(void)
     cursor_update();
 }
 
-/* One character in the cell of the cursor, then the cursor moves on. */
+/* One character in the cell of the cursor, then the cursor moves on - or
+ * stays on the last cell of the line, and the next character wraps. */
 static void put_char(char character)
 {
+    if (s_wrap) {
+        next_line();
+        s_wrap = false;
+    }
+
     s_screen->put(s_row, s_column, character, pen_attr());
 
-    s_column++;
-    if (s_column >= s_screen->columns) {
-        next_line();
+    if (s_column + 1 >= s_screen->columns) {
+        s_wrap = true; /* the cursor is on the last cell and wraps next time */
+        cursor_update();
         return;
     }
 
+    s_column++;
     cursor_update();
 }
 
 static void backspace(void)
 {
+    s_wrap = false;
+
     if (s_column > 0) {
         s_column--;
     } else if (s_row > 0) {
@@ -235,6 +255,7 @@ void port_x86_64_console_init(void)
     s_escape = CONSOLE_TEXT;
     s_utf8 = CONSOLE_UTF8_NONE;
     s_params_len = 0;
+    s_wrap = false;
     k_ansi_reset(&s_ansi);
 
     screen_clear();
@@ -250,6 +271,8 @@ void port_x86_64_console_init(void)
  */
 static void clamp_position(void)
 {
+    s_wrap = false;
+
     if (s_row >= s_screen->rows) {
         s_row = s_screen->rows - 1;
     }
@@ -386,6 +409,7 @@ static void erase_line(int mode)
 static void csi_final(char character)
 {
     s_escape = CONSOLE_TEXT;
+    s_wrap = false;
 
     switch (character) {
     case 'm':
@@ -528,6 +552,7 @@ void port_x86_64_console_write(const char *data, k_size_t len)
             next_line();
             break;
         case '\r':
+            s_wrap = false;
             s_column = 0;
             cursor_update();
             break;
