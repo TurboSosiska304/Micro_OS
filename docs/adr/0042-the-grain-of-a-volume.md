@@ -142,13 +142,16 @@ mechanism of a view; it does not change the format of MicroFS.
 ## The numbers
 
 **The volume of 5 GiB, a file of 128 MiB** (`make x86-volume-smoke`, two boots
-each, the gate of the release; the spread of a boot of QEMU is a few percent
-and the lower number of the two is the one to trust):
+each, on a quiet machine):
 
 | grain | written | read | e2fsck | the image of 5 GiB costs the host |
 |---|---|---|---|---|
-| 1024 bytes | 139.9-146.1 MiB/s | 119.1-124.2 MiB/s | clean | 5 MB |
+| 1024 bytes | 139.9-142.9 MiB/s | 119.1-124.2 MiB/s | clean | 5 MB |
 | 4096 bytes | 120.9-123.1 MiB/s | 116.6-118.0 MiB/s | clean | 5 MB |
+
+A boot of QEMU on a loaded host is not a number of a release: one run of this
+pair wrote the same file at 85.85 MiB/s at the grain of 1024 bytes, which is
+why `make x86-volume-smoke` is a gate of a release and not a check of a push.
 
 **`make bench --fs ext2`, the median of three runs** (a volume of 64 MiB, a file
 of 16 MiB, out of the cache of the host):
