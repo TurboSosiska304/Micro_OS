@@ -7,13 +7,14 @@
  * window of registers in the memory (a BAR above the identity map), one
  * command list per port, and a table of physical addresses for the bytes.
  *
- * This file is the third medium of the port, and it is a reader: the disk a
- * chipset brings was not formatted by this system, and ADR 0041 says such a
- * disk is read-only until the volume says otherwise. The rule is
- * kernel/volume.c - the header block of MicroFS, the list of /etc/volumes and
- * the first sector of the partition - and this driver is its first client:
- * the boot prints what the controller found, registers the volume, mounts it
- * and writes not one byte.
+ * This file is the third medium of the port, and the rule of the disk is not
+ * its own: the disk a chipset brings was not formatted by this system, and
+ * ADR 0041 says such a disk is read-only until the volume says otherwise.
+ * The rule is kernel/volume.c - the header block of MicroFS, the list of
+ * /etc/volumes and the first sector of the partition - and this driver is
+ * its first client: the boot prints what the controller found, registers the
+ * volume, mounts it, and opens the writes only when the mount asks and the
+ * rule allows them.
  *
  * The protocol of the controller, in the order a command needs it:
  *
@@ -34,8 +35,10 @@
  *   that this step does not open yet. The line is the next step of the lane;
  *
  *   IDENTIFY DEVICE (0xEC) says how many sectors of 512 bytes the drive has,
- *   READ DMA EXT (0x25) moves them, and WRITE DMA EXT (0x35) would - it is
- *   the command the rule above refuses before the controller is programmed.
+ *   READ DMA EXT (0x25) moves them, and WRITE DMA EXT (0x35) moves them the
+ *   other way once a mount has asked for the writes and the rule of ADR 0041
+ *   allowed them; FLUSH CACHE EXT (0xEA) brings the cache of the drive to the
+ *   medium at a sync.
  *
  * The address of a buffer is translated per page, as ADR 0032 says for every
  * bus master of the port: the filesystem may hand the driver the buffer of a
@@ -139,6 +142,7 @@
 
 #define AHCI_CMD_READ_DMA_EXT 0x25u
 #define AHCI_CMD_WRITE_DMA_EXT 0x35u
+#define AHCI_CMD_FLUSH_CACHE_EXT 0xEAu
 #define AHCI_CMD_IDENTIFY 0xECu
 
 #define AHCI_FIS_REG_H2D 0x27u
@@ -186,10 +190,11 @@ _Static_assert(MFS_BLOCK_SIZE % AHCI_MEDIUM_SECTOR == 0,
  * (ADR 0032), because the medium is the same kind of medium and the commands
  * of the controller move the same 64 KiB.
  *
- * The cache is write-through on purpose: the disk is read-only, and a write
- * that the cache held back would be answered "yes" to the filesystem and
- * refused by the driver a moment later. A write-through cache asks the
- * driver for every sector, so the refusal is the answer of the call.
+ * The cache is write-through on purpose: a sector that sat in a write-back
+ * cache would be answered "yes" to the filesystem and reach a driver whose
+ * door is still closed at the next sync, which is the wrong order for a rule
+ * about writes. A write-through cache asks the driver for every sector, so
+ * the refusal - and the write - is the answer of the call.
  */
 #define AHCI_CACHE_SECTORS 512u
 #define AHCI_READ_AHEAD 128u
@@ -266,18 +271,27 @@ static struct ahci_header g_cmdlist[AHCI_SLOTS] __attribute__((aligned(1024)));
 static k_u8_t g_cmdtable[4096] __attribute__((aligned(4096)));
 static k_u8_t g_fis[1024] __attribute__((aligned(1024)));
 
+/* A buffer the driver may hand to the controller when the one the block
+ * layer gave it is not word-aligned: the address of a PRDT entry is a word
+ * address, and a buffer of a caller - the stack of a task, the bytes of a
+ * program - is not. The copy is the price of the rule of the standard, and
+ * it is paid only by an odd buffer. */
+static k_u8_t g_bounce[AHCI_TRANSFER_MAX] __attribute__((aligned(64)));
+
 static volatile k_u32_t *g_hba; /* the window of the registers */
 static struct port_x86_64_pci_device g_card;
-static k_u32_t g_port;               /* the number of the port the disk is on */
-static k_u32_t g_ports;              /* the ports the controller implements */
-static k_u32_t g_medium_sectors;     /* the sectors of 512 bytes of the drive */
-static k_u32_t g_sectors;            /* the blocks of the filesystem on it */
-static const char *g_root;           /* the partition the boot mounts, if any */
-static bool g_read_only = true;      /* the rule of ADR 0041, decided once */
-static const char *g_refusal;        /* the sentence of the rule, for the log */
-static bool g_refused;               /* a write was refused and is in the log */
-static struct k_volume_id g_id;      /* what the rule saw on the volume */
-static struct k_volume_id g_disk_id; /* the whole disk: the table of the writes */
+static k_u32_t g_port;                    /* the number of the port the disk is on */
+static k_u32_t g_ports;                   /* the ports the controller implements */
+static k_u32_t g_medium_sectors;          /* the sectors of 512 bytes of the drive */
+static k_u32_t g_sectors;                 /* the blocks of the filesystem on it */
+static const char *g_root;                /* the partition the boot mounts, if any */
+static const struct k_blockdev *g_volume; /* the partition the rule is about */
+static bool g_read_only = true;           /* the rule of ADR 0041, decided once */
+static bool g_write_open;                 /* a mount asked and the rule allowed it */
+static const char *g_refusal;             /* the sentence of the rule, for the log */
+static bool g_refused;                    /* a write was refused and is in the log */
+static struct k_volume_id g_id;           /* what the rule saw on the volume */
+static struct k_volume_id g_disk_id;      /* the whole disk: the table of the writes */
 static k_mutex_t g_ahci_lock = K_MUTEX_INITIALIZER;
 
 /* --- one register of the controller --------------------------------------- */
@@ -418,6 +432,10 @@ static k_u32_t ahci_prdt_fill(const k_u8_t *buf, k_size_t bytes)
 /*
  * Program one command of the port: the FIS, the header, the table and the
  * bit of PxCI. Returns 0 when the controller took it and reported no error.
+ *
+ * `bytes` is zero for a command without data - FLUSH CACHE EXT - and then
+ * the header names no table entry and the device is asked for nothing but
+ * its own state.
  */
 static int ahci_command(k_u32_t command, bool write, k_u64_t lba, k_u32_t sectors,
                         const k_u8_t *buf, k_size_t bytes)
@@ -425,18 +443,21 @@ static int ahci_command(k_u32_t command, bool write, k_u64_t lba, k_u32_t sector
     struct ahci_fis *fis = (struct ahci_fis *)(void *)(g_cmdtable + AHCI_CFIS);
     struct ahci_header *header = &g_cmdlist[AHCI_SLOT];
     k_u64_t table = port_x86_64_kernel_phys(g_cmdtable);
-    k_u32_t entries;
+    k_u32_t entries = 0;
     k_u32_t status;
 
-    if (sectors == 0u || bytes == 0u) {
-        return -1;
-    }
+    if (bytes > 0u) {
+        if (sectors == 0u) {
+            return -1;
+        }
 
-    entries = ahci_prdt_fill(buf, bytes);
+        entries = ahci_prdt_fill(buf, bytes);
 
-    if (entries == 0u) {
-        kwarn("ahci0: a buffer of 0x%x byte(s) cannot be named to the controller", (unsigned)bytes);
-        return -1;
+        if (entries == 0u) {
+            kwarn("ahci0: a buffer of 0x%x byte(s) cannot be named to the controller",
+                  (unsigned)bytes);
+            return -1;
+        }
     }
 
     memset(fis, 0, sizeof(*fis));
@@ -601,11 +622,13 @@ static int ahci_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 
     while (bytes > 0u) {
         k_size_t chunk = bytes > AHCI_TRANSFER_MAX ? AHCI_TRANSFER_MAX : bytes;
+        bool bounce = ((uintptr_t)dst & 1u) != 0u;
         k_u32_t attempt;
 
         for (attempt = 0; attempt < AHCI_ATTEMPTS; attempt++) {
-            rc = ahci_command(AHCI_CMD_READ_DMA_EXT, false, lba,
-                              (k_u32_t)(chunk / AHCI_MEDIUM_SECTOR), dst, chunk);
+            rc =
+                ahci_command(AHCI_CMD_READ_DMA_EXT, false, lba,
+                             (k_u32_t)(chunk / AHCI_MEDIUM_SECTOR), bounce ? g_bounce : dst, chunk);
 
             if (rc == 0) {
                 break;
@@ -623,6 +646,10 @@ static int ahci_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
             break;
         }
 
+        if (bounce) {
+            memcpy(dst, g_bounce, chunk);
+        }
+
         lba += chunk / AHCI_MEDIUM_SECTOR;
         dst += chunk;
         bytes -= chunk;
@@ -634,27 +661,35 @@ static int ahci_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 }
 
 /*
- * The write the rule of ADR 0041 refuses. There are two sentences: the disk
- * was not made by this system (the superblock and the list of /etc/volumes),
- * and the request names the table of the partitions. The first is decided
- * once at the boot; the second is asked per request, because a disk that a
- * later step makes writable still may not be written below its first
- * partition.
+ * One write of the block layer: the mirror of ahci_read, with WRITE DMA EXT
+ * and the bit of the header that says the bytes go from the memory to the
+ * device. The door of the writes has to be open - a mount that asked for it
+ * and a rule that allowed it (ahci_writes) - and the request has to be above
+ * the table of the partitions. Nothing of a medium this system did not make
+ * is ever handed to this function: the two refusals are here, in the words
+ * of ADR 0041, and a write below the first partition is refused whatever the
+ * mount said.
  */
 static int ahci_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
 {
-    K_UNUSED(ctx);
-    K_UNUSED(buf);
+    const k_u8_t *source = (const k_u8_t *)buf;
+    k_u64_t lba;
+    k_size_t bytes;
+    int rc = 0;
 
-    if (!ahci_range_ok(sector, count)) {
+    K_UNUSED(ctx);
+
+    if (buf == NULL || !ahci_range_ok(sector, count)) {
         return -1;
     }
 
-    if (g_read_only) {
+    if (!g_write_open) {
         if (!g_refused) {
             g_refused = true;
             kwarn("ahci0: the write of %u sector(s) at %u is refused: %s", (unsigned)count,
-                  (unsigned)sector, g_refusal != NULL ? g_refusal : "the disk is read-only");
+                  (unsigned)sector,
+                  g_refusal != NULL ? g_refusal
+                                    : "no mount has asked for the writes of this volume");
         } else {
             kdebug("ahci0: another write refused at %u", (unsigned)sector);
         }
@@ -672,21 +707,126 @@ static int ahci_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    /* The writes are a later step of the lane: a volume of this system that
-     * /etc/volumes names is the only one the rule lets through, and until
-     * the mount can say so the driver has nothing to write. */
-    kwarn("ahci0: the write of %u sector(s) at %u is refused: the write path of the "
-          "release is not open yet",
-          (unsigned)count, (unsigned)sector);
+    if (k_mutex_lock(&g_ahci_lock) != 0) {
+        return -1;
+    }
 
+    lba = (k_u64_t)sector * AHCI_SECTORS_PER_BLOCK;
+    bytes = count * MFS_BLOCK_SIZE;
+
+    while (bytes > 0u) {
+        k_size_t chunk = bytes > AHCI_TRANSFER_MAX ? AHCI_TRANSFER_MAX : bytes;
+        bool bounce = ((uintptr_t)source & 1u) != 0u;
+        k_u32_t attempt;
+
+        if (bounce) {
+            memcpy(g_bounce, source, chunk);
+        }
+
+        for (attempt = 0; attempt < AHCI_ATTEMPTS; attempt++) {
+            rc = ahci_command(AHCI_CMD_WRITE_DMA_EXT, true, lba,
+                              (k_u32_t)(chunk / AHCI_MEDIUM_SECTOR), bounce ? g_bounce : source,
+                              chunk);
+
+            if (rc == 0) {
+                break;
+            }
+
+            if (!ahci_port_start()) {
+                break;
+            }
+        }
+
+        if (rc != 0) {
+            kerror("ahci0: the write of %u sector(s) at %u failed", (unsigned)chunk, (unsigned)lba);
+            break;
+        }
+
+        lba += chunk / AHCI_MEDIUM_SECTOR;
+        source += chunk;
+        bytes -= chunk;
+    }
+
+    k_mutex_unlock(&g_ahci_lock);
+
+    return rc;
+}
+
+/*
+ * Bring the writes of the port to the medium: FLUSH CACHE EXT, the command
+ * of the drive's own cache. The block layer of this disk is write-through,
+ * so the call is the one a filesystem makes when it closes a file or a
+ * transaction, and it is the answer to "does the file survive a reset".
+ */
+static int ahci_flush(void)
+{
+    k_u32_t attempt;
+
+    if (!g_write_open) {
+        return 0;
+    }
+
+    for (attempt = 0; attempt < AHCI_ATTEMPTS; attempt++) {
+        if (ahci_command(AHCI_CMD_FLUSH_CACHE_EXT, false, 0u, 0u, NULL, 0u) == 0) {
+            return 0;
+        }
+
+        if (!ahci_port_start()) {
+            break;
+        }
+    }
+
+    kerror("ahci0: the cache of the drive does not flush");
     return -1;
 }
 
-/* There is nothing to bring to a medium that is not written: the call exists
- * because the block layer and the partition above it forward a sync. */
+/* There is nothing to bring to a medium whose writes are closed: the call
+ * exists because the block layer and the filesystem above it forward a
+ * sync, and a flush of a disk nobody wrote is a cost with no answer. */
 static int ahci_sync(void *ctx)
 {
     K_UNUSED(ctx);
+
+    return ahci_flush();
+}
+
+/*
+ * The door of the writes: a mount that asked for them and the rule of
+ * ADR 0041. The rule is read again here, and not only at the mount, because
+ * the list it reads lives in `/etc/volumes` of the volume itself: the first
+ * boot has no root to read it from until the root is mounted, and the driver
+ * is asked at the mount. A refusal is KERR_ROFS and a sentence in the log.
+ */
+static int ahci_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    if (!open) {
+        g_write_open = false;
+        return 0;
+    }
+
+    if (g_volume == NULL) {
+        return KERR_ROFS;
+    }
+
+    if (k_volume_identify(g_volume, &g_id) != 0 ||
+        !k_volume_may_write(g_volume, &g_id, &g_refusal)) {
+        if (!g_refused) {
+            g_refused = true;
+            kwarn("ahci0: the writes of %s are refused: %s",
+                  g_volume->name != NULL ? g_volume->name : "the disk",
+                  g_refusal != NULL ? g_refusal : "the rule of ADR 0041");
+        }
+
+        g_read_only = true;
+        return KERR_ROFS;
+    }
+
+    g_read_only = false;
+    g_write_open = true;
+    kinfo("ahci0: the writes of %s are open: the volume is named in /etc/volumes",
+          g_volume->name != NULL ? g_volume->name : "the disk");
 
     return 0;
 }
@@ -696,6 +836,7 @@ static const struct k_blockdev_ops g_ahci_ops = {
     .write = ahci_write,
     .erase = NULL, /* a disk keeps its sectors until they are written */
     .sync = ahci_sync,
+    .writes = ahci_writes,
 };
 
 static struct k_blockdev g_ahci_device = {
@@ -925,15 +1066,30 @@ void port_x86_64_ahci_init(void)
         return;
     }
 
-    g_read_only = !k_volume_may_write(volume, &g_id, &g_refusal);
+    /*
+     * The disk is registered read-only, always: the rule of ADR 0041 is a
+     * decision of a mount, and no mount has asked yet. The list it reads -
+     * `/etc/volumes` - lives inside the volume itself, so the rule cannot
+     * answer before the root is mounted; the answer of this line is the
+     * state of the boot, and ahci_writes() asks the rule when a mount does.
+     */
+    g_volume = volume;
+    g_read_only = true;
+    g_write_open = false;
+    g_refusal = NULL;
 
-    kinfo("ahci0: %s: %s (%s), %s", volume->name != NULL ? volume->name : "the disk",
-          volume_kind_name(&g_id), g_id.format != NULL ? g_id.format : "no superblock",
-          g_read_only ? "read-only" : "writable");
+    if (g_id.kind != K_VOLUME_OURS) {
+        /* A medium of another system, a blank one or one nothing
+         * recognises: the sentence is the rule's and needs no list. */
+        (void)k_volume_may_write(volume, &g_id, &g_refusal);
+    }
 
-    if (g_read_only) {
-        kinfo("ahci0: the disk is read-only: %s",
-              g_refusal != NULL ? g_refusal : "the rule of ADR 0041");
+    kinfo("ahci0: %s: %s (%s), read-only until a mount asks for the writes",
+          volume->name != NULL ? volume->name : "the disk", volume_kind_name(&g_id),
+          g_id.format != NULL ? g_id.format : "no superblock");
+
+    if (g_refusal != NULL) {
+        kinfo("ahci0: the disk is read-only: %s", g_refusal);
     }
 
     if (partitions == KERR_NOENT) {

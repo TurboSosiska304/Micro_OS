@@ -10,21 +10,20 @@
  * completion of 16 bytes into the completion queue and sets the phase bit;
  * the host reads it, moves the head and rings the other doorbell.
  *
- * The driver speaks the protocol the release needs and not one command more:
- * the admin queue is created by the boot (AQA, ASQ, ACQ, CC.EN, CSTS.RDY),
- * Identify Controller and Identify Namespace say who the drive is and how
- * many blocks of 512 bytes it has, and one I/O queue pair is created through
- * the admin queue. A single I/O READ (0x02) moves the bytes, with PRP1 and
- * PRP2 - the two physical pages a request of at most two pages names - which
- * is the contract of ADR 0032 again: the buffer of the caller, one address
- * per page, translated by the page tables of the program that owns it.
+ * The driver speaks the protocol the release needs: the admin queue is
+ * created by the boot (AQA, ASQ, ACQ, CC.EN, CSTS.RDY), Identify Controller
+ * and Identify Namespace say who the drive is and how many blocks of 512
+ * bytes it has, and one I/O queue pair is created through the admin queue.
+ * READ (0x02) and WRITE (0x01) move the bytes, with PRP1 and PRP2 - the two
+ * physical pages a request of at most two pages names - which is the
+ * contract of ADR 0032 again: the buffer of the caller, one address per
+ * page, translated by the page tables of the program that owns it. Flush
+ * (0x00) brings the cache of the namespace to the medium at a sync.
  *
- * The disk is **read-only**. The rule of ADR 0041 decides what may be
- * written (the header block of MicroFS and a name in /etc/volumes), and this
- * step of the lane does not open the write path at all: there is no WRITE
- * command in this file, the write of the block layer is answered with the
- * sentence of the rule, and not one byte of the medium changes. The first
- * boot with a controller lists what it found.
+ * The disk is **read-only until a mount asks**, by the rule of ADR 0041: the
+ * header block of MicroFS and a name in /etc/volumes decide, the door of the
+ * writes starts closed, and a driver whose door is closed has no way to build
+ * a WRITE command. The first boot with a controller lists what it found.
  *
  * The completion is polled, as the port polls the port of AHCI: the interrupt
  * of the controller (MSI-X) is a line and a table of vectors that this step
@@ -100,7 +99,8 @@
 #define NVME_ADMIN_CREATE_SQ 0x01u
 #define NVME_ADMIN_CREATE_CQ 0x05u
 #define NVME_ADMIN_IDENTIFY 0x06u
-#define NVME_IO_WRITE 0x01u /* not issued: the disk is read-only (ADR 0041) */
+#define NVME_IO_FLUSH 0x00u
+#define NVME_IO_WRITE 0x01u
 #define NVME_IO_READ 0x02u
 
 /* The CNS of Identify: the controller, then a namespace. */
@@ -193,7 +193,8 @@ _Static_assert(MFS_BLOCK_SIZE % NVME_MEDIUM_SECTOR == 0,
 
 /* The cache of the block layer above the disk, and the run a read ahead of a
  * file asks of it: the same numbers as the two other disks of the port
- * (ADR 0032), and write-through because the disk is read-only (ADR 0041). */
+ * (ADR 0032), and write-through because a write is the answer of the door of
+ * ADR 0041 and not of a cache that would hold it back. */
 #define NVME_CACHE_SECTORS 512u
 #define NVME_READ_AHEAD 128u
 
@@ -226,7 +227,9 @@ static k_u32_t g_nsid = 1u;     /* the namespace the boot mounts */
 static k_u32_t g_medium_sectors;
 static k_u32_t g_sectors; /* the blocks of the filesystem on it */
 static const char *g_root;
+static const struct k_blockdev *g_volume; /* the partition the rule is about */
 static bool g_read_only = true;
+static bool g_write_open;
 static const char *g_refusal;
 static bool g_refused;
 static struct k_volume_id g_id;      /* what the rule saw on the volume */
@@ -446,10 +449,13 @@ static bool nvme_prp(const k_u8_t *buf, k_size_t bytes, k_u64_t *prp1, k_u64_t *
     return true;
 }
 
-/* One read of the queue: the address of the first block, the count of the
- * sectors of 512 bytes minus one (the field of the command is 0-based) and
- * the two pages of the buffer. */
-static int nvme_read_dma(k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
+/*
+ * One command of the NVM set that moves bytes: the address of the first
+ * block, the count of the sectors of 512 bytes minus one (the field of the
+ * command is 0-based) and the two pages of the buffer. READ (0x02) and
+ * WRITE (0x01) name the buffer the same way; the direction is the opcode.
+ */
+static int nvme_rw_dma(k_u32_t opcode, k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
 {
     struct nvme_command command;
     k_u64_t prp1;
@@ -461,7 +467,7 @@ static int nvme_read_dma(k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
     }
 
     memset(&command, 0, sizeof(command));
-    command.cdw0 = NVME_IO_READ;
+    command.cdw0 = opcode;
     command.nsid = g_nsid;
     command.prp1_low = (k_u32_t)prp1;
     command.prp1_high = (k_u32_t)(prp1 >> 32);
@@ -470,6 +476,33 @@ static int nvme_read_dma(k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
     command.cdw10 = (k_u32_t)lba;                               /* the low half of the address */
     command.cdw11 = (k_u32_t)(lba >> 32);                       /* the high half */
     command.cdw12 = (k_u32_t)(bytes / NVME_MEDIUM_SECTOR - 1u); /* 0-based */
+
+    return nvme_submit(&g_io, &command);
+}
+
+/* One read of the queue. */
+static int nvme_read_dma(k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
+{
+    return nvme_rw_dma(NVME_IO_READ, lba, bytes, buf);
+}
+
+/* One write of the queue: the same bytes and the same two pages, the other
+ * direction of the transfer. */
+static int nvme_write_dma(k_u64_t lba, k_size_t bytes, const k_u8_t *buf)
+{
+    return nvme_rw_dma(NVME_IO_WRITE, lba, bytes, buf);
+}
+
+/* Flush (0x00): the data of the namespace that the controller holds in its
+ * own cache is written to the medium. It carries no buffer and no address:
+ * the namespace is the subject and the command is the whole of it. */
+static int nvme_flush_dma(void)
+{
+    struct nvme_command command;
+
+    memset(&command, 0, sizeof(command));
+    command.cdw0 = NVME_IO_FLUSH;
+    command.nsid = g_nsid;
 
     return nvme_submit(&g_io, &command);
 }
@@ -535,19 +568,36 @@ static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 }
 
 /*
- * The write the rule of ADR 0041 refuses. There is no WRITE command in this
- * file and this step of the lane does not open the write path: the answer is
- * the sentence of the rule, once in the log of the boot and the error of the
- * medium to the caller. The table of the partitions is asked as well, because
- * the day the path opens the first sector of the disk is still not a place
- * for a filesystem.
+ * One write of the block layer: the mirror of nvme_read with WRITE (0x01).
+ * The door of the writes has to be open - a mount that asked for it and the
+ * rule that allowed it (nvme_writes) - and the request has to be above the
+ * table of the partitions. A medium of another system never reaches this
+ * function: the sentence of the rule is the answer of the door.
  */
 static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
 {
-    K_UNUSED(ctx);
-    K_UNUSED(buf);
+    const k_u8_t *source = (const k_u8_t *)buf;
+    k_u64_t lba;
+    k_size_t bytes;
+    int rc = 0;
 
-    if (!nvme_range_ok(sector, count)) {
+    K_UNUSED(ctx);
+
+    if (buf == NULL || !nvme_range_ok(sector, count)) {
+        return -1;
+    }
+
+    if (!g_write_open) {
+        if (!g_refused) {
+            g_refused = true;
+            kwarn("nvme0: the write of %u sector(s) at %u is refused: %s", (unsigned)count,
+                  (unsigned)sector,
+                  g_refusal != NULL ? g_refusal
+                                    : "no mount has asked for the writes of this volume");
+        } else {
+            kdebug("nvme0: another write refused at %u", (unsigned)sector);
+        }
+
         return -1;
     }
 
@@ -561,22 +611,103 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    if (!g_refused) {
-        g_refused = true;
-        kwarn("nvme0: the write of %u sector(s) at %u is refused: %s", (unsigned)count,
-              (unsigned)sector, g_refusal != NULL ? g_refusal : "the disk is read-only");
-    } else {
-        kdebug("nvme0: another write refused at %u", (unsigned)sector);
+    if (k_mutex_lock(&g_nvme_lock) != 0) {
+        return -1;
     }
 
-    return -1;
+    lba = (k_u64_t)sector * NVME_SECTORS_PER_BLOCK;
+    bytes = count * MFS_BLOCK_SIZE;
+
+    while (bytes > 0u) {
+        k_size_t inside = (k_size_t)((uintptr_t)source & (g_page - 1u));
+        k_size_t chunk = NVME_TRANSFER_MAX - inside;
+
+        if (chunk > bytes) {
+            chunk = bytes;
+        }
+
+        chunk &= ~(k_size_t)(NVME_MEDIUM_SECTOR - 1u);
+
+        if (chunk == 0u || nvme_write_dma(lba, chunk, source) != 0) {
+            kerror("nvme0: the write of %u sector(s) at %u failed", (unsigned)chunk, (unsigned)lba);
+            rc = -1;
+            break;
+        }
+
+        lba += chunk / NVME_MEDIUM_SECTOR;
+        source += chunk;
+        bytes -= chunk;
+    }
+
+    k_mutex_unlock(&g_nvme_lock);
+
+    return rc;
 }
 
-/* There is nothing to bring to a medium that is not written: the call exists
- * because the block layer and the partition above it forward a sync. */
+/* Bring the writes of the namespace to the medium: the Flush command of the
+ * NVM set, the answer to "does the file survive a reset". */
 static int nvme_sync(void *ctx)
 {
+    int rc;
+
     K_UNUSED(ctx);
+
+    if (!g_write_open) {
+        return 0;
+    }
+
+    if (k_mutex_lock(&g_nvme_lock) != 0) {
+        return -1;
+    }
+
+    rc = nvme_flush_dma();
+
+    k_mutex_unlock(&g_nvme_lock);
+
+    if (rc != 0) {
+        kerror("nvme0: the namespace does not flush");
+    }
+
+    return rc;
+}
+
+/*
+ * The door of the writes: a mount that asked for them and the rule of
+ * ADR 0041. The rule is read again here, and not only at the mount, because
+ * the list it reads lives in `/etc/volumes` of the volume itself: the first
+ * boot has no root to read it from until the root is mounted, and the driver
+ * is asked at the mount. A refusal is KERR_ROFS and a sentence in the log.
+ */
+static int nvme_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    if (!open) {
+        g_write_open = false;
+        return 0;
+    }
+
+    if (g_volume == NULL) {
+        return KERR_ROFS;
+    }
+
+    if (k_volume_identify(g_volume, &g_id) != 0 ||
+        !k_volume_may_write(g_volume, &g_id, &g_refusal)) {
+        if (!g_refused) {
+            g_refused = true;
+            kwarn("nvme0: the writes of %s are refused: %s",
+                  g_volume->name != NULL ? g_volume->name : "the disk",
+                  g_refusal != NULL ? g_refusal : "the rule of ADR 0041");
+        }
+
+        g_read_only = true;
+        return KERR_ROFS;
+    }
+
+    g_read_only = false;
+    g_write_open = true;
+    kinfo("nvme0: the writes of %s are open: the volume is named in /etc/volumes",
+          g_volume->name != NULL ? g_volume->name : "the disk");
 
     return 0;
 }
@@ -586,6 +717,7 @@ static const struct k_blockdev_ops g_nvme_ops = {
     .write = nvme_write,
     .erase = NULL, /* a disk keeps its sectors until they are written */
     .sync = nvme_sync,
+    .writes = nvme_writes,
 };
 
 static struct k_blockdev g_nvme_device = {
@@ -980,15 +1112,28 @@ void port_x86_64_nvme_init(void)
         return;
     }
 
-    g_read_only = !k_volume_may_write(volume, &g_id, &g_refusal);
+    /*
+     * The namespace is registered read-only, always: the rule of ADR 0041
+     * is a decision of a mount, and no mount has asked yet. The list it
+     * reads - `/etc/volumes` - lives inside the volume itself, so the rule
+     * cannot answer before the root is mounted; nvme_writes() asks it when a
+     * mount does.
+     */
+    g_volume = volume;
+    g_read_only = true;
+    g_write_open = false;
+    g_refusal = NULL;
 
-    kinfo("nvme0: %s: %s (%s), %s", volume->name != NULL ? volume->name : "the disk",
-          volume_kind_name(&g_id), g_id.format != NULL ? g_id.format : "no superblock",
-          g_read_only ? "read-only" : "writable");
+    if (g_id.kind != K_VOLUME_OURS) {
+        (void)k_volume_may_write(volume, &g_id, &g_refusal);
+    }
 
-    if (g_read_only) {
-        kinfo("nvme0: the disk is read-only: %s",
-              g_refusal != NULL ? g_refusal : "the rule of ADR 0041");
+    kinfo("nvme0: %s: %s (%s), read-only until a mount asks for the writes",
+          volume->name != NULL ? volume->name : "the disk", volume_kind_name(&g_id),
+          g_id.format != NULL ? g_id.format : "no superblock");
+
+    if (g_refusal != NULL) {
+        kinfo("nvme0: the disk is read-only: %s", g_refusal);
     }
 
     if (partitions == KERR_NOENT) {

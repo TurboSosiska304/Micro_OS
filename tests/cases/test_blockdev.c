@@ -59,6 +59,37 @@ static const struct k_blockdev s_device = {
     .ctx = s_data,
 };
 
+/* --- the door of the writes (ADR 0041 §2) -------------------------------- */
+
+static bool s_gate_open;
+static int s_gate_calls;
+
+static int test_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    s_gate_calls++;
+    s_gate_open = open;
+
+    return 0;
+}
+
+static const struct k_blockdev_ops s_gate_ops = {
+    .read = test_read,
+    .write = test_write,
+    .erase = NULL,
+    .sync = NULL,
+    .writes = test_writes,
+};
+
+static const struct k_blockdev s_gate_device = {
+    .name = "gate0",
+    .sector_size = TEST_SECTOR_SIZE,
+    .sectors = TEST_SECTORS,
+    .ops = &s_gate_ops,
+    .ctx = s_data,
+};
+
 void test_blockdev(void)
 {
     const struct k_blockdev *found;
@@ -96,6 +127,51 @@ void test_blockdev(void)
 
     /* The bounds are the bounds of the device. */
     KT_CHECK_INT_EQ(s_device.ops->read(s_device.ctx, TEST_SECTORS, read_back, 1), -1);
+
+    /* --- the door of the writes --------------------------------------- */
+
+    /* A medium with no door answers the question every device is asked. */
+    KT_CHECK(!k_blockdev_gated(&s_device));
+    KT_CHECK_INT_EQ(k_blockdev_writes(&s_device, true), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(k_blockdev_writes(NULL, true), KERR_INVAL);
+
+    /* A controller that put the door there is asked through the table. */
+    KT_CHECK_INT_EQ(k_blockdev_register(&s_gate_device), 0);
+
+    found = k_blockdev_find("gate0");
+    KT_CHECK(found != NULL);
+    KT_CHECK(k_blockdev_gated(found));
+
+    s_gate_open = false;
+    s_gate_calls = 0;
+
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, true), 0);
+    KT_CHECK(s_gate_open);
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, false), 0);
+    KT_CHECK(!s_gate_open);
+    KT_CHECK_INT_EQ(s_gate_calls, 2);
+
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&s_gate_device), 0);
+    KT_CHECK(k_blockdev_find("gate0") == NULL);
+
+    /*
+     * The cache between a mount and the controller forwards the door: the
+     * device the table hands out is the cache's view, and the driver is the
+     * one that keeps the state.
+     */
+    KT_CHECK_INT_EQ(k_blockdev_register_cached(&s_gate_device, false), 0);
+
+    found = k_blockdev_find("gate0");
+    KT_CHECK(found != NULL);
+    KT_CHECK(k_blockdev_gated(found));
+
+    s_gate_open = false;
+
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, true), 0);
+    KT_CHECK(s_gate_open);
+
+    KT_CHECK_INT_EQ(k_blockdev_unregister(&s_gate_device), 0);
+    KT_CHECK(k_blockdev_find("gate0") == NULL);
 }
 
 /* --- the partitions of a disk -------------------------------------------- */
@@ -148,11 +224,23 @@ static int part_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
     return 0;
 }
 
+static int s_part_gate_open;
+
+static int part_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    s_part_gate_open = open;
+
+    return 0;
+}
+
 static const struct k_blockdev_ops s_part_ops = {
     .read = part_read,
     .write = part_write,
     .erase = NULL,
     .sync = NULL,
+    .writes = part_writes,
 };
 
 static struct k_blockdev s_part_device = {
@@ -314,6 +402,22 @@ void test_partition(void)
     KT_CHECK(child != NULL);
     if (child != NULL) {
         KT_CHECK_INT_EQ((int)child->sectors, 2048);
+    }
+
+    /*
+     * A partition of a disk with the door of the writes carries the door
+     * too: the mount of a partition asks the controller below it, and a
+     * partition of a medium without one answers KERR_NOTSUP.
+     */
+    child = k_blockdev_find("pmbr0p1");
+    if (child != NULL) {
+        KT_CHECK(k_blockdev_gated(child));
+
+        s_part_gate_open = false;
+        KT_CHECK_INT_EQ(k_blockdev_writes(child, true), 0);
+        KT_CHECK(s_part_gate_open);
+        KT_CHECK_INT_EQ(k_blockdev_writes(child, false), 0);
+        KT_CHECK(!s_part_gate_open);
     }
 
     /* The type of the entry travels with the child: the boot of the root

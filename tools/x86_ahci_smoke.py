@@ -7,25 +7,34 @@ This one boots the same volume on the **AHCI** controller of a chipset (ADR
 0041): a machine of these years has no IDE channel at all, and the disk of a
 laptop is a port of the SATA controller.
 
-Two boots, and the second one is the rule of the lane:
+Four boots, and the rule of the lane is the difference between them:
 
-  1. **a volume of this system** - the image `make x86-disk` builds, on the
-     first port of the controller. The boot finds the disk, reads the
-     identify data, reads the partition table, mounts the MicroFS volume of
-     `ahci0p1` and runs `/bin/hello` out of it; the shell lists `/bin`, reads
-     `/etc/setting` and asks `df /`. A write is attempted on purpose and the
-     driver refuses it with the sentence of the rule (the volume is not named
-     in `/etc/volumes`), and the SHA-256 of the whole image is the same before
-     and after the boot: not one byte of the medium changed.
+  1. **a volume of this system that `/etc/volumes` names** - the image `make
+     x86-disk` builds, on the first port of the controller. The boot finds the
+     disk, reads the identify data and the partition table, mounts the MicroFS
+     volume of `ahci0p1` read-write (the rule allows it and the root mount
+     asked), lists `/bin`, reads `/etc/setting`, runs `/bin/hello` and writes
+     `/note.txt`. `/proc/mounts` says `rw`.
 
-  2. **a volume of another system** - a copy of the same image with the magic
-     of btrfs over the volume and no header of MicroFS left. The mount is
-     refused with the name of the foreign system, the boot stops instead of
-     running a shell over somebody else's bytes, and the SHA-256 of the image
-     is again the same before and after.
+  2. **the same image after a reset** - the machine starts again on the file a
+     byte-for-byte copy of the first boot left, mounts the volume it finds, and
+     `cat /note.txt` reads the line the first boot wrote. `fsck` says the
+     volume is consistent.
 
-The exit status is 0 when both boots are what they have to be, 2 when a tool
-or an image is missing, and 1 when a check failed.
+  3. **a copy without the name** - the same volume, built with `--volumes none`
+     so that `/etc/volumes` does not name `ahci0p1`. The root is mounted
+     read-only, the write of the shell is refused with the sentence of the
+     rule, and the SHA-256 of the whole image is the same before and after the
+     boot: not one byte of the medium changed.
+
+  4. **a volume of another system** - a copy of the image with the magic of
+     btrfs over the volume and no header of MicroFS left. The mount is refused
+     with the name of the foreign system, the boot stops instead of running a
+     shell over somebody else's bytes, and the SHA-256 of the image is again
+     the same before and after.
+
+The exit status is 0 when every boot is what it has to be, 2 when a tool or an
+image is missing, and 1 when a check failed.
 """
 
 from __future__ import annotations
@@ -35,6 +44,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 from qemu_session import Machine, MachineError, MachineTimeout, disk_name
@@ -42,6 +52,8 @@ from qemu_session import Machine, MachineError, MachineTimeout, disk_name
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
+DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
+IMAGE_TOOL = os.path.join(ROOT, "tools", "x86_image.py")
 
 PROMPT = "microos> "
 
@@ -57,20 +69,18 @@ HELLO_LINE = "PROGRAM: hello from /bin"
 # The first line of /etc/setting, written by tools/x86_image.py.
 SETTING_LINE = "hostname=x86_64"
 
-# A file the boot must not be able to write: the volume of a disk this system
-# did not format by naming it in /etc/volumes is read-only. The root directory
-# is where the name is made, and the refusal of the driver is the answer.
-WRITE_PATH = "/ahci.txt"
-WRITE_TEXT = "the disk is read-only"
+# The file the first boot writes and the second one reads: the line exists
+# nowhere but on the medium of the run.
+NOTE_PATH = "/note.txt"
+NOTE_TEXT = "the disk remembers the SATA port"
 
-# The line of the refusal of the driver. The volume carries the header of
-# MicroFS, and the rule of ADR 0041 still refuses it: the list of /etc/volumes
-# does not name it, and the boot does not format or claim a disk by itself.
-REFUSAL = "the write of"
+# The sentences of the mount and of the refusal of the rule.
+RW_LINE = "is mounted read-write"
+RO_LINE = "is mounted read-only"
 REFUSAL_REASON = "the volume is not named in /etc/volumes"
 
 # The magic of btrfs at the start of its superblock (the third copy, at
-# 0x10040 of the volume), which is what the image of the second boot carries
+# 0x10040 of the volume), which is what the image of the fourth boot carries
 # instead of the header of MicroFS.
 BTRFS_MAGIC_OFFSET = 0x10040
 BTRFS_MAGIC = b"_BHRfS_M"
@@ -125,7 +135,6 @@ def make_foreign(image: str) -> None:
     """
     start = partition_start(image)
     size = os.path.getsize(image)
-    end = size
 
     with open(image, "r+b") as handle:
         handle.seek(start + BTRFS_MAGIC_OFFSET)
@@ -133,20 +142,51 @@ def make_foreign(image: str) -> None:
 
         # The last block of the volume: the end of the image, because the
         # partition of the tool runs to it.
-        handle.seek(end - MFS_BLOCK)
+        handle.seek(size - MFS_BLOCK)
         if handle.read(len(MFS_MAGIC)) != MFS_MAGIC:
             raise ValueError(f"{image}: the volume has no MicroFS header to replace")
-        handle.seek(end - MFS_BLOCK)
+        handle.seek(size - MFS_BLOCK)
         handle.write(b"\x00" * 8)
+
+
+def build_unnamed(image: str, build: str, mkfs: str) -> None:
+    """Write the same tree into a volume whose /etc/volumes names nothing.
+
+    The negative half of the gate is a medium of the same format that no
+    mount may write: the image tool with `--volumes none` leaves the file
+    out, and the rule of the mount has the sentence the check reads.
+    """
+    command = [
+        sys.executable,
+        IMAGE_TOOL,
+        "--image",
+        image,
+        "--build",
+        build,
+        "--mkfs",
+        mkfs,
+        "--volumes",
+        "none",
+    ]
+
+    result = subprocess.run(command, capture_output=True, check=False)
+
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or b"").decode("utf-8", "replace")
+        raise RuntimeError(f"the image without a name: {message.strip()}")
 
 
 def expect(checks: list, title: str, condition: bool, detail: str = "") -> None:
     checks.append((title, bool(condition), detail))
 
 
-def boot_volume(machine: Machine, boot: str, checks: list) -> None:
-    """The shell of the machine on the volume of this system."""
-    commands = ["ls /bin", "cat /etc/setting", "exec /bin/hello", "df /"]
+def boot_lines(boot: str) -> list:
+    return [line for line in boot.splitlines() if line.strip() != ""]
+
+
+def boot_writable(machine: Machine, boot: str, checks: list) -> None:
+    """The shell of the machine on the volume the rule allows to write."""
+    commands = ["ls /bin", "cat /etc/setting", "exec /bin/hello", "df /", "cat /proc/mounts"]
     answers = [machine.run(command, timeout=60.0) for command in commands]
 
     expect(checks, "the boot names the controller of the chipset",
@@ -157,14 +197,15 @@ def boot_volume(machine: Machine, boot: str, checks: list) -> None:
            f"x86-64: the root volume is {ROOT_DEVICE}" in boot)
     expect(checks, "the volume of this system is recognised",
            "ahci0: " + ROOT_DEVICE + ": a volume of this system (mfs)" in boot)
-    expect(checks, "the disk is read-only and the reason is printed",
-           "ahci0: the disk is read-only: " + REFUSAL_REASON in boot)
-    expect(checks, "the first boot of the controller writes nothing",
+    expect(checks, "the controller registers the disk read-only",
            "ahci: 1 disk(s) on the controller, read-only, nothing written" in boot)
     expect(checks, "the root is mounted from the SATA disk",
            f"root: the root is mfs on {ROOT_DEVICE}" in boot)
     expect(checks, "the boot does not fall back to the volume of the memory",
            "root: the root is mfs on ram0" not in boot)
+    expect(checks, "the volume is named in /etc/volumes and the writes are open",
+           f"root: {ROOT_DEVICE} {RW_LINE}" in boot and
+           f"ahci0: the writes of {ROOT_DEVICE} are open" in boot, boot)
 
     expect(checks, "ls /bin reads the tree of the disk", "hello" in answers[0], answers[0])
     expect(checks, "cat /etc/setting reads a file of the disk", SETTING_LINE in answers[1],
@@ -173,19 +214,54 @@ def boot_volume(machine: Machine, boot: str, checks: list) -> None:
            answers[2])
     expect(checks, "df / counts the volume of the disk",
            re.search(r"\d+ KB", answers[3]) is not None, answers[3])
+    expect(checks, "/proc/mounts says the root is read-write",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+rw", answers[4]) is not None,
+           answers[4])
 
-    # The write of the rule: the driver refuses it, and the shell says so.
-    # The driver writes the sentence of the rule once in the log of the boot
-    # (the boot itself asked for three files of /etc and was refused), and the
-    # call of the shell comes back as the error of the medium.
-    refused = machine.run(f"write {WRITE_PATH} {WRITE_TEXT}", timeout=30.0)
-    expect(checks, "a write to the volume of the disk is refused",
-           f"write: {WRITE_PATH}" in refused and "error" in refused.lower(), refused)
-    expect(checks, "the driver says why the writes are refused",
-           REFUSAL in boot and REFUSAL_REASON in boot)
+    written = machine.run(f"write {NOTE_PATH} {NOTE_TEXT}", timeout=30.0)
+    expect(checks, "the shell writes a file of the volume",
+           "bytes written to " + NOTE_PATH in written and "error" not in written.lower(), written)
+
+    read_back = machine.run(f"cat {NOTE_PATH}", timeout=30.0)
+    expect(checks, "the file is read back at the first boot", NOTE_TEXT in read_back, read_back)
+
+
+def boot_after_reset(machine: Machine, boot: str, checks: list) -> None:
+    """The second boot of the positive image: the file outlives the machine."""
+    expect(checks, "the second boot reaches the shell", PROMPT in boot or boot != "", boot[:200])
+    expect(checks, "the second boot mounts the volume it finds",
+           f"root: the root is mfs on {ROOT_DEVICE}" in boot)
+
+    read_back = machine.run(f"cat {NOTE_PATH}", timeout=30.0)
+    expect(checks, "the file of the first boot survives the reset", NOTE_TEXT in read_back,
+           read_back)
+
+    fsck = machine.run("fsck", timeout=120.0)
+    expect(checks, "the volume is still consistent after the writes",
+           "the volume is consistent" in fsck, fsck)
+
+    mounts = machine.run("cat /proc/mounts", timeout=30.0)
+    expect(checks, "the root of the second boot is read-write again",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+rw", mounts) is not None, mounts)
+
+
+def boot_read_only(machine: Machine, boot: str, checks: list) -> None:
+    """The volume of this system that /etc/volumes does not name."""
+    expect(checks, "the volume is still one of this system",
+           f"ahci0: {ROOT_DEVICE}: a volume of this system (mfs)" in boot, boot)
+    expect(checks, "the mount asks for the writes and the rule refuses",
+           f"root: {ROOT_DEVICE} {RO_LINE}: {REFUSAL_REASON}" in boot, boot)
+
+    mounts = machine.run("cat /proc/mounts", timeout=30.0)
+    expect(checks, "/proc/mounts says the root is read-only",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+ro", mounts) is not None, mounts)
+
+    refused = machine.run(f"write {NOTE_PATH} {NOTE_TEXT}", timeout=30.0)
+    expect(checks, "a write to a volume the rule does not name is refused",
+           f"write: {NOTE_PATH}" in refused and "error" in refused.lower(), refused)
 
     listed = machine.run("ls /", timeout=30.0)
-    expect(checks, "the file of the refused write does not exist", WRITE_TEXT not in listed,
+    expect(checks, "the file of the refused write does not exist", "note.txt" not in listed,
            listed)
 
 
@@ -193,6 +269,7 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the AHCI disk of x86-64")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image with /bin of the disk")
     parser.add_argument("--build", default=BUILD, help="the build of the port (loader and kernel)")
+    parser.add_argument("--mkfs", default=DEFAULT_MKFS, help="the host tool that writes a volume")
     parser.add_argument("--timeout", type=float, default=180.0, help="the seconds a boot gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
@@ -200,7 +277,7 @@ def main(argv: list) -> int:
     loader = os.path.join(args.build, "loader32.elf")
     kernel = os.path.join(args.build, "microos64.bin")
 
-    for path in (loader, kernel, args.image):
+    for path in (loader, kernel, args.image, args.mkfs):
         if not os.path.isfile(path):
             print(f"missing {path}: run make x86-disk", file=sys.stderr)
             return 2
@@ -208,6 +285,7 @@ def main(argv: list) -> int:
     # A copy of each image: a test never touches the image of the build, and
     # the SHA-256 of the copy is the proof of what the boot did to it.
     run_image = os.path.join(args.build, "ahci-smoke.img")
+    unnamed_image = os.path.join(args.build, "ahci-unnamed.img")
     foreign_image = os.path.join(args.build, "ahci-foreign.img")
 
     checks: list = []
@@ -219,18 +297,50 @@ def main(argv: list) -> int:
         with Machine(args.build, run_image, disk="ahci") as machine:
             try:
                 boot = machine.open(timeout=args.timeout)
-                boot_volume(machine, boot, checks)
+                boot_writable(machine, boot, checks)
             except (MachineError, MachineTimeout) as error:
                 expect(checks, "the machine boots on the SATA disk", False, str(error))
 
-        after = digest(run_image)
+        after_first = digest(run_image)
         if args.verbose:
             print(machine.transcript.decode("utf-8", errors="replace"))
-        expect(checks, "the SHA-256 of the image is the same after the boot", before == after,
-               f"before {before}, after {after}")
-        print(f"the image of the first boot: sha-256 {before}")
+        expect(checks, "the writes of the first boot reached the medium", after_first != before,
+               f"before {before}, after {after_first}")
 
-        # The second boot: the volume of another system, on the same disk.
+        # The reset: a new machine on the same file.
+        with Machine(args.build, run_image, disk="ahci") as machine:
+            try:
+                boot = machine.open(timeout=args.timeout)
+                boot_after_reset(machine, boot, checks)
+            except (MachineError, MachineTimeout) as error:
+                expect(checks, "the machine boots again on the same disk", False, str(error))
+
+        after_second = digest(run_image)
+        if args.verbose:
+            print(machine.transcript.decode("utf-8", errors="replace"))
+        expect(checks, "the file of the first boot is in the bytes of the image",
+               after_second == after_first, f"before {after_first}, after {after_second}")
+
+        # The third boot: the same tree, and /etc/volumes that names nothing.
+        build_unnamed(unnamed_image, args.build, args.mkfs)
+        unnamed_before = digest(unnamed_image)
+
+        with Machine(args.build, unnamed_image, disk="ahci") as machine:
+            try:
+                boot = machine.open(timeout=args.timeout)
+                boot_read_only(machine, boot, checks)
+            except (MachineError, MachineTimeout) as error:
+                expect(checks, "the machine boots on the unnamed volume", False, str(error))
+
+        unnamed_after = digest(unnamed_image)
+        if args.verbose:
+            print(machine.transcript.decode("utf-8", errors="replace"))
+        expect(checks, "the SHA-256 of the unnamed image is the same after the boot",
+               unnamed_before == unnamed_after,
+               f"before {unnamed_before}, after {unnamed_after}")
+        print(f"the unnamed image: sha-256 {unnamed_before}")
+
+        # The fourth boot: the volume of another system, on the same disk.
         shutil.copyfile(args.image, foreign_image)
         make_foreign(foreign_image)
         foreign_before = digest(foreign_image)
@@ -263,7 +373,7 @@ def main(argv: list) -> int:
                f"before {foreign_before}, after {foreign_after}")
         print(f"the image of the foreign boot: sha-256 {foreign_before}")
     finally:
-        for path in (run_image, foreign_image):
+        for path in (run_image, unnamed_image, foreign_image):
             if os.path.exists(path):
                 os.remove(path)
 

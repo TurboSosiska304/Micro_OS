@@ -373,5 +373,15 @@ int k_root_mount(const char *device, const char **type)
 
     kinfo("root: the root is %s on %s", found, device);
 
+    /*
+     * The writes are a decision of the mount and of the rule (ADR 0041 §2):
+     * the root is in the tree now, so its own /etc/volumes can be read, and
+     * a volume of this system that the list names opens the door of the
+     * controller. A refusal leaves the root mounted and read-only - the
+     * state of an ext2 root, which this image can read and this rule does
+     * not write - and the sentence of the refusal is in the log.
+     */
+    (void)vfs_mount_root_writes(K_ROOT_POINT, device);
+
     return 0;
 }
