@@ -88,7 +88,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `mmu-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
 
 The same build by hand:
 

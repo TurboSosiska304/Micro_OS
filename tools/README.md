@@ -11,6 +11,7 @@ built into `build-host/tools/`.
 | `device-test.sh` | build, flash and read the console of the board, ending with `RESULT: PASS` |
 | `sim_smoke.py` | boot the simulator and check its answers |
 | `x86_smoke.py` | boot x86-64 in QEMU, check the transcript, the link address and the signature of the kernel |
+| `x86_mmu_smoke.py` | the policy of a page (ADR 0052): the attacks of W^X, the kernel, a stray page, the limit of a task, the stack that grows and a copy that sleeps, on `-cpu qemu64,+smep,+smap` (`make mmu-smoke`) |
 | `x86_disk_smoke.py` | two boots on one disk image: a file written in the first is read in the second |
 | `x86_net_smoke.py` | the network of the x86-64 machine against servers of the host, including TLS and `pkg` over HTTPS |
 | `x86_bench.py` | the numbers of the machine: `getpid`, fork and exec, a pipe, a file of 16 MiB and the console, on one boot of fixed sizes (`make bench`) |

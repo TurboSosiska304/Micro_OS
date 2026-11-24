@@ -219,7 +219,7 @@ calling itself a release.
 ## `make ci`: the local half
 
 ```text
-build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], reproducible,
+build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], [mmu-smoke], reproducible,
 integrity
 ```
 

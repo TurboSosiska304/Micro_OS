@@ -48,7 +48,8 @@ help:
 	@echo "  make integrity  the integrity check of the repository and the bundle"
 	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
 	@echo "  make ci         build, test, test-asan, test-tsan, smoke, coverage,"
-	@echo "                  x86-smoke when QEMU is there, reproducible, integrity"
+	@echo "                  x86-smoke and mmu-smoke when QEMU is there, reproducible,"
+	@echo "                  integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
@@ -231,7 +232,7 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
+CI_TARGETS += x86-smoke mmu-smoke x86-root-smoke usb-smoke ports-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -242,7 +243,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, mmu-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
 endif
 
 sim: build
