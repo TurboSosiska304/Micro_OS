@@ -32,6 +32,7 @@
 #include "kernel/cpu.h"
 #include "kernel/log.h"
 #include "kernel/port/cpu.h"
+#include "port_x86_64_acpi.h"
 #include "port_x86_64_smp.h"
 
 #define ACPI_RSDP_SIGNATURE "RSD PTR "
@@ -274,6 +275,62 @@ static const struct acpi_rsdp *rsdp_find(void)
     }
 
     return rsdp_find_in(ACPI_BIOS_FROM, ACPI_BIOS_TO);
+}
+
+/*
+ * The table with a signature, for the parts of the port that are not the
+ * processors: the FADT of the power (src/acpi.c). The walk is the one of
+ * madt_read() below, written once more rather than folded into it because
+ * the two read different things and a table the caller asks for is not a
+ * table of the boot map: no state of the port changes here.
+ */
+const void *port_x86_64_acpi_table(const char signature[4], k_u32_t *length)
+{
+    const struct acpi_rsdp *rsdp = rsdp_find();
+    k_u64_t root;
+    k_u64_t end;
+    k_u64_t cursor;
+    k_u32_t step;
+
+    if (rsdp == NULL || signature == NULL) {
+        return NULL;
+    }
+
+    if (rsdp->revision >= 2u && rsdp->xsdt != 0u) {
+        root = rsdp->xsdt;
+        step = 8u;
+    } else if (rsdp->rsdt != 0u) {
+        root = rsdp->rsdt;
+        step = 4u;
+    } else {
+        return NULL;
+    }
+
+    if (memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "XSDT", 4) != 0 &&
+        memcmp(((const struct acpi_header *)(uintptr_t)root)->signature, "RSDT", 4) != 0) {
+        return NULL;
+    }
+
+    end = root + ((const struct acpi_header *)(uintptr_t)root)->length;
+    cursor = root + ACPI_TABLE_HEADER;
+
+    for (; cursor + step <= end; cursor += step) {
+        k_u64_t address = (step == 8u) ? *(const k_u64_t *)(uintptr_t)cursor
+                                       : (k_u64_t)(*(const k_u32_t *)(uintptr_t)cursor);
+        const struct acpi_header *table = (const struct acpi_header *)(uintptr_t)address;
+
+        if (memcmp(table->signature, signature, 4) != 0) {
+            continue;
+        }
+
+        if (length != NULL) {
+            *length = table->length;
+        }
+
+        return table;
+    }
+
+    return NULL;
 }
 
 /* Walk the tables of the root pointer and read the MADT when it is there. */

@@ -31,6 +31,7 @@
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_apic.h"
+#include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
@@ -1972,6 +1973,63 @@ void k_port_reset(void)
     k_port_halt();
 }
 
+/*
+ * The clean end (ADR 0050): the kernel has already stopped the tasks,
+ * flushed the disks and taken the mounts down, and this is the last step.
+ *
+ * The soft off of a PC is the S5 of ACPI and every mechanism below it is a
+ * fallback for a firmware that did not describe one. The two writes of the
+ * emulators are the S5 of a PIIX4 (QEMU, the port 0x604) and of a Bochs
+ * machine (0xB004); a machine with neither ignores them, and the sentence
+ * that follows is the honest answer - the processor stops and a person has
+ * to press the button. A halt that keeps the data is better than a reset
+ * that pretends the machine went off.
+ */
+#define QEMU_PM1A_CNT_PORT 0x604u
+#define BOCHS_PM1A_CNT_PORT 0xB004u
+#define ACPI_S5_REQUEST 0x2000u
+
+void k_port_power(enum k_power_action action)
+{
+    switch (action) {
+    case K_POWER_HALT:
+        kinfo("x86-64: the processor stops, the power stays on");
+        k_port_halt();
+        break;
+
+    case K_POWER_OFF:
+        kinfo("x86-64: the power goes off (ACPI S5, %s)", port_x86_64_acpi_name());
+
+        if (port_x86_64_acpi_off() == 0) {
+            kwarn("x86-64: the S5 request did not take, the ports of the emulators are tried");
+        }
+
+        port_outw(QEMU_PM1A_CNT_PORT, ACPI_S5_REQUEST);
+        port_outw(BOCHS_PM1A_CNT_PORT, ACPI_S5_REQUEST);
+
+        /*
+         * A machine that is still here has no software way off: the
+         * sentence says which key and the processor stops where it is, so
+         * that nothing is written after the flush (ADR 0041).
+         */
+        kerror("x86-64: this machine has no software switch-off; press the power button");
+        k_port_halt();
+        break;
+
+    case K_POWER_REBOOT:
+        kinfo("x86-64: the machine restarts");
+
+        if (port_x86_64_acpi_reset() == 0) {
+            k_port_halt();
+        }
+
+        port_outb(0x64, 0xFE);
+        kerror("x86-64: the reset did not take, the processor stops");
+        k_port_halt();
+        break;
+    }
+}
+
 /* --- the identity --- */
 
 const char *k_port_name(void)
@@ -1985,7 +2043,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

@@ -136,6 +136,11 @@ SECOND_BOOT = [
     "exec /bin/sqlite3 /sqlite.db < /etc/sql-read.sql",
     "exec /bin/sqlite3 /sqlite.db < /etc/sql-schema.sql",
     "exec /bin/awk -f /etc/hello.awk /etc/columns",
+    # The last line of the second boot: the clean end (ADR 0050). The steps
+    # of the shutdown and the end of the QEMU process follow the answer of
+    # this prompt, and the process of the test reads them as the end of the
+    # boot. `power-smoke` checks the volume after it and the reboot.
+    "shutdown",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -425,7 +430,9 @@ def check(first: str, second: str) -> list:
     )
 
     second_answers = answers(second, SECOND_BOOT)
-    expect("every command of the second boot is answered", all(second_answers), "")
+    # The shutdown is the last line and has no prompt after it: its block is the
+    # console of the clean end, which run_machine() reads until QEMU ends.
+    expect("every command of the second boot is answered", all(second_answers[:-1]), "")
     expect(
         "the programs are still on the disk",
         "hello" in second_answers[0] and "wc" in second_answers[0]
@@ -582,7 +589,7 @@ def check(first: str, second: str) -> list:
     )
 
     # --- awk: the script of the volume after the reset
-    awk_script = second_answers[len(SECOND_BOOT) - 1]
+    awk_script = second_answers[len(SECOND_BOOT) - 2]
     expect(
         "awk reads its script after the reset",
         "awk: hello from /etc/hello.awk" in awk_script

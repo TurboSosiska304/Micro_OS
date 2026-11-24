@@ -117,17 +117,21 @@ command   what it does
 mkfs      format the volume: mkfs -y
 ...
 programs in PATH:
-  hello crash fork badptr signals cat echo ls ...
+  hello crash fork badptr signals cat echo ls mkdir mv edit kilo ...
 microos> help exec
 usage: exec <program> [arguments...]
 run a program
 ```
 
 `help` with no argument is the list of the commands of the shell, and below it
-the programs found in `PATH`: the executable files of the directories,
-read from the directories themselves and not from a table, at most 24 names
-and `...` when there are more. A program is not a command of the shell and was
-missing from this list before 1.2.1.
+**every** program found in `PATH`: the executable files of the directories,
+read from the directories themselves and not from a table. The list used to
+stop at twenty-four names and a `...` for the screen of a small board, which
+made the rest of the machine a secret of the repository (`/bin/edit` was never
+named); the whole of it is printed now, and `make x86-smoke` reads `/bin` with
+the shell and asks `help` for every name of it, so the two cannot drift apart.
+A program is not a command of the shell and was missing from this list before
+1.2.1.
 
 `help NAME` answers with the command of the shell, the program, or both. A
 name that is only a program says where it is:
@@ -178,7 +182,8 @@ The core of the kernel, on every machine:
 | `ulimit [-m bytes \| -c ms \| -n fds]` | the limits of the shell, or lower one of them |
 | `memtest [kilobytes]` | measure the memory and its speed |
 | `mfetch [color]` | the system report with a logo |
-| `reboot` | restart the machine |
+| `shutdown [-f] [off\|halt\|reboot]` | the clean end: no new session, the tasks end, the volumes are synced, the disks flushed, the mounts leave, then the state asked for |
+| `poweroff [-f]`, `halt [-f]`, `reboot [-f]` | the same end with the power off, the processor stopped or the machine reset |
 
 The files, on every machine:
 
@@ -226,7 +231,7 @@ The services, where the port registers them:
 | `i2c` | scan the I2C bus | board |
 | `mic` | the level of the microphone | board |
 | `rtc alarm [HH:MM\|+<seconds>\|day <1-31> HH:MM\|clear]` | the alarm of the BM8563 and its flag | board |
-| `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or power off | board |
+| `power [sleep <seconds>\|off]` | deep sleep with the timer or button C, or the clean end and a deep sleep woken by button C | board |
 | `factory reset -y` | erase MicroFS and the NVS, then restart; without `-y` it only explains | board |
 
 The simulator has no network and no drivers: `http`, `wget`, `pkg`, `ntp`,

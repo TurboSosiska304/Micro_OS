@@ -348,6 +348,19 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K19 - The list of the machine was cut at twenty-four
+
+`help` names the programs of `PATH` by reading the directories, which is right,
+and it stopped after twenty-four names with a `...` "because the answer of
+`help` is the screen of a small board". On the machine of the release there are
+fifty-two programs in `/bin`: `/bin/edit`, the editor of the desktop, was never
+named by the list that is supposed to say what the machine has, and a person
+learned about it from a report instead of from the machine.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The list is the whole of `PATH` now (wrapping at 74 columns, no cap), and the two are held together by a check: `tools/x86_smoke.py` reads `/bin` with the shell and asks `help` for every name of it, and `tests/cases/test_kshell.c` puts twenty-six programs on a volume and asks for the last one. A program that the image gains and the list does not name fails both. | `components/kshell/src/kshell_files.c`, `tools/x86_smoke.py`, `tests/cases/test_kshell.c` | done | Nothing; the board's 80x25 console shows a long list, which is the honest answer of a machine that has fifty-two programs. |
+
 ## K18 - The medium of the release is built by the person
 
 Two releases in a row went out without their CD and without their stick, and
@@ -472,6 +485,21 @@ of an older copy knows what changed.
 * **The window of x86-64 is 16 MiB, not 32 MiB.** `docs/ports/x86_64/README.md`
   said "the window is 32 MiB at 32 MiB"; it starts at 32 MiB and ends at
   48 MiB.
+## K15 - The machine that switches itself off (ADR 0050)
+
+`shutdown`, `poweroff`, `halt` and `reboot` bring the machine down in an
+order that keeps the volume clean, and the port owns the last step:
+`k_port_power()`. What the lane did not build is here.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The SLP_TYPa of S5 is the constant 5 of every machine the project has met; the real value is `\_S5` of the DSDT, an AML program this kernel does not execute. | `ports/port_x86_64/src/acpi.c` | open | A reader of the DSDT that finds the `_S5` object (the package of the sleep types) or a table of the machines that name another one, and the soft off of a machine whose value is not 5. |
+| The power button of a laptop is not a clean shutdown: the fixed event block of the FADT names it, and the SCI would have to be routed and read before `k_power_shutdown()` could be asked from a handler. | `ports/port_x86_64/src/acpi.c`, `src/interrupts.S` | open | The handler of the SCI, the decode of the fixed event block and the PM1 status, and a `shutdown` asked from an event - with the page of the button in `docs/adr/0050`. |
+| `power off` on the board is a deep sleep with BUTTON C as the only wake source, not the RTC alarm: the alarm wakes `power sleep alarm` and not the clean end. | `components/drivers/src/drv_power.c` | open | An `off` that keeps the clock's alarm armed (the INT line is part of the latch) and reports the alarm in the boot log, for a wearable that wakes itself in the morning (phase 9). |
+| The `reboot()` of the ABI is the hard reset of `k_port_reset()`, not the clean reboot of the shell: a program that calls it can lose the writes of the cache. | `components/kernel/src/ksys.c` (`sys_reboot`), `tests/corpus/abi.txt` | open | A result of the call that is an error and not "never" (the record of the ABI changes with it), or a `shutdown` of the ABI that programs may ask; then `sys_reboot` runs `k_power_shutdown(K_POWER_REBOOT, false)`. |
+| There is no `sync` command and no `sync` syscall: the clean end syncs every volume and flushes every disk, but a program that wants its bytes on the medium before the machine goes down has only `close`. | `components/kernel/src/ksys.c`, `components/kshell` | decision | A `sync` of the shell (and the ABI number after 50 if a program asks for it) over the same `k_blockdev_sync_all()`; nothing in the clean end changes. |
+| A refusal after the tasks were signalled (the second flush, the unmount) leaves the shell of the call alive but the init and the getty gone: the machine runs without the process that reaps and opens sessions, and the next boot is the way back. The pre-flight flush makes this the rare case and the ADR says so. | `components/kernel/src/power.c` | open | Keep the init out of the SIGTERM (a kernel flag of the init task, not a name compared at run time) so a refusal after the signals lets the getty open again; the flag is the work of the lane that owns `components/init`. |
+
 * **TSan and the image budget are checked already.** `docs/roadmap.md` K7 kept
   them open; `.github/workflows/ci.yml` runs `make test-tsan`, and
   `tools/integrity_check.py` checks the image. The SRAM half of the budget

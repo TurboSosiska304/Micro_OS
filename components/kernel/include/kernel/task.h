@@ -364,6 +364,22 @@ k_u32_t task_get_job(const struct task *t);
 int task_signal_job(k_u32_t job, int sig);
 
 /*
+ * Send a signal to every living task of the machine except `except` (the
+ * task that asks, which is the shell of a shutdown) and the zombies. The
+ * answer is the number of the signals that went out, or a negative error.
+ * The clean end of the machine uses it (kernel/power.c, ADR 0050): every
+ * task that may be in the middle of a write is told to end, and the
+ * shutdown waits a bounded time for it.
+ */
+int task_signal_all(const struct task *except, int sig);
+
+/*
+ * The living tasks of the machine except `except`: what the shutdown reads
+ * to know whether the tasks it signalled are gone.
+ */
+k_size_t task_count_living_except(const struct task *except);
+
+/*
  * Access to the task table without taking the lock. Only for the internals
  * of the kernel, which already hold it.
  */

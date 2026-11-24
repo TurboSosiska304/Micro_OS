@@ -1174,6 +1174,76 @@ int task_signal_job(k_u32_t job, int sig)
     return (sent > 0) ? 0 : KERR_SRCH;
 }
 
+/*
+ * The signal of the whole machine: every living task but the one that asks.
+ * The pids are collected under the critical section for the same reason as
+ * the job above; the signal itself goes out through task_signal_send(),
+ * which checks the state again.
+ */
+int task_signal_all(const struct task *except, int sig)
+{
+    k_u32_t pids[TASK_MAX_TASKS];
+    k_size_t count = 0;
+    k_size_t i;
+    int sent = 0;
+
+    if (signal_slot(sig) < 0) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == except) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        pids[count++] = t->pid;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        if (task_signal_send(pids[i], sig) == 0) {
+            sent++;
+        }
+    }
+
+    return sent;
+}
+
+k_size_t task_count_living_except(const struct task *except)
+{
+    k_size_t i;
+    k_size_t count = 0;
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        const struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t == except) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        count++;
+    }
+
+    k_port_exit_critical();
+
+    return count;
+}
+
 task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler)
 {
     int slot = signal_slot(sig);

@@ -1137,7 +1137,9 @@ static void test_help_programs(void)
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
     /* More programs than the listing prints: the names past the limit are
-     * the `...` of the answer. */
+     * the end of the list: twenty-six programs, more than the twenty-four
+     * that the list of `help` used to stop at, and every one of them is named
+     * (the `...` is a machine with a secret, `docs/debts.md` K19). */
     for (i = 0; i < 26; i++) {
         char path[VFS_PATH_MAX];
 
@@ -1183,7 +1185,9 @@ static void test_help_programs(void)
     KT_CHECK(range_has(buf, list_start, list_end, " ls"));
     KT_CHECK(range_has(buf, list_start, list_end, " hello"));
     KT_CHECK(!range_has(buf, list_start, list_end, "notes"));
-    KT_CHECK(range_has(buf, list_start, list_end, "..."));
+    KT_CHECK(!range_has(buf, list_start, list_end, "..."));
+    /* The last of the twenty-six is named: the list is not cut. */
+    KT_CHECK(range_has(buf, list_start, list_end, "p25"));
 
     /* A name of both parts names the file and then the command of the shell. */
     KT_CHECK(range_has(buf, both_start, both_end, "ls is a program: /bin/ls"));

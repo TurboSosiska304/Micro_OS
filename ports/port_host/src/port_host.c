@@ -229,6 +229,21 @@ k_u64_t k_port_uptime_ms(void)
 /* The code the process of the host stops with: a panic is a failure. */
 #define HOST_PANIC_EXIT_CODE 89
 
+/*
+ * The codes of the three ends of the process, so that a script that started
+ * the simulator can tell them apart (ADR 0050):
+ *
+ *   0   the machine was switched off - the clean end, a success;
+ *   76  the machine asked for a reset and the process is the reset; a
+ *       supervisor of the test may start it again on this code;
+ *   89  the processor was halted - a panic, a failure (HOST_PANIC_EXIT_CODE).
+ *
+ * 76 has no POSIX meaning of its own: it is the number this port reserves
+ * for "start me again", and a script of the tree reads it by name.
+ */
+#define HOST_POWER_OFF_EXIT_CODE 0
+#define HOST_POWER_REBOOT_EXIT_CODE 76
+
 void k_port_halt(void)
 {
     /*
@@ -241,7 +256,22 @@ void k_port_halt(void)
 
 void k_port_reset(void)
 {
-    exit(0);
+    exit(HOST_POWER_REBOOT_EXIT_CODE);
+}
+
+void k_port_power(enum k_power_action action)
+{
+    switch (action) {
+    case K_POWER_HALT:
+        k_port_halt();
+        break;
+    case K_POWER_OFF:
+        exit(HOST_POWER_OFF_EXIT_CODE);
+        break;
+    case K_POWER_REBOOT:
+        k_port_reset();
+        break;
+    }
 }
 
 const char *k_port_name(void)
@@ -335,7 +365,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");

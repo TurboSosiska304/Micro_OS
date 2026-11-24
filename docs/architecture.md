@@ -49,7 +49,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
-| `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/power.h` | halt, off, reset | `k_port_power`, `k_port_halt`, `k_port_reset` |
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
