@@ -556,7 +556,7 @@ does not exist), the session runs as that user, `logout` ends it, and the door
 never reads the UART of the machine. The server offers the echo (RFC 857) and
 repeats the bytes when the client accepts, so a password is silent on both
 sides; `telnet off` closes the door. The client sees the answers of its own
-session and not the console of the board (ADR 0045).
+session and not the console of the board (ADR 0044).
 
 `config` lists the store of `/etc` (the key-value store of the port, NVS on the
 board), and `config sync` restores the files that are missing and saves the
