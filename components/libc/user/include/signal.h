@@ -20,6 +20,13 @@
 #define SIGPIPE 13
 #define SIGTERM 15
 #define SIGCHLD 17
+/*
+ * The resize of a terminal, which this system does not have: the number is
+ * here so that a source that asks for it compiles, and `signal()` answers
+ * `SIG_ERR` for it (ADR 0051, the last section). An editor that would redraw
+ * itself on a resize is told about nothing.
+ */
+#define SIGWINCH 28
 
 typedef void (*sighandler_t)(int);
 
