@@ -546,9 +546,11 @@ A program is a task of the scheduler with page tables of its own:
 * the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`), mapped onto a
   physical arena at 64 MiB; the kernel reaches the bytes through its identity
   map, the program through its own pages;
-* the stack is 64 KiB at the top of the window, with an unmapped guard page
-  below it; the null page is not mapped, so a write to address zero is a fault
-  and not a silent success;
+* the stack starts as 64 KiB at the top of the window and grows into a room
+  of 1 MiB below it, one page per fault and up to the memory limit of the task
+  (ADR 0052); the page under the room is the guard, a page that is never
+  mapped. The null page is not mapped either, so a write to address zero is a
+  fault and not a silent success;
 * the kernel is supervisor-only and out of the reach of ring 3; the program
   runs with `cpl 3` and calls the kernel only through the gate. The kernel
   image itself is in the higher half (`0xFFFFFFFF80000000`), and a program's
@@ -633,7 +635,8 @@ not told about a resize (`docs/debts.md`).
   memory limit of the task (`ulimit -m`), an anonymous mapping is counted
   when it is made, and a page that is writable and executable at once is
   refused with `EINVAL` (ADR 0052). The stack of a program starts at 64 KiB
-  and grows to 1 MiB, or to the limit of the task when that is smaller.
+  and grows into a room of 1 MiB, or to the limit of the task when that is
+  smaller.
 * **No shell `export`.** The environment of every program is the four words of
   the kernel; a program that wants its own passes one to `execve`.
 * **The boundary is the user bit, and SMEP/SMAP when the processor has them.**

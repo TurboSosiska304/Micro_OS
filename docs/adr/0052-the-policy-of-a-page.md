@@ -252,8 +252,9 @@ in number: this lane adds one smoke and no change of the ABI.
 * A program cannot ask for a page that is code and data at once. The rule is
   the call's answer and not an audit after the fact, and the refusal is the
   same on every machine that ever has a space.
-* A program with a deep frame works: the stack grows to 1 MiB, page by page,
-  and a task that sets its own limit has the stack that limit promises.
+* A program with a deep frame works: the stack grows by up to 1 MiB (64 KiB of
+  first mapping and 1 MiB of room, 1088 KiB in all), page by page, and a task
+  that sets its own limit has the stack that limit promises.
 * `ulimit -m` is one ceiling for the heap and the anonymous mappings, and a
   program that maps and unmaps does not spend it on history.
 * Ring 3 cannot read or write a byte of the kernel, on every machine, by the

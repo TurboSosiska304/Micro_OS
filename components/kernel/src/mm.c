@@ -46,8 +46,6 @@ struct k_mm_space {
     struct k_mm_region *regions;
     k_u64_t brk;      /* the current end of the heap */
     k_u64_t brk_base; /* where the heap began, the end of the image */
-    k_u64_t mapped;   /* the bytes of the anonymous mappings, a budget of the
-                       * task that made them (ADR 0052) */
 };
 
 static struct k_mm_space g_spaces[TASK_MAX_TASKS];
@@ -106,7 +104,6 @@ static struct k_mm_space *space_get(k_mm_space_t handle)
             g_spaces[i].regions = NULL;
             g_spaces[i].brk = 0;
             g_spaces[i].brk_base = 0;
-            g_spaces[i].mapped = 0;
             return &g_spaces[i];
         }
     }
@@ -214,20 +211,26 @@ static bool region_is_writable(const struct k_mm_region *region)
     return (region->prot & K_MM_PROT_WRITE) != 0;
 }
 
-/* A region leaves the space: the bytes it counted against the budget of the
- * task that made it go with it, so a program that maps and unmaps a window in
- * a loop pays for the window and not for the number of windows it ever had. */
-static void region_uncharge(struct k_mm_space *space, const struct k_mm_region *region)
+/*
+ * The bytes of the anonymous mappings of a space, which is what the budget of
+ * the task counts (ADR 0052). The answer is read from the regions of the list
+ * and not kept in a counter of its own: a counter would be a second truth
+ * that `munmap`, a fork and the end of the space each have to update, and the
+ * list is the hand of records a program can make. A region leaves the list
+ * when it is unmapped, so the bytes it counted go with it.
+ */
+static k_u64_t space_mapped(const struct k_mm_space *space)
 {
-    if ((region->flags & K_MM_CHARGED) == 0) {
-        return;
+    k_u64_t total = 0;
+    const struct k_mm_region *region;
+
+    for (region = space->regions; region != NULL; region = region->next) {
+        if ((region->flags & K_MM_CHARGED) != 0) {
+            total += region->len;
+        }
     }
 
-    if (space->mapped >= region->len) {
-        space->mapped -= region->len;
-    } else {
-        space->mapped = 0;
-    }
+    return total;
 }
 
 /* The bit of a page in the map of the pages that were written. It is the
@@ -590,13 +593,12 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
     if (region->flags == K_MM_ANONYMOUS && handle == k_port_mm_current()) {
         struct task *self = task_self();
 
-        if (self != NULL && !task_memory_fits(self, space->mapped + (k_u64_t)len)) {
+        if (self != NULL && !task_memory_fits(self, space_mapped(space) + (k_u64_t)len)) {
             region_free(region);
             return KERR_NOMEM;
         }
 
         region->flags |= K_MM_CHARGED;
-        space->mapped += (k_u64_t)len;
     }
 
     if ((region->flags & K_MM_ANONYMOUS) == 0) {
@@ -668,7 +670,6 @@ int k_mm_unmap(k_mm_space_t handle, k_u64_t address, k_size_t len)
 
         *slot = region->next;
         k_port_mm_unmap(handle, region->start, (k_size_t)region->len);
-        region_uncharge(space, region);
         region_free(region);
         unmapped += (k_size_t)region->len;
     }
@@ -906,7 +907,6 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
     to->brk = from->brk;
     to->brk_base = from->brk_base;
-    to->mapped = from->mapped;
 
     for (region = from->regions; region != NULL; region = region->next) {
         struct k_mm_region *copy = region_new();
@@ -961,7 +961,6 @@ void k_mm_release(k_mm_space_t handle)
         struct k_mm_region *region = space->regions;
 
         space->regions = region->next;
-        region_uncharge(space, region);
         region_free(region);
     }
 
@@ -969,5 +968,4 @@ void k_mm_release(k_mm_space_t handle)
     space->handle = 0;
     space->brk = 0;
     space->brk_base = 0;
-    space->mapped = 0;
 }

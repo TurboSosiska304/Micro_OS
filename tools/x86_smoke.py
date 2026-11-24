@@ -58,6 +58,15 @@ from qemu_session import DISKS, drive_args, root_name
 # transcript name the device of the run and nothing else changes.
 DISK = "ide"
 
+# The processor of the run, set by `--cpu`. Empty is the machine of every
+# release: QEMU's own default, which has neither SMEP nor SMAP, and the
+# supervisor bit of every kernel page is the boundary (ADR 0052). A run with
+# `--cpu qemu64,+smep,+smap` boots the same image on the processor of a
+# machine of 2014 and puts every copy of a program's memory through the
+# window of the port; it is the other half of `make mmu-smoke`, over the whole
+# suite and not only over the attacks.
+CPU = ""
+
 # The commands that are typed into the shell. The answers are read by their
 # place in the list, the way the smoke test of the simulator does it. The last
 # one looks at the tree the boot left behind: a program that ran out of a file
@@ -960,6 +969,7 @@ def machine_argv(loader: str, kernel: str, image: str, disk: str = None) -> list
 
     return [
         "qemu-system-x86_64",
+        *(["-cpu", CPU] if CPU else []),
         "-kernel",
         loader,
         "-initrd",
@@ -3113,9 +3123,9 @@ def check(output: str) -> list:
     # (ADR 0052); the page under the room is the guard and it is never
     # mapped, so a recursion that runs past the limit of the task meets that
     # page and not the data of the program. The fault is a store into a page
-    # that is not present (error 0x6: not present, write, ring 3) at the
-    # bottom of the window - 0x02eee000 - and the program never prints the
-    # line after the recursion.
+    # that is not present (error 0x6: not present, write, ring 3) in the
+    # guard page at 0x02eef000 - and the program never prints the line after
+    # the recursion.
     stack = answer("exec /bin/crash stack")
     expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
     expect(
@@ -3636,11 +3646,17 @@ def main(argv: list) -> int:
         default="ide",
         help="the bus of the disk of the run (default: ide)",
     )
+    parser.add_argument(
+        "--cpu",
+        default="",
+        help="the processor of the machine, e.g. qemu64,+smep,+smap (default: QEMU's own)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
-    global DISK
+    global DISK, CPU
     DISK = args.disk
+    CPU = args.cpu
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")
