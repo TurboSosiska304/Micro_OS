@@ -19,6 +19,31 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   the `setuid` bit, a desktop that starts with the machine, the wire of a
   laptop with DHCP, and a guide a stranger can follow.
 
+### Fixed
+
+- The tables of a firmware above the gigabyte: `k_port_power()` asked the ACPI
+  tables for the name of the power block and the walk dereferenced physical
+  addresses directly - before 1.9 it worked because the map of the loader
+  names the memory of the machine, and after `paging_init()` the identity map
+  of the port is the first gigabyte. On a laptop whose FADT lives higher the
+  shutdown ended in a page fault, printed "the machine stops here" and left the
+  machine on (the clean end itself had done its work: the volumes synced, the
+  disks flushed, the mounts gone). The walk goes through a window of two
+  megabytes now, the FADT is copied out of it, the S5 port is checked to be a
+  plausible ACPI port, and a machine without a FADT says "press the power
+  button" and halts - `make power-smoke` is 22 checks with a machine of
+  `acpi=off`.
+- The Ethernet of a laptop with its window above 4 GiB: a 64-bit BAR is read
+  from both halves, a window that answers all ones is not a card, a window the
+  port could not map is not registered (the frame path asks whether the map is
+  there and drops the frame instead of faulting), and every register access is
+  clamped to the 128 KiB of the window. The panic prints CR2 now.
+- The reset of a port of xHCI: the power of the port, twenty milliseconds, the
+  reset, `PRC` and `PED`, and the change bits cleared after the enable - the
+  order Linux uses and the reason "the port 7 is not enabled after its reset"
+  was on the screen of a laptop. `make usb-smoke` is 66 checks, with a USB 3
+  port among them.
+
 ### Added
 
 - The policy of the MMU (ADR 0052): the page tables of a program have rules
