@@ -3865,11 +3865,15 @@ def run_boot_desktop(
                 return seen.letters_at(twelve_x, WM_CLOCK_RECT[1], 11, WM_PANEL_INK_RGB,
                                        WM_PANEL_RGB).strip()
 
+            # The desk is the picture of the *windows* of the theme as well:
+            # the clock of the panel is in the first frame of the server, and a
+            # dump taken for the clock alone can be a desk whose clients have
+            # not painted yet.
             clock = settled_picture(
                 machine,
                 workdir,
-                lambda seen: re.fullmatch(r"\d{1,2}:\d{2}:\d{2} (AM|PM)", twelve_hour(seen))
-                is not None,
+                lambda seen: text_at(seen, WM_EDIT_RECT, "edit - /doc.txt")
+                and re.fullmatch(r"\d{1,2}:\d{2}:\d{2} (AM|PM)", twelve_hour(seen)) is not None,
                 6.0,
             )
             letters = twelve_hour(clock) if clock is not None else None
@@ -3910,9 +3914,12 @@ def run_boot_desktop(
                    "shutdown did not sync the volumes; the log ends with "
                    + repr(machine.read_serial()[-300:]))
 
-            deadline = time.monotonic() + timeout
+            # The ACPI S5 of QEMU is a few seconds of a machine under load and
+            # the power of the guest is the end of the process: the wait is the
+            # patience of two timeouts and not the window of one.
+            deadline = time.monotonic() + 2 * timeout
             while machine.process.poll() is None and time.monotonic() < deadline:
-                time.sleep(0.1)
+                time.sleep(0.2)
 
             expect("the desk of the machine ends with the power",
                    machine.process.poll() is not None,
