@@ -135,7 +135,17 @@ static k_u32_t g_mask = NET_IP(255, 255, 255, 0);
 static k_u32_t g_gateway = NET_IP(10, 0, 2, 2);
 static k_u32_t g_dns = NET_IP(10, 0, 2, 3);
 static k_u8_t g_mac[6];
+
+/* `g_configured` says that a frame can leave: the MAC of the card is known.
+ * `g_addressed` says that the address is decided - a lease, the file of the
+ * machine, or the fallback - and `g_addressing` says that one task is in the
+ * exchange that decides it. The exchange is a state of the card and of one
+ * task: two tasks of a boot (the shell and the door of telnet) reach the
+ * network at the same time, and a second DISCOVER of the same machine on one
+ * card is a second transaction nobody wants. */
 static bool g_configured;
+static bool g_addressed;
+static bool g_addressing;
 
 /* Where the address above came from, and the lease it came from. */
 enum net_address {
@@ -715,7 +725,7 @@ static void net_lease_check(void)
     enum dhcp_result result;
     k_u64_t now;
 
-    if (g_address != NET_ADDRESS_LEASE || g_lease.lease_s == 0u) {
+    if (g_address != NET_ADDRESS_LEASE || g_lease.lease_s == 0u || g_addressing) {
         return;
     }
 
@@ -727,12 +737,16 @@ static void net_lease_check(void)
 
     xid = dhcp_xid(g_mac, now, ++g_dhcp_transactions);
 
+    g_addressing = true;
+
     if (dhcp_rebind_due(&g_lease, now)) {
         net_dhcp_start(true);
+        g_addressing = false;
         return;
     }
 
     result = dhcp_client_renew(&g_dhcp_transport, g_mac, &g_lease, xid, NET_DHCP_RENEW_MS, &lease);
+    g_addressing = false;
 
     if (result == DHCP_OK) {
         kinfo("dhcp: renewed %u.%u.%u.%u for %u s", (unsigned)(g_lease.address >> 24),
@@ -749,13 +763,31 @@ static void net_lease_check(void)
 
 static void net_config_apply(void)
 {
-    if (g_configured) {
+    k_u64_t deadline;
+
+    if (g_addressed) {
         return;
     }
 
     if (!port_x86_64_nic_mac(g_mac)) {
         return;
     }
+
+    if (g_addressing) {
+        /* Another task is in the exchange. This one waits for it instead of
+         * starting a second transaction of the same machine: the exchange is
+         * a second of a wire that answers and the budget of one that does
+         * not, and the wait is bounded by the same budget. */
+        deadline = k_port_uptime_ms() + NET_DHCP_BUDGET_MS + 2000u;
+
+        while (!g_addressed && g_addressing && k_port_uptime_ms() < deadline) {
+            k_sched_sleep_ms(1);
+        }
+
+        return;
+    }
+
+    g_addressing = true;
 
     /* From here a frame can leave: the exchange of DHCP has no address yet
      * and needs the MAC alone, which is the one thing this line waits for. */
@@ -767,21 +799,18 @@ static void net_config_apply(void)
         g_address = NET_ADDRESS_FIXED;
         net_log_config();
         kinfo("dhcp: off, /etc/network names the address");
-
-        return;
-    }
-
-    if (!port_x86_64_nic_link()) {
+    } else if (!port_x86_64_nic_link()) {
         g_address = NET_ADDRESS_FIXED;
         net_log_config();
         kwarn("dhcp: the link is down, the fixed address is in use");
-
-        return;
+    } else {
+        /* An address from the file is a fallback: the client asks, and a
+         * server that does not answer leaves the machine where it was. */
+        net_dhcp_start(g_ip != 0u);
     }
 
-    /* An address from the file is a fallback: the client asks, and a server
-     * that does not answer leaves the machine where it was. */
-    net_dhcp_start(g_ip != 0u);
+    g_addressed = true;
+    g_addressing = false;
 }
 
 static bool net_ready(void)
@@ -789,7 +818,7 @@ static bool net_ready(void)
     net_config_apply();
     net_lease_check();
 
-    return g_configured;
+    return g_addressed;
 }
 
 /* The next hop of an address: a neighbour of the subnet is its own next hop,
