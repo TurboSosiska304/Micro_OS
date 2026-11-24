@@ -20,7 +20,8 @@ image is the same disk with a FAT32 partition after the root.
 
     tools/x86_image.py [--image PATH] [--build DIR] [--mkfs PATH]
                        [--fs mfs|ext2] [--size-mb N] [--data-mb N]
-                       [--bus ide|virtio] [--source-date-epoch N] [--verbose]
+                       [--bus ide|virtio] [--volumes LIST]
+                       [--source-date-epoch N] [--verbose]
 
 The bus is a property of the machine and not of the medium: the same bytes of
 this image are the disk of the primary IDE channel of ADR 0008 and the disk of
@@ -66,6 +67,9 @@ PROGRAMS = [
     "chdir",
     "heap",
     "limit",
+    # The keyboard as events (ADR 0040): the smoke test of the USB reads the
+    # code and the edge of a key out of /dev/input0 through this program.
+    "keys",
     # The floating point state of a task (K9): three tasks compute in double
     # at once and the smoke test reads the number of each of them.
     "fpu2",
@@ -267,6 +271,35 @@ BEGIN { FS = ":"; seen["root"] = 1; print "awk: hello from /etc/hello.awk" }
 { count++; sum += $3; if ($1 in seen) roots++ }
 END { printf "awk: %d records, sum %d, root %d\\n", count, sum, roots }
 """
+
+# The volumes this system may write (ADR 0041 §1): the list of /etc/volumes
+# names the device a volume is mounted as, and one image of this tool boots on
+# four buses - the IDE channel (ata0), the virtio card (virtio0), the SATA
+# controller of a chipset (ahci0) and the NVMe namespace of a laptop (nvme0).
+# The name of a volume is a fact of the machine at the moment of the mount and
+# not of the bytes, so the list of one medium names every bus it may be
+# attached to; a copy of the image without the line is read-only, which is the
+# negative half of the gate. `--volumes` replaces the list, `--volumes none`
+# writes no file at all.
+VOLUMES = ("ata0p1", "virtio0p1", "ahci0p1", "nvme0p1")
+
+VOLUMES_HEADER = "# the volumes of this system that a mount may write (ADR 0041)"
+
+# The file of /etc the rule of the disks reads. The name is of the kernel
+# (K_VOLUME_LIST_PATH) and the image tool writes the file where a mount finds
+# it.
+VOLUMES_PATH = "/etc/volumes"
+
+
+def volumes_text(names) -> str:
+    """The text of /etc/volumes: the header and one device name per line."""
+    lines = [VOLUMES_HEADER]
+
+    for name in names:
+        lines.append(name)
+
+    return "\n".join(lines)
+
 
 IMAGE_MB = 16
 START_LBA = 2048
@@ -548,8 +581,14 @@ def extra_entries(extra: list) -> list:
 # --- the writer of MicroFS ----------------------------------------------
 
 
-def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: int) -> list:
-    """The call of the host tool that writes a MicroFS volume in the image."""
+def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: int,
+                    volumes: tuple = VOLUMES) -> list:
+    """The call of the host tool that writes a MicroFS volume in the image.
+
+    `mkfs` names the volumes it formatted: the list of /etc/volumes is the
+    rule of ADR 0041, and the tool that makes the volume is the one place
+    that knows the name a mount will ask for. `none` leaves the file out.
+    """
     command = [
         mkfs,
         "--image",
@@ -560,6 +599,8 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
         str(START_LBA),
         "--source-date-epoch",
         str(epoch),
+        "--volumes",
+        ",".join(volumes) if volumes else "none",
     ]
 
     for kind, path, payload, mode in entries:
@@ -596,7 +637,16 @@ def microfs_command(entries: list, image: str, size_mb: int, mkfs: str, epoch: i
 EXT2_START_LBA = 2048
 EXT2_DEFAULT_MB = 64
 EXT2_DATA_MB = 8
+
+# The grain of the volume: the block of the format, the unit every record of
+# ext2 is measured in. 1024 is the block of the image of the release, and the
+# bytes of that image are the bytes of 1.7; 4096 is the grain of ADR 0042 - one
+# operation of the block layer per block of the volume, and the metadata of the
+# volume a quarter of the records for the same file - and a caller that measures
+# it names it with `--block-size 4096` (`tools/x86_volume_smoke.py`,
+# `tools/x86_bench.py`).
 EXT2_BLOCK_BYTES = 1024
+EXT2_BLOCK_CHOICES = (1024, 2048, 4096)
 EXT2_UUID = "00000000-0000-4000-8000-000000000000"
 EXT2_HASH_SEED = "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -753,6 +803,7 @@ def build_ext2_image(
     data_mb: int = EXT2_DATA_MB,
     epoch: int = SOURCE_DATE_EPOCH,
     verbose: bool = False,
+    block_size: int = EXT2_BLOCK_BYTES,
 ) -> int:
     """Write a disk whose root partition is an ext2 volume of the same tree.
 
@@ -795,7 +846,7 @@ def build_ext2_image(
         with open(volume, "wb") as file:
             file.truncate(root_mb * 1024 * 1024)
 
-        blocks = root_mb * 1024 * 1024 // EXT2_BLOCK_BYTES
+        blocks = root_mb * 1024 * 1024 // block_size
         command = [
             mke2fs,
             "-q",
@@ -803,7 +854,7 @@ def build_ext2_image(
             "-t",
             "ext2",
             "-b",
-            str(EXT2_BLOCK_BYTES),
+            str(block_size),
             "-I",
             "256",
             "-m",
@@ -880,7 +931,8 @@ def build_ext2_image(
                 copy_into(disk, data, data_lba * 512)
 
     if verbose:
-        print(f"ext2: {image}, {root_mb} MB of root, {data_mb} MB of data")
+        print(f"ext2: {image}, {root_mb} MB of root, {data_mb} MB of data,"
+              f" blocks of {block_size} bytes")
 
     return 0
 
@@ -898,6 +950,8 @@ def build_image(
     extra: list | None = None,
     fs: str = "mfs",
     data_mb: int = EXT2_DATA_MB,
+    block_size: int = EXT2_BLOCK_BYTES,
+    volumes: tuple = VOLUMES,
 ) -> int:
     """Write the image with the programs of the build and /etc/setting.
 
@@ -1086,9 +1140,15 @@ def build_image(
         if data_mb > 0:
             entries.append(tree_dir("/data"))
 
-        return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose)
+        # The writer of the ext2 volume is mke2fs and not the host tool of
+        # MicroFS, so the list of the volumes is an object of the tree here;
+        # the tool is the one authority on what it says (volumes_text).
+        if volumes:
+            entries.append(tree_text(VOLUMES_PATH, volumes_text(volumes)))
 
-    command = microfs_command(entries, image, size_mb, mkfs, epoch)
+        return build_ext2_image(image, entries, size_mb, data_mb, epoch, verbose, block_size)
+
+    command = microfs_command(entries, image, size_mb, mkfs, epoch, volumes)
 
     os.makedirs(os.path.dirname(os.path.abspath(image)), exist_ok=True)
 
@@ -1134,6 +1194,14 @@ def main(argv: list) -> int:
         help=f"the FAT32 /data partition of the ext2 image (default: {EXT2_DATA_MB}, 0: none)",
     )
     parser.add_argument(
+        "--block-size",
+        type=int,
+        choices=EXT2_BLOCK_CHOICES,
+        default=EXT2_BLOCK_BYTES,
+        metavar="N",
+        help="the block of the ext2 volume in bytes (default: 1024; MicroFS is 1024)",
+    )
+    parser.add_argument(
         "--source-date-epoch",
         type=parse_epoch,
         default=os.environ.get("SOURCE_DATE_EPOCH", str(SOURCE_DATE_EPOCH)),
@@ -1174,11 +1242,23 @@ def main(argv: list) -> int:
         default="ide",
         help="the bus the image is booted on (default: ide); the bytes are the same",
     )
+    parser.add_argument(
+        "--volumes",
+        default=None,
+        metavar="LIST",
+        help="the device names of /etc/volumes, comma separated "
+        f"(default: {','.join(VOLUMES)}; `none` writes no list and the volume "
+        "is read-only)",
+    )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
     if args.size_mb is None:
         args.size_mb = EXT2_DEFAULT_MB if args.fs == "ext2" else IMAGE_MB
+
+    if args.block_size != EXT2_BLOCK_BYTES and args.fs != "ext2":
+        print("--block-size is the grain of the ext2 volume: MicroFS counts 1024", file=sys.stderr)
+        return 2
 
     extra: list = []
     for pair in args.file:
@@ -1190,6 +1270,13 @@ def main(argv: list) -> int:
     for path in args.dir:
         extra += ["--dir", path]
 
+    if args.volumes is None:
+        volumes = VOLUMES
+    elif args.volumes == "none" or args.volumes == "":
+        volumes = ()
+    else:
+        volumes = tuple(name.strip() for name in args.volumes.split(",") if name.strip())
+
     rc = build_image(
         args.image,
         args.build,
@@ -1200,6 +1287,8 @@ def main(argv: list) -> int:
         extra,
         args.fs,
         args.data_mb,
+        args.block_size,
+        volumes,
     )
 
     if rc == 0:

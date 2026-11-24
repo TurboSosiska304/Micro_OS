@@ -8,6 +8,17 @@ with a laptop gets first, and each lane is a branch of `release_candidate` with
 its own gates; a lane that does not fit moves to 1.9 without rewriting the
 promise.
 
+## Where the lanes stand
+
+| Lane | State |
+|---|---|
+| M1 USB | **the controller, the keyboard, a stick and a wire are in.** xHCI with a command ring, an event ring and an ERST, the slots and the ports (ADR 0040); a keyboard of the HID boot protocol whose reports the portable kernel decodes (`kernel/input_hid.c`) and whose events are the ones of PS/2; a stick of class 08/06/0x50 as a disk of the block layer; CDC-ECM as the second network device. The second iteration adds the hub of the class 09 (the power of its ports, the route string of a device behind it, four tiers of eight ports), the hot-plug of the root ports and of the hub ports, the HID mouse of the boot protocol as the pointer of `/dev/input0`, and the line of the controller (MSI, then MSI-X, then the legacy pin). What is not there: RNDIS, the notify endpoint of CDC, the transaction translator of a high-speed hub, the port status of a SuperSpeed hub, a stick unplugged while mounted, and a bridge of PCI. |
+| M2 disk | **AHCI and NVMe read, and a volume the rule names is written.** ADR 0041 is the rule and it came before the code: a medium this system did not format is read-only, a volume is writable only when its superblock carries our mark *and* `/etc/volumes` names it, and a write below the first sector of a partition is refused. ADR 0042 is the pair of rings of NVMe. The write path is open: the root mount asks for the writes after its own `/etc/volumes` is readable (`vfs_mount_root_writes`), a second volume asks with `vfs_mount_type_write` or the `rw` option of `/etc/fstab`, `microos_mkfs --volumes` names the volume of the image, the two drivers carry `WRITE DMA EXT`/`FLUSH CACHE EXT` and the NVMe `WRITE`/`Flush` behind the same translation of ADR 0032, `/proc/mounts` says `rw` or `ro`, and `make x86-disk-smoke` proves a file that survives a reset on the IDE channel, the SATA controller and the NVMe namespace. What is not there: the `-w` flag of the shell's `mount` (the command belongs to the lane of `components/kshell`), MSI-X, a PRP list, more than one queue pair or SATA port, a bridge of PCI, several namespaces, and hot-plug. |
+| M3 libc | **`popen`/`pclose`/`system` are in**, and so is the gate of the programs nobody rewrote: thirteen utilities of sbase build with the toolchain of `make sdk` with not one line changed and answer on the image of the release (`make ports-smoke`, 62 checks), the digest of every vendored file is held in `tests/ports/upstream.txt`, and `docs/ports-table.md` counts the lines of source, the lines of a port layer and the patches per program (577 / 0 / 0 for the thirteen). The lane found a defect of the port that the release carried since 1.5: the descriptors 1 and 2 were taken by the first `pipe()` or `open()` of a program. What is not there: `/bin/sh` (the one change that removes four limits of `popen` at once), `uname`, `double` in `printf` and `seq`, the second set of utilities, and the fifteen lines of `xargs` that `fork` now pays. |
+| M4 grain | **a volume of 4 KiB is in** (ADR 0043): the grain is a property of the volume, not of the medium, and ext2 opens a view of the device whose sector is the one of its superblock; `e2fsck -fn` is clean on every path of a write at 4 KiB, and a write of 16 MiB at that grain read 2.5 MiB of the disk instead of 36 after the defect of read ahead was found and fixed. MicroFS stays at 1 KiB: a grain of its own is version 4 of the format, and it waits in the debts. |
+| M6 accounts | **the session and the door of the wire are in** (ADR 0044). A task has a terminal of its own, so `login` over telnet reads the password of the socket and never the UART (the defect of 1.6); the init of every port is the getty, the console starts as root and `logout` returns to it, `who` reads `/proc/sessions`, and a file made by uid 7 is owned by 7. What is not there: `/etc/group` and the triad of the group, the setuid bit of `MOX1` and the gid of a new object - the shape of the three is the debt of ADR 0044. |
+| M5, M7 | not started. |
+
 ## M1 - USB, the door of a real laptop
 
 A machine of these years has no PS/2 port the firmware will share, no COM
@@ -26,6 +37,16 @@ a laptop that boots into a laptop that works.
 
 Gates: `make usb-smoke` under QEMU (`qemu-xhci` + a USB keyboard, a stick and a
 CDC device); a laptop with a stick; `x86-smoke` and every smoke of 1.7 green.
+
+The stick of the owner (a medium of 58 GB with one vfat partition) went through
+the whole door: `make usb-stick-smoke USB_STICK=/dev/sdc` attaches it read-only,
+the machine boots, `mount usb0p1 /mnt fat32` lists the tree of the partition and
+reads a file of it, `write` is refused by the rule, and the medium is unchanged
+- the digest of its head (the table and the first partition) and the counter of
+the sectors the kernel gave the device (131 072 before, 131 072 after). The
+digest of a medium of tens of gigabytes is bounded for the same reason the
+counter is read: half an hour of reading proves nothing that the counter and
+the head do not.
 
 ## M2 - the disk of a person: AHCI, then NVMe
 
@@ -91,6 +112,38 @@ The five steps of `docs/debts.md`, the lane 1.7 named and did not take:
 
 Target: **100 MiB/s of writing** on a volume of 5 GiB, and the five operations
 of the block layer per kilobyte down to one and a quarter.
+
+**Taken in 1.8, and the target was the wrong number** (ADR 0043): the five
+operations per kilobyte were closed by the run of ADR 0037 and not by the
+grain - the block layer is at 0.10 per kilobyte at either grain - and the
+grain of 4 KiB is the *slower* one on the disk of the port (122 against 141
+MiB/s written on the volume of 5 GiB, 186 against 286 in `make bench`) because
+the cost of a write is the command of the channel and the metadata of ext2 is
+a record: at 4 KiB blocks the same file costs 22 384 sectors of the medium
+where 1 KiB blocks cost 20 796. Both grains pass `e2fsck -fn` and both are
+above 100 MiB/s. What the lane did deliver: the view of a volume at a grain of
+its own, the ext2 root of `--block-size`, the two grains in the gate, and the
+defect of the read ahead that the grain exposed (a 16 MiB write read 36 MiB of
+the disk). MicroFS keeps its kilobyte: a 4 KiB block is version 4 of its
+format, and `docs/debts.md` names the shape of that change.
+
+## Where 1.8 stopped, and what moved to 1.9
+
+M1 (USB: the controller, the keyboard, a stick, a wire, a hub, the hot-plug, a
+mouse, the line of the controller), M2 (the two controllers of a disk, the rule
+of ADR 0041 and the write path that keeps a file across a reset), M3 (the
+library and the thirteen programs of the gate) and M4 (the grain of the volume)
+are in. M6 landed half: the session and the door of `telnet` are in, and the
+group record and the `setuid` bit of `MOX1` are format decisions with the form
+of the change written in ADR 0044 - they belong to a release that may break a
+format, and 1.8 may not.
+
+**M5 and M7 move to 1.9 with the whole of their text below.** The reason is not
+time: a release that carries a door of USB, a disk that keeps a file and a
+library of a program nobody rewrote is a release that can be tried; a terminal
+with `termios` and a driver of Ethernet are each a lane of months, and the
+promise of 1.8 is already larger than the promise of 1.7. The text stays where
+it is so that the next release begins with it.
 
 ## M5 - the desktop, second half
 

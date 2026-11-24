@@ -103,6 +103,9 @@ PROGRAM_ABI = 2  # K_EXEC_VERSION, the ABI of MOX1 the kernel reads
 GUEST_HTTPD_PORT = 8080
 GUEST_FILES_PORT = 8081
 GUEST_TLS_PORT = 8443
+# The shell over the air (ADR 0033, the second half of the accounts): the
+# port 23 of the guest, forwarded to a port of the host for this test.
+GUEST_TELNET_PORT = 23
 GUEST_DNS_NAME = "example.com"
 
 # The file the server of the files of the guest serves: the bytes of the host
@@ -674,6 +677,68 @@ def host_get(port: int, path: str, tries: int = 15) -> str:
     return ""
 
 
+
+class Telnet:
+    """A client of the shell over the air, for one session of the test.
+
+    The bytes are read until a marker that the server writes, and the answer
+    is everything between the last marker and this one: a prompt is a marker,
+    and so is the question of the door. The client accepts the echo of the
+    server (IAC DO ECHO) so that the test proves who repeats what: the name
+    of the person comes back, the password never does.
+    """
+
+    IAC = 0xFF
+    DO = 0xFD
+    WILL = 0xFB
+    OPT_ECHO = 1
+
+    def __init__(self, port: int, timeout: float = 30.0) -> None:
+        self.sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+        self.sock.settimeout(timeout)
+        self.raw = b""
+        self.text = ""
+        self.pos = 0
+        # The answer to the offer of echo the server sends when the session
+        # opens: this client lets the server echo, as a terminal of a network
+        # does when it is not told otherwise.
+        self.sock.sendall(bytes([self.IAC, self.DO, self.OPT_ECHO]))
+
+    def wait(self, marker: str, timeout: float = 20.0) -> str:
+        start = self.pos
+        deadline = time.monotonic() + timeout
+
+        while True:
+            found = self.text.find(marker, start)
+            if found >= 0:
+                self.pos = found + len(marker)
+                return self.text[start:self.pos]
+
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise TimeoutError(f"telnet: {marker!r} did not come; tail={self.text[-200:]!r}")
+
+            self.sock.settimeout(left)
+            chunk = self.sock.recv(4096)
+            if not chunk:
+                raise TimeoutError(f"telnet: the session closed before {marker!r}")
+            self.raw += chunk
+            self.text += chunk.decode("utf-8", errors="replace")
+
+    def send(self, line: str) -> None:
+        self.sock.sendall((line + "\n").encode("ascii"))
+
+    def closed(self, timeout: float = 15.0) -> bool:
+        self.sock.settimeout(timeout)
+        try:
+            return self.sock.recv(4096) == b""
+        except OSError:
+            return False
+
+    def close(self) -> None:
+        self.sock.close()
+
+
 def run_machine(loader: str, kernel: str, steps: list, forwards: list, timeout: float,
                 image: str | None = None) -> str:
     """Boot the machine, run the steps and return the transcript.
@@ -1206,6 +1271,72 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
                 f"{match.group(1)} asked, {match.group(2)} hit",
             )
 
+    # --- the shell over the air (ADR 0033): the door of the socket
+    error = host.get("telnet_error")
+    expect("telnet: a session opens over the socket", error is None, str(error))
+    expect(
+        "telnet: the door asks for a name",
+        "login: " in host.get("telnet_greeting", ""),
+        host.get("telnet_greeting", ""),
+    )
+    expect(
+        "telnet: the right password opens the session",
+        "login: root, uid 0, gid 0" in host.get("telnet_welcome", ""),
+        host.get("telnet_welcome", ""),
+    )
+    expect(
+        "telnet: the server echoes the name it was given",
+        bool(host.get("telnet_name_echoed")),
+        "the name did not come back",
+    )
+    expect(
+        "telnet: the password is not echoed",
+        not host.get("telnet_password_echoed", True),
+        "the password came back on the wire",
+    )
+    expect(
+        "telnet: whoami names the user of the session",
+        "root" in host.get("telnet_whoami", ""),
+        host.get("telnet_whoami", ""),
+    )
+    expect(
+        "telnet: su changes the user of the session",
+        "guest" in host.get("telnet_su_whoami", ""),
+        host.get("telnet_su_whoami", ""),
+    )
+    expect(
+        "telnet: who lists the session of the wire",
+        "telnet" in host.get("telnet_who", "") and "console" in host.get("telnet_who", ""),
+        host.get("telnet_who", ""),
+    )
+    expect(
+        "telnet: logout ends the session",
+        "logout: the session ends" in host.get("telnet_logout", "")
+        and bool(host.get("telnet_closed")),
+        host.get("telnet_logout", ""),
+    )
+    expect(
+        "telnet: a wrong password is refused three times and no prompt comes",
+        host.get("telnet_refusals") == 3 and not host.get("telnet_refused_prompt", True),
+        f"{host.get('telnet_refusals')} refusal(s), "
+        f"prompt={host.get('telnet_refused_prompt')}",
+    )
+    expect(
+        "telnet: a refusal waits before it answers",
+        host.get("telnet_refused_wait", 0.0) >= 3.0,
+        f"{host.get('telnet_refused_wait', 0.0):.1f} s for three refusals",
+    )
+    expect(
+        "telnet: a name that does not exist is not told apart",
+        not host.get("telnet_unknown_hint", True),
+        host.get("telnet_unknown_error", ""),
+    )
+    expect(
+        "telnet: the door is not on the console of the machine",
+        "password: " not in output and "login: " not in output,
+        "the prompt of the door is in the transcript of COM1",
+    )
+
     return checks, notes
 
 
@@ -1331,10 +1462,12 @@ def main(argv: list) -> int:
     fwd_port = free_port()
     files_port = free_port()
     tls_port = free_port()
+    telnet_port = free_port()
     forwards = [
         (fwd_port, GUEST_HTTPD_PORT),
         (files_port, GUEST_FILES_PORT),
         (tls_port, GUEST_TLS_PORT),
+        (telnet_port, GUEST_TELNET_PORT),
     ]
     dns_name = resolvable_name()
     host: dict = {}
@@ -1443,6 +1576,101 @@ def main(argv: list) -> int:
                 client.close()
 
         time.sleep(0.5)
+
+    # --- the shell over the air (ADR 0033, the second half of the accounts)
+    #
+    # A client of this process, on the port of the host that QEMU forwards to
+    # the port 23 of the guest. The password is typed here and nowhere else:
+    # the console of the machine is driven by the same run, so a byte that
+    # came back to `output` would be the proof that the dialogue is still on
+    # the UART - the defect of 1.6 this file asks about.
+    def telnet_root() -> None:
+        client = None
+        try:
+            client = Telnet(telnet_port)
+            greeting = client.wait("login: ")
+            client.send("root")
+            client.wait("password: ")
+            client.send("microos")
+            welcome = client.wait("microos> ")
+
+            client.send("whoami")
+            whoami = client.wait("microos> ")
+
+            client.send("su - guest")
+            client.wait("microos> ")
+
+            client.send("whoami")
+            su_whoami = client.wait("microos> ")
+
+            client.send("who")
+            who = client.wait("microos> ")
+
+            client.send("logout")
+            try:
+                logout = client.wait("logout: the session ends", timeout=10.0)
+            except TimeoutError:
+                logout = client.text[-200:]
+
+            host["telnet_greeting"] = greeting
+            host["telnet_welcome"] = welcome
+            host["telnet_name_echoed"] = "root\r\n" in client.text
+            host["telnet_password_echoed"] = "microos\r\n" in client.text
+            host["telnet_whoami"] = whoami
+            host["telnet_su_whoami"] = su_whoami
+            host["telnet_who"] = who
+            host["telnet_logout"] = logout
+            host["telnet_closed"] = client.closed()
+        except (OSError, TimeoutError) as error:
+            host["telnet_error"] = f"{type(error).__name__}: {error}"
+        finally:
+            if client is not None:
+                client.close()
+
+    def telnet_refused() -> None:
+        client = None
+        try:
+            client = Telnet(telnet_port)
+            client.wait("login: ")
+            client.send("root")
+            started = time.monotonic()
+            refusals = 0
+
+            for _ in range(3):
+                client.wait("password: ")
+                client.send("wrong")
+                client.wait("login: authentication failure")
+                refusals += 1
+
+            host["telnet_refusals"] = refusals
+            host["telnet_refused_wait"] = time.monotonic() - started
+            host["telnet_refused_prompt"] = "microos> " in client.text
+            host["telnet_refused_closed"] = client.closed()
+        except (OSError, TimeoutError) as error:
+            host["telnet_refused_error"] = f"{type(error).__name__}: {error}"
+            host["telnet_refusals"] = 0
+            host["telnet_refused_wait"] = 0.0
+        finally:
+            if client is not None:
+                client.close()
+
+    def telnet_unknown() -> None:
+        client = None
+        try:
+            client = Telnet(telnet_port)
+            client.wait("login: ")
+            client.send("nobody")
+            for _ in range(3):
+                client.wait("password: ")
+                client.send("x")
+                client.wait("login: authentication failure")
+            host["telnet_unknown_hint"] = "no such account" in client.text
+            host["telnet_unknown_closed"] = client.closed()
+        except (OSError, TimeoutError) as error:
+            host["telnet_unknown_error"] = f"{type(error).__name__}: {error}"
+        finally:
+            if client is not None:
+                client.close()
 
     steps: list = []
     labels: list = []
@@ -1574,6 +1802,11 @@ def main(argv: list) -> int:
     command("httpd off", "httpd-off")
     action(fetch_after_close)
     command("netinfo", "netinfo-after")
+
+    # --- the shell over the air: the password of the socket, not of the UART
+    action(telnet_root)
+    action(telnet_refused)
+    action(telnet_unknown)
 
     try:
         output = run_machine(loader, kernel, steps, forwards, args.timeout, image=disk)

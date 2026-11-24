@@ -484,6 +484,12 @@ void port_x86_64_virtio_blk_init(void);
  * disk. The boot prefers it to the IDE drive when both are there. */
 const char *port_x86_64_virtio_blk_root(void);
 
+/* The first partition of the stick of the USB (ADR 0040), NULL when the
+ * machine has no stick or the table names no partition this kernel reads.
+ * The boot prefers the disks it had before it: an internal disk is the root
+ * of a laptop with a stick in a port. */
+const char *port_x86_64_usb_storage_root(void);
+
 /*
  * Open the line of the virtio disk: the number is the one the configuration
  * space of the card names, and the entry of the table is the shared stub of
@@ -714,6 +720,20 @@ static inline k_u64_t port_x86_64_bus_phys(const void *ptr)
 
     return address >= PORT_X86_64_KERNEL_BASE ? port_x86_64_kernel_phys(ptr) : address;
 }
+
+/*
+ * The physical address a bus master sees for a buffer of the kernel or of a
+ * program (ADR 0032 §1). The window of the programs is the only memory of the
+ * machine whose virtual address is not its physical one, and the page tables
+ * of the moment are the only place that knows where its frame is; everything
+ * else is the arithmetic of port_x86_64_bus_phys(). Zero is a page that does
+ * not translate, which no caller may give to a device.
+ *
+ * A driver that walks a buffer page by page asks this call for every page: the
+ * offset of a page is kept by the translation, so the piece of one page is the
+ * same number of bytes before and after it.
+ */
+k_u64_t port_x86_64_dma_phys(const void *buffer);
 
 /*
  * The window of the programs is the only memory of the machine that a ring 3

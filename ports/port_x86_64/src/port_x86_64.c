@@ -31,6 +31,9 @@
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_apic.h"
+#include "port_x86_64_ahci.h"
+#include "port_x86_64_nvme.h"
+#include "port_x86_64_xhci.h"
 
 /* --- the machine --- */
 
@@ -275,6 +278,15 @@ int k_port_console_getchar(void)
             return key;
         }
 
+        /* The keyboard of the USB comes after the one of the PS/2 and
+         * before the serial port: a machine has one of the two keyboards
+         * and the port does not care which (ADR 0040). */
+        key = port_x86_64_usb_poll();
+
+        if (key >= 0) {
+            return key;
+        }
+
         if ((port_inb(COM1_LSR) & 0x01) != 0) {
             return (int)port_inb(COM1);
         }
@@ -293,6 +305,12 @@ int k_port_console_getchar(void)
 int k_port_console_poll(void)
 {
     int key = port_x86_64_ps2_poll();
+
+    if (key >= 0) {
+        return key;
+    }
+
+    key = port_x86_64_usb_poll();
 
     if (key >= 0) {
         return key;
@@ -2486,6 +2504,8 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
     port_x86_64_module_init();
     port_x86_64_disk_init();
     port_x86_64_virtio_blk_init();
+    port_x86_64_ahci_init();
+    port_x86_64_nvme_init();
 
     /* The network is the last device of the boot before the interrupts: it
      * asks the PCI bus for a card, and a machine without one keeps the "no"
@@ -2501,6 +2521,14 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
      * of the card become the ones the transfers use (ADR 0032, ADR 0037). */
     port_x86_64_disk_irq_init();
     port_x86_64_virtio_blk_irq_init();
+
+    /*
+     * The keyboard of the USB (ADR 0040). The controller is optional and the
+     * machine of a laptop is the one that needs it: the wait of the
+     * enumeration is measured by the clock, so the call lives after the
+     * timer, and the PS/2 of the machine keeps working beside it.
+     */
+    port_x86_64_xhci_init();
 
     /*
      * The application processors (ADR 0012). The tables of the machine and

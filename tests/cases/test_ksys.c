@@ -2043,8 +2043,13 @@ static void test_poll(void)
  * about to speak.
  */
 static int g_pipe_slow_fds[2];
-static volatile int g_pipe_slow_done;
-static volatile int g_pipe_slow_result;
+/* The flags of the cases below are the handshake between two tasks: one
+ * writes, the other reads, and the scheduler of the host is two threads. An
+ * atomic int is what that is in C11 - the race detector of the cloud named
+ * the three of these that were a `volatile int`, and a volatile one is not a
+ * synchronisation even where the read happens to be fresh. */
+static _Atomic int g_pipe_slow_done;
+static _Atomic int g_pipe_slow_result;
 static char g_pipe_slow_text[8];
 
 static void pipe_slow_program(void *arg)
@@ -2127,9 +2132,9 @@ static void test_pipe_waits(void)
 #define PIPE_GRAIN_TOTAL ((k_size_t)(2 * KFILE_PIPE_SIZE + 1024))
 
 static int g_pipe_grain_fds[2];
-static volatile int g_pipe_grain_done;
-static volatile int g_pipe_grain_result;
-static volatile int g_pipe_grain_early;
+static _Atomic int g_pipe_grain_done;
+static _Atomic int g_pipe_grain_result;
+static _Atomic int g_pipe_grain_early;
 
 static void pipe_grain_program(void *arg)
 {
@@ -2249,9 +2254,9 @@ static void test_pipe_slow_writer(void)
  * reader of the block gets one word and not two pieces of one.
  */
 static int g_pipe_atomic_fds[2];
-static volatile int g_pipe_atomic_done;
-static volatile int g_pipe_atomic_result;
-static volatile int g_pipe_atomic_blocked;
+static _Atomic int g_pipe_atomic_done;
+static _Atomic int g_pipe_atomic_result;
+static _Atomic int g_pipe_atomic_blocked;
 static char g_pipe_atomic_read[KFILE_PIPE_BUF];
 
 static void pipe_atomic_program(void *arg)
@@ -2731,7 +2736,7 @@ static void test_limits_memory(void)
  * signal of the four to SIGXCPU): the default action ends it with 128 + 15.
  */
 static int g_cpu_limit_rc;
-static volatile int g_cpu_limit_done;
+static _Atomic int g_cpu_limit_done;
 
 static void limits_cpu_task(void *arg)
 {
@@ -2902,7 +2907,7 @@ static void test_ftruncate(void)
 }
 
 /* A child of a fork sees the descriptors of the parent and can close them. */
-static volatile int g_inherited_fds;
+static _Atomic int g_inherited_fds;
 
 static void fd_inheriting_child(void *arg)
 {

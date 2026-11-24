@@ -47,8 +47,12 @@
  * full too, but that is ENOSPC: the first is a rule of the task, the second
  * is the machine.
  */
-#define KERR_MFILE (-24)       /* too many open files */
-#define KERR_NOSPC (-28)       /* no space left on device */
+#define KERR_MFILE (-24) /* too many open files */
+#define KERR_NOSPC (-28) /* no space left on device */
+/* The volume is mounted, or asked for a mount, without the right to write:
+ * a disk this system did not format, or one no mount has asked about yet
+ * (ADR 0041 §2). */
+#define KERR_ROFS (-30)        /* read-only filesystem */
 #define KERR_SPIPE (-29)       /* illegal seek: a pipe has no position */
 #define KERR_PIPE (-32)        /* broken pipe: the reading end is closed */
 #define KERR_NAMETOOLONG (-36) /* the path is longer than the window */

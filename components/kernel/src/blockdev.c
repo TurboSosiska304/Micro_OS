@@ -42,6 +42,7 @@
  */
 #include "kernel/blockdev.h"
 
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/port.h"
@@ -588,25 +589,33 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         return dev->ops->read(dev->ctx, sector, buf, count);
     }
 
+    /*
+     * A call that starts where the last one ended continues the stream of the
+     * caller: the medium is asked for the read ahead of the device and not for
+     * the count of the call. That is the whole meaning of the two expectations,
+     * and they are read once, here, because a call that does not continue is a
+     * call of its own: the sectors it misses are gathered into one command of
+     * the medium the size of the call and no bigger.
+     *
+     * Before ADR 0042 the expectation was armed from inside the call
+     * (`jump_next = want + 1` after the first sector of a miss), so a run of
+     * more than one sector that began on a miss read the read ahead of the
+     * whole device for the four sectors of a record - an ext2 volume of 4 KiB
+     * blocks over 1 KiB sectors read 36 MiB of a 16 MiB file.
+     */
+    bool stream = (cache->have_stream && sector == cache->stream_next) ||
+                  (cache->have_jump && sector == cache->jump_next);
+    bool prefetched = false;
+
     for (i = 0; i < count; i++) {
         k_u32_t want = sector + (k_u32_t)i;
         int box = cache_lookup(cache, want);
 
         if (box < 0) {
-            /*
-             * A read that continues a run is a read ahead: one command of the
-             * medium fills the cache with the sectors the next calls of the
-             * filesystem will ask for. The run is interrupted all the time by
-             * the metadata of the volume - the table of the pointers of the
-             * file, the bitmap of the blocks - which is read between two
-             * sectors of the file; the second expectation is what lets the
-             * run continue after such a read, and what starts a new run when
-             * a file begins somewhere else.
-             */
-            k_u32_t ahead = 1;
+            k_u32_t rest = (k_u32_t)(count - i);
+            k_u32_t ahead = rest;
 
-            if ((cache->have_stream && want == cache->stream_next) ||
-                (cache->have_jump && want == cache->jump_next)) {
+            if (stream) {
                 k_u32_t run =
                     dev->read_ahead != 0u ? dev->read_ahead : (k_u32_t)K_BLOCKDEV_READ_AHEAD;
 
@@ -617,12 +626,19 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
                     run = (k_u32_t)cache->capacity;
                 }
 
-                if (want + run <= dev->sectors) {
+                if (run > ahead) {
                     ahead = run;
                 }
             }
 
-            if (ahead > 1 && cache->staging != NULL && cache_flush_all(cache) == 0) {
+            /* The end of the device is the end of the run: the tail of a
+             * volume is read for what is there and not for what is not. */
+            if (want < dev->sectors && ahead > (k_u32_t)(dev->sectors - want)) {
+                ahead = (k_u32_t)(dev->sectors - want);
+            }
+
+            if (ahead > 1 && want < dev->sectors && cache->staging != NULL &&
+                cache_flush_all(cache) == 0) {
                 /* The staging is the buffer of the run: what the cache holds
                  * back goes to the medium first, so that nothing writes to
                  * the staging while the run is copied out of it. A cache
@@ -637,6 +653,8 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
                     cache->stream_next = want + ahead;
                     cache->have_stream = true;
                     cache->have_jump = false;
+                    stream = false; /* one command of the medium for one call */
+                    prefetched = true;
                     box = cache_lookup(cache, want);
                 }
             }
@@ -656,16 +674,22 @@ static int cache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
                 }
 
                 cache->boxes[box].dirty = false;
-
-                /* A read out of the order of the stream does not end it: the
-                 * metadata of the volume sits between two of its sectors.
-                 * The next sector after this one is the seed of another. */
-                cache->jump_next = want + 1u;
-                cache->have_jump = true;
             }
         }
 
         memcpy(dst + i * dev->sector_size, cache_box(cache, (k_size_t)box), dev->sector_size);
+    }
+
+    /*
+     * The sector the next call is expected to ask for when it continues this
+     * one: the one after the last sector of the call. A caller of one sector
+     * at a time - MicroFS, a walk of the records of a directory - is what the
+     * expectation was built for, and for it a call is one sector and this is
+     * the next one. A prefetch has named its own end in `stream_next` already.
+     */
+    if (!prefetched) {
+        cache->jump_next = sector + (k_u32_t)count;
+        cache->have_jump = true;
     }
 
     k_mutex_unlock(&g_blockdev_lock);
@@ -802,6 +826,29 @@ static int cache_sync(void *ctx)
     return rc;
 }
 
+/*
+ * The door of the writes crosses the cache: the mount is above the cache and
+ * the controller is below it, and the sector the cache holds has to be
+ * written by a driver that was told to write. A cache with a write-back
+ * policy is emptied before the door closes, so a sector it still holds is
+ * not lost (the two disks of ADR 0041 are write-through and have none).
+ */
+static int cache_writes(void *ctx, bool open)
+{
+    struct k_blockdev_cache *cache = ctx;
+    const struct k_blockdev *dev = cache->owner;
+
+    if (!open && k_mutex_lock(&g_blockdev_lock) == 0) {
+        if (cache->live) {
+            (void)cache_flush_all(cache);
+        }
+
+        k_mutex_unlock(&g_blockdev_lock);
+    }
+
+    return dev->ops->writes(dev->ctx, open);
+}
+
 /* --- the table ------------------------------------------------------------ */
 
 /*
@@ -906,6 +953,7 @@ static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_ba
             cache->ops.write = cache_write;
             cache->ops.erase = dev->ops->erase != NULL ? cache_erase : NULL;
             cache->ops.sync = dev->ops->sync != NULL ? cache_sync : NULL;
+            cache->ops.writes = dev->ops->writes != NULL ? cache_writes : NULL;
             cache->view.ops = &cache->ops;
 
             entry->dev = &cache->view;
@@ -1137,4 +1185,184 @@ const struct k_blockdev *k_blockdev_find(const char *name)
     k_port_exit_critical();
 
     return found;
+}
+
+/*
+ * The door of the writes of a medium (ADR 0041 §2). The layers that stand
+ * between a mount and a controller - the cache, a partition, a view - carry
+ * the operation of the medium below them, so a device either has the whole
+ * chain or none of it, and a mount asks the name it mounted.
+ */
+bool k_blockdev_gated(const struct k_blockdev *dev)
+{
+    return dev != NULL && dev->ops != NULL && dev->ops->writes != NULL;
+}
+
+int k_blockdev_writes(const struct k_blockdev *dev, bool open)
+{
+    if (dev == NULL || dev->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (dev->ops->writes == NULL) {
+        return KERR_NOTSUP;
+    }
+
+    return dev->ops->writes(dev->ctx, open);
+}
+
+/* --- the grain of a volume ------------------------------------------------ */
+
+/*
+ * A view is arithmetic over one call: the sector and the count of the view are
+ * multiplied, and the device below takes the run. Nothing is copied and nothing
+ * is buffered here - the cache of the medium, when it has one, sits below the
+ * view and gathers the run into the commands of the device (ADR 0032) - so the
+ * only thing the view changes is how many times the layer above asks.
+ */
+static bool view_span(const struct k_blockdev_view *view, k_u32_t sector, k_size_t count,
+                      k_u64_t *first, k_size_t *sectors)
+{
+    k_u64_t start = (k_u64_t)sector * view->factor;
+    k_u64_t run = (k_u64_t)count * view->factor;
+
+    if (first == NULL || sectors == NULL) {
+        return false;
+    }
+
+    if (start > (k_u64_t)view->medium->sectors || run > (k_u64_t)view->medium->sectors - start) {
+        return false;
+    }
+
+    *first = start;
+    *sectors = (k_size_t)run;
+
+    return true;
+}
+
+static int view_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
+{
+    struct k_blockdev_view *view = ctx;
+    k_u64_t first = 0;
+    k_size_t sectors = 0;
+
+    if (buf == NULL || !view_span(view, sector, count, &first, &sectors)) {
+        return -1;
+    }
+
+    if (sectors == 0) {
+        return 0;
+    }
+
+    view->reads++;
+    view->sectors_read += (k_u64_t)sectors;
+
+    return view->medium->ops->read(view->medium->ctx, (k_u32_t)first, buf, sectors);
+}
+
+static int view_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
+{
+    struct k_blockdev_view *view = ctx;
+    k_u64_t first = 0;
+    k_size_t sectors = 0;
+
+    if (buf == NULL || !view_span(view, sector, count, &first, &sectors)) {
+        return -1;
+    }
+
+    if (sectors == 0) {
+        return 0;
+    }
+
+    view->writes++;
+    view->sectors_written += (k_u64_t)sectors;
+
+    return view->medium->ops->write(view->medium->ctx, (k_u32_t)first, buf, sectors);
+}
+
+static int view_erase(void *ctx, k_u32_t sector, k_size_t count)
+{
+    struct k_blockdev_view *view = ctx;
+    k_u64_t first = 0;
+    k_size_t sectors = 0;
+
+    if (!view_span(view, sector, count, &first, &sectors)) {
+        return -1;
+    }
+
+    if (sectors == 0) {
+        return 0;
+    }
+
+    return view->medium->ops->erase(view->medium->ctx, (k_u32_t)first, sectors);
+}
+
+static int view_sync(void *ctx)
+{
+    struct k_blockdev_view *view = ctx;
+
+    return view->medium->ops->sync(view->medium->ctx);
+}
+
+/* The door of the writes is the medium's: a view is a way of reading and
+ * writing the same bytes, not a medium with a rule of its own. */
+static int view_writes(void *ctx, bool open)
+{
+    struct k_blockdev_view *view = ctx;
+
+    return view->medium->ops->writes(view->medium->ctx, open);
+}
+
+int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *medium,
+                         k_u32_t sector_size)
+{
+    if (view == NULL || medium == NULL || medium->ops == NULL || medium->ops->read == NULL ||
+        medium->ops->write == NULL) {
+        return -1;
+    }
+
+    /*
+     * The grain of a view is a whole number of the medium's sectors and more
+     * than one of them: a view of the grain of the medium is the medium, and a
+     * sector of the medium is not a fraction of anything.
+     */
+    if (medium->sector_size == 0 || sector_size <= medium->sector_size ||
+        (sector_size % medium->sector_size) != 0) {
+        return -1;
+    }
+
+    memset(view, 0, sizeof(*view));
+
+    view->factor = sector_size / medium->sector_size;
+
+    if (medium->sectors < view->factor) {
+        return -1; /* the medium is shorter than one sector of the view */
+    }
+
+    view->medium = medium;
+    view->ops.read = view_read;
+    view->ops.write = view_write;
+    view->ops.erase = (medium->ops->erase != NULL) ? view_erase : NULL;
+    view->ops.sync = (medium->ops->sync != NULL) ? view_sync : NULL;
+    view->ops.writes = (medium->ops->writes != NULL) ? view_writes : NULL;
+
+    view->dev.name = medium->name;
+    view->dev.sector_size = sector_size;
+    view->dev.sectors = medium->sectors / view->factor;
+    view->dev.ops = &view->ops;
+    view->dev.ctx = view;
+    /* The read ahead belongs to the cache of the medium: a view has no cache
+     * of its own, and nothing above it reads this number. */
+    view->dev.read_ahead = 0;
+
+    return 0;
+}
+
+void k_blockdev_view_close(struct k_blockdev_view *view)
+{
+    if (view == NULL) {
+        return;
+    }
+
+    memset(view, 0, sizeof(*view));
 }

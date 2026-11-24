@@ -179,7 +179,7 @@ static void test_fork_wait(void)
     parent = task_create("parent", parent_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+    for (waited = 0; waited < 10000 && g_result < 0; waited++) {
         k_sched_sleep_ms(1);
     }
 
@@ -224,7 +224,7 @@ static void test_fork_numbers(void)
     parent = task_create("parent", parent_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+    for (waited = 0; waited < 10000 && g_result < 0; waited++) {
         k_sched_sleep_ms(1);
     }
 
@@ -283,7 +283,7 @@ static void test_fork_posix(void)
     parent = task_create("posix", posix_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+    for (waited = 0; waited < 10000 && g_result < 0; waited++) {
         k_sched_sleep_ms(1);
     }
 
@@ -346,7 +346,7 @@ static void test_wait_any(void)
     parent = task_create("anychild", any_child_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+    for (waited = 0; waited < 10000 && g_result < 0; waited++) {
         k_sched_sleep_ms(1);
     }
 
@@ -439,7 +439,11 @@ static void test_fork_pipe(void)
     parent = task_create("piper", pipe_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_pipe_result == 0; waited++) {
+    /* Ten seconds and not three: the program of the case is a task among the
+     * others, and a host that runs a build, two sanitizer suites and three
+     * copies of this one schedules it late. The property is that the bytes
+     * cross the fork - the moment they do is not the subject. */
+    for (waited = 0; waited < 10000 && g_pipe_result == 0; waited++) {
         k_sched_sleep_ms(1);
     }
 
@@ -541,7 +545,7 @@ static void test_fork_data_is_the_same(void)
         parent = task_create("parent", parent_program, NULL, TASK_PRIO_DEFAULT);
         KT_CHECK(parent != NULL);
 
-        for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+        for (waited = 0; waited < 10000 && g_result < 0; waited++) {
             k_sched_sleep_ms(1);
         }
 
@@ -1028,7 +1032,7 @@ static void test_chdir_fork(void)
     parent = task_create("parent", chdir_program, NULL, TASK_PRIO_DEFAULT);
     KT_CHECK(parent != NULL);
 
-    for (waited = 0; waited < 3000 && g_result < 0; waited++) {
+    for (waited = 0; waited < 10000 && g_result < 0; waited++) {
         k_sched_sleep_ms(1);
     }
 

@@ -10,6 +10,196 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [1.8.0] - 2026-11-24
+
+### The release
+
+- 1.8.0: the release of the door of USB, of a disk of a person under the rule
+  that a medium this system did not format is read-only, of the library of a
+  program nobody rewrote, of a volume whose grain is its own, and of the
+  accounts of a session (`docs/releases/1.8.md`).
+- 1.8.0-rc3: the packages of the medium are asked for one at a time and a
+  missing one is a sentence instead of a failed job (`limine` is not in the
+  sources of the container of ESP-IDF, which is what the tag of rc2 found).
+- 1.8.0-rc2: the medium of the release is in the bundle of its own tag. The
+  step of the CD and of the stick of `release.yml` installed `xorriso`,
+  `limine`, `clang` and `lld` **after** the environment of ESP-IDF was
+  prepared, and `apt-get` replaced `python3` under it: the build of the
+  firmware of the same job lost the module `idf_component_manager` and the
+  release of 1.7.0 - and of `1.8.0-rc1` - went out without its ISO and without
+  its stick, with a sentence of the step that said so.
+- 1.8.0-rc1: the first candidate of the release, without the medium (rc2).
+
+### Added
+
+- The accounts of a person, second half (ADR 0044): a **session** is a task
+  with a terminal of its own (`kernel/console.h`), `init` of the console is a
+  getty that starts one and starts another after a `logout`, `who` and
+  `logout` are commands, and `/bin/login` is not needed - the console is the
+  person in front of the machine (root, no password, the rule of the ADR),
+  while `login` and `su` are the door for another account. The dialog of the
+  door is the same code for the console and for the wire: three attempts, one
+  sentence for a wrong password and for a name that is not there, a delay, and
+  a hash computed for both so that the two take the same time. The owner of a
+  new file is the uid of its maker (`vfs_open(O_CREAT)` and `vfs_mkdir` ask
+  the filesystem for a `chown`), so a file a guest writes is the guest's -
+  `x86-smoke` reads `owner: 7` where it was `owner: 0`.
+
+- A machine of a laptop keeps its files: the write path of the two disks of
+  M2, behind the rule of ADR 0041 and not in front of it. The root mount asks
+  for the writes after it is in the tree (`vfs_mount_root_writes`), so its own
+  `/etc/volumes` can be read; another volume asks with
+  `vfs_mount_type_write()` or the `rw` option of `/etc/fstab`; a volume the
+  rule does not name is mounted read-only with the reason in the log. The
+  drivers grew `WRITE DMA EXT`/`FLUSH CACHE EXT` and the NVMe `WRITE`/`Flush`
+  of the namespace, the image tool names the volumes it formats, and
+  `make x86-disk-smoke` proves a file that survives a reset on the IDE channel,
+  the SATA controller and the NVMe namespace - while a volume the list does not
+  name and a volume of btrfs leave the SHA-256 of their image unchanged.
+
+- The door of a laptop, second iteration: a **hub** of the class 09 (the power
+  of its ports, the reset of one, the route string of a device behind it, four
+  tiers of eight ports), so a keyboard or a stick behind a dock is found; the
+  **hot-plug** of the root ports and of the hub ports, so a device inserted
+  after the boot is enumerated and one taken out leaves the input, the block
+  layer and the network without a panic; a **mouse** of the HID boot protocol
+  as the pointer of `/dev/input0` beside the PS/2 one (the wheel is a key of
+  the event contract, added to it and not taken from it); and the **line** of
+  the controller, MSI-X first with MSI and the legacy pin behind it, in place
+  of a poll of the event ring. The event ring is one consumer for the three
+  classes now - a completion of a bulk transfer of the network is not thrown
+  away by the pump of the console - which the wire of `usb-smoke` had been
+  losing. `make usb-smoke` is 58 checks.
+
+- The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
+  the controller of the bus (class 0x0C/0x03), resets it and programs it - a
+  command ring and an event ring with its ERST, the slots and the contexts of
+  a device, the ports with their speed and their reset - all of it by physical
+  addresses of the port's contract (ADR 0032). On it: a keyboard of the HID
+  boot protocol whose eight-byte reports the portable kernel decodes
+  (`kernel/input_hid.c`, `tests/cases/test_input_hid.c`), with the same events
+  and the same characters as the PS/2 one, so a machine with both reads them
+  as one keyboard; a stick of mass storage (BOT, class 08/06/0x50, `INQUIRY`,
+  `READ CAPACITY(10)`, `READ(10)`, `WRITE(10)`) registered as `usb0` of the
+  block layer and the rule of ADR 0041 over it; and CDC-ECM as the second
+  network device of the port (`usbnet0`, frames over two bulk endpoints, the
+  MAC from the descriptor of a string). `make usb-smoke` runs a machine with
+  `i8042=off` - no PS/2 at all, so the keys can only come through xHCI - and
+  `make usb-stick-smoke USB_STICK=/dev/sdc` boots with the stick of a person
+  attached read-only: 35 and 43 checks.
+
+- The grain of a volume (ADR 0043): the sector is a property of the volume,
+  not of the medium. `struct k_blockdev_view` is a device of the block layer
+  whose sector is the one of the superblock, over a device whose sector is
+  smaller - arithmetic over one call, no copy and no allocation - and ext2
+  opens one when its superblock says a block of 4 KiB on a medium of 512-byte
+  sectors. `e2fsck -fn` and `debugfs` are clean on every path of a write at
+  that grain (a file past the twelve direct blocks, a hole past the single
+  table, a truncation inside a block, a truncation that gives the table back,
+  a growth into a hole), and `make x86-volume-smoke` writes and reads a volume
+  of 5 GiB at both grains: 32 checks.
+
+- The library of a program nobody rewrote: `popen`, `pclose` and `system` are
+  a pipe, a fork, a dup2 and the execve of the first word of the line, and
+  `make ports-smoke` builds **thirteen utilities of sbase with not one line
+  changed** - `true false echo basename dirname pwd printenv sleep cksum tee
+  cmp whoami sha256sum` - with the toolchain of `make sdk`, runs them on the
+  image of the release and checks their answers: 62 checks. `tests/ports/
+  upstream.txt` holds the digest of every vendored file and the gate
+  recalculates it before the machine starts, so a byte of a local edit fails
+  the gate; `docs/ports-table.md` is the table of the lines of source, of the
+  lines of a port layer and of the patches, per program (577 / 0 / 0 for the
+  thirteen).
+
+- The disk of a chipset, on the SATA controller of a laptop (ADR 0041):
+  `ports/port_x86_64/src/ahci.c` speaks class 01/06 of the PCI bus with its
+  window of registers above the identity map (CAP/GHC/IS/PI, a command list
+  and a FIS area per port, a PRDT of physical pages), reads the identify data
+  of the drive and the table of its partitions (MBR and GPT, the parser of the
+  kernel), mounts the volume of the first partition as the root of the machine
+  and runs `/bin/hello` out of it. The disk is **read-only**: the rule of
+  `components/kernel/src/volume.c` refuses every write of a volume this system
+  did not format and `/etc/volumes` does not name, a volume of another system
+  (btrfs, ext4, NTFS, XFS) is refused at the mount, and the table of the
+  partitions is never written. `make ahci-smoke` boots the image on a q35
+  machine and proves it twice by the SHA-256 of the whole image before and
+  after the boot - once for the volume of this system, once for the volume of
+  btrfs.
+
+- The disk of a modern laptop, on the NVMe controller of the PCI bus
+  (ADR 0042): `ports/port_x86_64/src/nvme.c` enables the controller (AQA, ASQ,
+  ACQ, CC.EN and CSTS.RDY), identifies the controller and the namespace 1,
+  creates one pair of I/O queues through the admin queue, and reads the
+  namespace with `PRP1`/`PRP2` - the two physical pages of a request, by the
+  translation of ADR 0032 - in commands of at most 8 KiB. The namespace of 512
+  bytes is the sector of the medium, the block layer sees the kilobyte of
+  MicroFS, and the disk is read-only by the rule of ADR 0041: there is no
+  `WRITE` command in the driver, and `make nvme-smoke` proves a mount, a
+  program and the SHA-256 of the whole image before and after the boot - once
+  for the volume of this system and once for a volume of btrfs.
+
+### Fixed
+
+- `telnet` asked for the password on the console of the machine and not on the
+  socket of the session: a client of the wire could not log in at all, and the
+  person in front of the board was asked for a password that came from
+  somebody else. It is the defect of 1.6 that the cleanroom wrote down. A task
+  has a terminal now, the session of a client puts the socket there, and the
+  echo of the password is agreed with the client (RFC 857) and never put in
+  the transcript - `x86-net-smoke` checks that `password: ` never appears on
+  COM1, which is the proof that the dialog went to the wire.
+
+- A child of a `fork` took its fields from the parent **after** its slot was
+  in the table and marked in use, so the child - a thread of its own on the
+  host and a task of another core in `KERNEL_SMP` - read a record that was
+  still being written: the race detector of the cloud named the read of
+  `task_exit` against the write of `task_spawn`. The inheritance happens in
+  the critical section of the slot now, and the table of the descriptors,
+  which has the lock of its own in the opposite order, is copied after it and
+  before the task can run.
+
+- The suite under valgrind, the gate of the cloud, was red for two days
+  without a single failed check: a checksum over the padding of a record
+  (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
+  `/proc` did not write (`tests/cases/test_sysfs.c`) read uninitialised
+  memory, and a child of a `fork` inherits the count of its parent, so its
+  exit code became the 42 of `--error-exitcode` and a case that read the exit
+  code of its program read 42 instead of the answer. Both reads are fixed and
+  `make test-valgrind` runs the same command here as the cloud does: 0 errors
+  from 0 contexts, 76 058 checks.
+
+- A wait of a pipe or of `poll` could sleep for as long as the machine was up:
+  `k_wait_block` registers the waiter after the caller has looked at the
+  object, so a wake that arrived in that window found no record and was lost,
+  and a wait without a deadline never looked again. A pipeline of the shell
+  never finished under a slow runner of the cloud - the test suite died on its
+  timeout with no failed check, which is what a hang looks like. A wait is
+  twenty milliseconds long now (`KFILE_WAIT_CHUNK_MS`), which is the chunk the
+  sleep already had, so a lost wake costs a turn of the loop and not the line;
+  the cause and its fix are K15 of `docs/debts.md`.
+
+- The read ahead of the block layer (ADR 0032) armed the wait of the stream
+  *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
+  36 MiB of the disk before it wrote a byte. The wait belongs to the stream and
+  not to the call: the same write reads 2.5 MiB, and the write of the same file
+  went from 129 to 184 MiB/s. Held by a case of `test_blockdev_cache.c`.
+
+- The descriptors 1 and 2 were "the console" only while nothing had opened
+  them, so the first `pipe()` or `open()` of a program took them: `tee` wrote
+  its answer into its own file instead of the console, and any program that
+  spoke after an `open` spoke to the wrong place. `open` and `pipe` move a new
+  descriptor off them now (the probe is `fstat`, not `read`: a read of the
+  write end of a pipe answers `EBADF` too), and an explicit `dup2(fd, 1)` is
+  still obeyed.
+
+- A case of `tests/cases/test_ksys_process.c` waited three seconds for a
+  program it had started as a task among the others: a host that runs a build,
+  a sanitizer suite and three copies of the case answered a failure of the
+  property instead of a slow machine. The waits of that file are ten seconds,
+  and the status of the `fork` case is under the same condition as its use
+  (the race detector refused to compile the file, so `make test-tsan` was red
+  and nobody had looked).
+
 ## [1.7.0] - 2026-11-24
 
 ### The release

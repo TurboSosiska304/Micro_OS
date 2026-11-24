@@ -106,6 +106,17 @@ static k_u32_t g_sync_count;
 static char g_long_name[TEST_LONG_NAME_LEN + 1];
 static char g_long_path[VFS_PATH_MAX];
 
+/*
+ * What the medium of the test was asked, so that the grain of a volume is a
+ * number of the test and not a claim of a comment (ADR 0042): the calls of the
+ * device, the sectors they moved and the longest one of them.
+ */
+static k_u32_t g_medium_reads;
+static k_u32_t g_medium_writes;
+static k_u64_t g_medium_read_sectors;
+static k_u64_t g_medium_write_sectors;
+static k_size_t g_medium_write_max;
+
 static void put16(k_u8_t *p, k_u16_t value)
 {
     p[0] = (k_u8_t)(value & 0xFFu);
@@ -346,6 +357,9 @@ static int device_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         return -1;
     }
 
+    g_medium_reads++;
+    g_medium_read_sectors += (k_u64_t)count;
+
     memcpy(buf, dev->data + offset, size);
     return 0;
 }
@@ -358,6 +372,13 @@ static int device_write(void *ctx, k_u32_t sector, const void *buf, k_size_t cou
 
     if (dev->data == NULL || sector >= dev->sectors || count > dev->sectors - sector) {
         return -1;
+    }
+
+    g_medium_writes++;
+    g_medium_write_sectors += (k_u64_t)count;
+
+    if (count > g_medium_write_max) {
+        g_medium_write_max = count;
     }
 
     memcpy(dev->data + offset, buf, size);
@@ -2108,6 +2129,342 @@ static void test_large_blocks(void)
     teardown();
 }
 
+/* --- the grain of the volume: blocks of 4096 bytes (ADR 0042) ------------- */
+
+/*
+ * The debt of the grain asks for every write path of the volume at 4 KiB and
+ * not only for a file of a few kilobytes: a file past the twelve direct blocks
+ * (48 KiB of a volume of 4096-byte blocks), a hole past the table of the single
+ * indirection (4 MiB of it), a cut inside a block and a cut that gives a table
+ * back. The tools of the format are the judge of every one of them, as they
+ * were for the 1 KiB block in ADR 0029.
+ *
+ * The bytes of the file are a function of the position, the way `/bin/mkbig`
+ * writes them: a block read from the wrong place of the medium does not
+ * compare equal by luck.
+ */
+#define GRAIN_CHUNK 65536u
+#define GRAIN_FILE_BYTES (600u * 1024u)    /* past the twelve direct blocks of 4 KiB */
+#define GRAIN_HOLE_AT (5u * 1024u * 1024u) /* past the single table: a double one */
+
+/* What a megabyte cost the medium: the calls of the device, the sectors they
+ * moved and the longest of them. */
+struct grain_number {
+    k_u32_t writes;
+    k_u64_t sectors;
+    k_size_t largest;
+    k_u32_t reads;
+    k_u64_t read_sectors;
+};
+
+static char grain_byte(k_u64_t offset)
+{
+    return (char)(((offset / GRAIN_CHUNK) * 31u + (offset % GRAIN_CHUNK)) & 0xFFu);
+}
+
+static void grain_fill(char *buffer, k_size_t size, k_u64_t offset)
+{
+    for (k_size_t i = 0; i < size; i++) {
+        buffer[i] = grain_byte(offset + i);
+    }
+}
+
+static bool grain_is(const char *buffer, k_size_t size, k_u64_t offset)
+{
+    for (k_size_t i = 0; i < size; i++) {
+        if (buffer[i] != grain_byte(offset + i)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+/* The write of a file in pieces of GRAIN_CHUNK: the shape of a program that
+ * copies a file, and the run of the medium that the writer plans from it. */
+static int grain_write_file(const char *path, k_size_t bytes)
+{
+    static char chunk[GRAIN_CHUNK];
+    struct vfs_file file;
+    k_size_t done;
+    int rc;
+
+    rc = vfs_open(path, VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data);
+    if (rc != 0) {
+        return rc;
+    }
+
+    for (done = 0; done < bytes; done += GRAIN_CHUNK) {
+        k_size_t piece = bytes - done;
+
+        if (piece > GRAIN_CHUNK) {
+            piece = GRAIN_CHUNK;
+        }
+
+        grain_fill(chunk, piece, done);
+
+        rc = vfs_write(&file, chunk, piece);
+        if (rc != (int)piece) {
+            (void)vfs_close(&file);
+            return rc < 0 ? rc : KERR_IO;
+        }
+    }
+
+    return vfs_close(&file);
+}
+
+static void medium_reset(void)
+{
+    g_medium_reads = 0;
+    g_medium_writes = 0;
+    g_medium_read_sectors = 0;
+    g_medium_write_sectors = 0;
+    g_medium_write_max = 0;
+}
+
+static void test_grain_of_a_volume(void)
+{
+    struct vfs_file file;
+    struct vfs_stat stat;
+    struct ext2_check_report report;
+    char image[256];
+    char dir[256];
+    static char buffer[GRAIN_CHUNK];
+    const k_u64_t cut_at = 100u * 1024u;
+
+    ktest_begin("ext2: a volume of blocks of 4096 bytes writes, holds holes and cuts, and e2fsck"
+                " agrees");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    /* 8192 blocks of 4096 bytes is 32 MiB in eight groups of 1024 blocks. */
+    if (!host_mkfs(dir, image, sizeof(image), 8192u, 4096u, 1024u, 1024u)) {
+        KT_CHECK(0);
+        teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    /* --- a file past the twelve direct blocks: the table of the single --- */
+    KT_CHECK_INT_EQ(grain_write_file(TEST_ROOT_POINT "/grain.bin", GRAIN_FILE_BYTES), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/grain.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, GRAIN_FILE_BYTES);
+
+    /* --- a file of two blocks with a hole of five megabytes between them -- */
+    KT_CHECK_INT_EQ(
+        vfs_open(TEST_ROOT_POINT "/hole.bin", VFS_O_WRONLY | VFS_O_CREAT, &file, g_file_data), 0);
+
+    grain_fill(buffer, 8, 0);
+    KT_CHECK_INT_EQ(vfs_write(&file, buffer, 8), 8);
+
+    file.offset = GRAIN_HOLE_AT;
+    grain_fill(buffer, 8, GRAIN_HOLE_AT);
+    KT_CHECK_INT_EQ(vfs_write(&file, buffer, 8), 8);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/hole.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, GRAIN_HOLE_AT + 8u);
+
+    /* --- the bytes come back, and the hole is a hole -------------------- */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/hole.bin", VFS_O_RDONLY, &file, g_file_data), 0);
+
+    memset(buffer, 1, sizeof(buffer));
+    file.offset = 0;
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 8), 8);
+    KT_CHECK(grain_is(buffer, 8, 0));
+
+    memset(buffer, 1, sizeof(buffer));
+    file.offset = GRAIN_HOLE_AT;
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 8), 8);
+    KT_CHECK(grain_is(buffer, 8, GRAIN_HOLE_AT));
+
+    memset(buffer, 1, sizeof(buffer));
+    file.offset = 1024u * 1024u;
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 512), 512);
+
+    for (k_size_t i = 0; i < 512u; i++) {
+        KT_CHECK_INT_EQ(buffer[i], 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* The first megabyte of the file of the single table reads as it was
+     * written, in pieces of the block of the volume and not of a kilobyte. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/grain.bin", VFS_O_RDONLY, &file, g_file_data), 0);
+
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 4096), 4096);
+    KT_CHECK(grain_is(buffer, 4096, 0));
+
+    file.offset = GRAIN_FILE_BYTES - 4096u;
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 4096), 4096);
+    KT_CHECK(grain_is(buffer, 4096, GRAIN_FILE_BYTES - 4096u));
+
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    /* --- a cut inside a block, and a cut that gives the double back ----- */
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/grain.bin", cut_at), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/grain.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, cut_at);
+
+    /* The tail of the block the cut kept is zeros in the block, not only
+     * past the end of the file: the bytes come back as zeros. */
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/grain.bin", VFS_O_RDONLY, &file, g_file_data), 0);
+    file.offset = cut_at - 1024u;
+    memset(buffer, 1, sizeof(buffer));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 1024), 1024);
+    KT_CHECK(grain_is(buffer, 1024, cut_at - 1024u));
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 1024), 0); /* the end of the file */
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/hole.bin", 0), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/hole.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 0);
+
+    /* --- the check of the machine, then the tools of the format -------- */
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(ext2_check(TEST_ROOT_POINT, &report), 0);
+    KT_CHECK_INT_EQ(report.errors, 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /grain.bin", "Size: 102400");
+    check_debugfs(image, "stat /hole.bin", "Size: 0");
+
+    /* --- the volume comes back, grows into a hole and is cut again ----- */
+    KT_CHECK_INT_EQ(mount_host_image(image), 0);
+
+    KT_CHECK_INT_EQ(ext2_vfs_truncate(TEST_ROOT_POINT "/grain.bin", 2u * 1024u * 1024u), 0);
+    KT_CHECK_INT_EQ(vfs_stat(TEST_ROOT_POINT "/grain.bin", &stat), 0);
+    KT_CHECK_INT_EQ(stat.size, 2u * 1024u * 1024u);
+
+    KT_CHECK_INT_EQ(vfs_open(TEST_ROOT_POINT "/grain.bin", VFS_O_RDONLY, &file, g_file_data), 0);
+    file.offset = 1024u * 1024u;
+    memset(buffer, 1, 512);
+    KT_CHECK_INT_EQ(vfs_read(&file, buffer, 512), 512);
+
+    for (k_size_t i = 0; i < 512u; i++) {
+        KT_CHECK_INT_EQ(buffer[i], 0);
+    }
+
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+
+    KT_CHECK_INT_EQ(vfs_umount(TEST_ROOT_POINT), 0);
+    KT_CHECK(image_store_file(image));
+    check_e2fsck(image);
+    check_debugfs(image, "stat /grain.bin", "Size: 2097152");
+
+    (void)unlink(image);
+    (void)rmdir(dir);
+
+    teardown();
+}
+
+/*
+ * The same megabyte at the two grains, and the operations of the medium behind
+ * it. The volume of 4096-byte blocks talks to a view of four sectors of the
+ * medium (ADR 0042), so a block of the volume is one operation and a run of a
+ * write leaves as one command of 64 KiB; the numbers are printed and the
+ * longest call of the medium is asserted, because a run that is cut into
+ * sectors is exactly what the grain was meant to stop.
+ */
+static bool grain_measure(char *dir, char *image, size_t cap, k_u32_t block_size,
+                          struct grain_number *out)
+{
+    const k_size_t bytes = 1024u * 1024u;
+    /* The same volume at both grains: 16 MiB in four groups of 4 MiB, so
+     * that the two numbers are the same filesystem and not two sizes. */
+    const k_u32_t blocks = 16u * 1024u * 1024u / block_size;
+    const k_u32_t group_blocks = 4u * 1024u * 1024u / block_size;
+
+    if (!host_mkfs(dir, image, cap, blocks, block_size, group_blocks, 512u)) {
+        return false;
+    }
+
+    if (mount_host_image(image) != 0) {
+        return false;
+    }
+
+    medium_reset();
+
+    if (grain_write_file(TEST_ROOT_POINT "/one.bin", bytes) != 0) {
+        (void)vfs_umount(TEST_ROOT_POINT);
+        return false;
+    }
+
+    out->writes = g_medium_writes;
+    out->sectors = g_medium_write_sectors;
+    out->largest = g_medium_write_max;
+    out->reads = g_medium_reads;
+    out->read_sectors = g_medium_read_sectors;
+
+    (void)vfs_umount(TEST_ROOT_POINT);
+
+    return true;
+}
+
+static void test_grain_of_the_medium(void)
+{
+    struct grain_number small = {0, 0, 0, 0, 0};
+    struct grain_number large = {0, 0, 0, 0, 0};
+    char image[256];
+    char other[256];
+    char dir[256];
+    char dir2[256];
+
+    ktest_begin("ext2: the grain of a volume of 4096-byte blocks reaches the medium as a run");
+
+    setup();
+
+    if (!host_tools_ready()) {
+        printf("  (skipped: mke2fs, e2fsck and debugfs of e2fsprogs are not installed)\n");
+        teardown();
+        return;
+    }
+
+    KT_CHECK(grain_measure(dir, image, sizeof(image), 1024u, &small));
+    KT_CHECK(grain_measure(dir2, other, sizeof(other), 4096u, &large));
+
+    printf("  ext2: 1 MiB written in 64 KiB pieces, blocks of 1024: %u write(s) of %u sector(s)"
+           " and %u read(s) of %u, longest %u;\n"
+           "        blocks of 4096: %u write(s) of %u sector(s) and %u read(s) of %u, longest %u\n",
+           (unsigned)small.writes, (unsigned)small.sectors, (unsigned)small.reads,
+           (unsigned)small.read_sectors, (unsigned)small.largest, (unsigned)large.writes,
+           (unsigned)large.sectors, (unsigned)large.reads, (unsigned)large.read_sectors,
+           (unsigned)large.largest);
+
+    /* The run of a 64 KiB write is one command of the medium at both grains:
+     * 64 sectors of 1 KiB, or 16 sectors of the view that are 64 of the medium. */
+    KT_CHECK(small.largest >= 64u);
+    KT_CHECK(large.largest >= 64u);
+
+    /* The same bytes cost the medium fewer operations at the coarse grain: the
+     * bitmap, the record of an inode and the table of a file are a quarter of
+     * the records for the same file (ADR 0042). */
+    KT_CHECK(large.writes < small.writes);
+
+    /* The same bytes are written, so the medium moves about the same number
+     * of sectors: the metadata of the grain is a rounding of the two. */
+    KT_CHECK(large.sectors >= 1024u * 1024u / 1024u);
+    KT_CHECK(small.sectors >= 1024u * 1024u / 1024u);
+
+    (void)unlink(image);
+    (void)unlink(other);
+    (void)rmdir(dir);
+    (void)rmdir(dir2);
+
+    teardown();
+}
+
 static void test_unlink_of_a_big_file(void)
 {
     struct vfs_file file;
@@ -2612,6 +2969,8 @@ void test_fs_ext2(void)
     test_attributes();
     test_many_groups();
     test_large_blocks();
+    test_grain_of_a_volume();
+    test_grain_of_the_medium();
     test_unlink_of_a_big_file();
     test_check();
     test_repair();

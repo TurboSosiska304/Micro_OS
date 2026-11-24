@@ -31,6 +31,13 @@
 #define KSHELL_OK 0
 #define KSHELL_ERROR (-1)
 #define KSHELL_USAGE (-2)
+/*
+ * The command ended the session it ran in (`logout`). It is not a failure:
+ * the loop of a session stops and the task that runs it ends, and the init
+ * that made the session starts another one on the console. A command of a
+ * script or a stage of a pipe answers it as any other status.
+ */
+#define KSHELL_LOGOUT (-3)
 
 /*
  * A command is not called for `-h` or `--help` as its first word: the shell

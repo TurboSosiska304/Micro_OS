@@ -41,6 +41,19 @@ struct k_blockdev_ops {
 
     /* Bring the writes to the medium; NULL when the device writes through. */
     int (*sync)(void *ctx);
+
+    /*
+     * The door of the writes (ADR 0041 §2). A medium whose bytes belong to
+     * somebody else opens its writes only when a mount asks for them and
+     * the rule of kernel/volume.c says yes; the driver keeps the door
+     * closed until this call, and a driver without a door leaves the field
+     * NULL. The call answers KERR_NOTSUP from the layers above a device
+     * that has none, so a caller may ask every device the same question.
+     *
+     * A partition, a view and a cache forward the call to the medium below
+     * them: the mounted device is not the one the controller registered.
+     */
+    int (*writes)(void *ctx, bool open);
 };
 
 /*
@@ -149,6 +162,59 @@ int k_blockdev_register_cached_sized(const struct k_blockdev *dev, bool write_ba
                                      k_size_t sectors);
 
 /*
+ * A view of a device at a grain coarser than the medium's sector (ADR 0042).
+ *
+ * The sector of a device is a fact of the medium: a platter moves 512 bytes,
+ * the flash of the board erases a page of 4096. The grain of a *volume* is a
+ * fact of its format, and the two are not the same number: an ext2 volume of
+ * 4096-byte blocks on a disk of 1 KiB sectors is one block per command of the
+ * medium, and the block layer should hear one operation of 4 KiB and not four
+ * of 1 KiB - the lock, the lookup of the cache and the copy are paid once.
+ *
+ * The view is that device: the sector of the volume over the sector of the
+ * medium. It is not an entry of the table - the table is the machine's
+ * devices and a volume is not one of them - so /proc and the shell list the
+ * medium and not the grain a filesystem reads it at. The filesystem owns the
+ * structure and opens it when its superblock names a grain the medium does
+ * not have; the memory of the view is the caller's and nothing is allocated.
+ *
+ * `sector_size` has to be a multiple of the sector of the medium and larger
+ * than it; the view covers the whole sectors of the medium it can name
+ * (`medium->sectors / factor` of them) and the tail of the medium is not the
+ * view's. A view of the grain of the medium is the medium itself and is
+ * refused.
+ */
+struct k_blockdev_view {
+    struct k_blockdev dev; /* the device a filesystem mounts; its name is the medium's */
+    struct k_blockdev_ops ops;
+    const struct k_blockdev *medium;
+    k_u32_t factor; /* the sectors of the medium in one of the view */
+
+    /*
+     * What crossed the view: the operations of the block layer at the grain of
+     * the volume and the sectors of the medium they became. The counters are
+     * the measurement of the test that asks what a grain costs; no code
+     * decides anything by them, and the close of the view forgets them.
+     */
+    k_u64_t reads;
+    k_u64_t writes;
+    k_u64_t sectors_read;
+    k_u64_t sectors_written;
+};
+
+int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *medium,
+                         k_u32_t sector_size);
+
+/* Forget a view. Nothing is given back: the structure is the caller's. */
+void k_blockdev_view_close(struct k_blockdev_view *view);
+
+/* The device of the view, for a filesystem that mounts it. */
+static inline const struct k_blockdev *k_blockdev_view_device(const struct k_blockdev_view *view)
+{
+    return &view->dev;
+}
+
+/*
  * The state of the cache of a device, for a person who reads /proc. `dev` is
  * the device as the table hands it out or the structure the platform
  * registered; both answer the same. A device without a cache answers with
@@ -186,5 +252,19 @@ const struct k_blockdev *k_blockdev_at(k_size_t index);
 
 /* A device by name, NULL when there is none. */
 const struct k_blockdev *k_blockdev_find(const char *name);
+
+/*
+ * The door of the writes of a medium (ADR 0041 §2): whether the device has
+ * one, and the call that opens or closes it.
+ *
+ * A device the platform registered without a `writes` operation is a medium
+ * with no rule to ask - the memory of the machine, the flash of the board,
+ * the image of the tests - and k_blockdev_writes() answers KERR_NOTSUP for
+ * it: the caller may mount it for writing without a decision. A controller
+ * that found a disk of a person puts the operation there, and a mount that
+ * was not asked for the write leaves it closed.
+ */
+bool k_blockdev_gated(const struct k_blockdev *dev);
+int k_blockdev_writes(const struct k_blockdev *dev, bool open);
 
 #endif /* MICRO_OS_KERNEL_BLOCKDEV_H */

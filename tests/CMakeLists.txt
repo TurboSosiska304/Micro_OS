@@ -12,7 +12,9 @@ if(NOT ESP_PLATFORM)
         cases/test_port.c
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
+        cases/test_blockdev_view.c
         cases/test_root.c
+        cases/test_volume.c
         cases/test_render.c
         cases/test_boot.c
         cases/test_kmod.c
@@ -37,6 +39,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ui_wm.c
         cases/test_fb_ops.c
         cases/test_input_debounce.c
+        cases/test_input_hid.c
         cases/test_ps2.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
@@ -49,6 +52,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ksys.c
         cases/test_ksys_process.c
         cases/test_users.c
+        cases/test_session.c
         cases/test_libc.c
         cases/test_kshell.c
         cases/test_kshell_pipe.c
@@ -675,6 +679,10 @@ target_compile_definitions(microos_tests PRIVATE
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/strptime.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/glob.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/sscanf.c"
+        # The words of a command: the reader of the line of `popen` and
+        # `system` (src/words.c) has no door under it and is checked here; the
+        # two calls themselves are the gate of `make ports-smoke`.
+        "${CMAKE_SOURCE_DIR}/components/libc/user/src/words.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/stdlib.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/path.c"
         "${CMAKE_SOURCE_DIR}/components/libc/user/src/stat.c"

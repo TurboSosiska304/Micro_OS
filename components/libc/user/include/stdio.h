@@ -106,10 +106,14 @@ int vfscanf(FILE *stream, const char *format, va_list args);
 int setvbuf(FILE *stream, char *buffer, int mode, size_t size);
 
 /*
- * The pipe of a command. This system can start a program (`execve`) but not
- * hand it a stream: there is no `popen` in the library, and the two calls
- * answer `ENOSYS`. A source that compiles against them can say so to its
- * caller (src/unsupported.c).
+ * The stream of a command. A program of this system can make a pipe, fork a
+ * child and put the child's image over the program of `/bin` it names, so
+ * `popen` is the five calls of `src/command.c` and the stream is the end of
+ * the pipe. There is no `/bin/sh` behind it: the command is split into its
+ * words by `src/words.c` (the quoting of the shell, no `|`, `>` or `;`) and
+ * the first word is the program - at most eight words of 512 bytes, which is
+ * what one `execve` of the ABI carries. `pclose` closes the stream, waits for
+ * the child and answers the status of the command.
  */
 FILE *popen(const char *command, const char *mode);
 int pclose(FILE *stream);

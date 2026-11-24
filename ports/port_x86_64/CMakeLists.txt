@@ -33,6 +33,7 @@ set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
 set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
+set(TELNET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/telnet")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
 # The second filesystem of the machine (ADR 0009). On: the boot of the root
@@ -195,6 +196,7 @@ set(SETTINGS_SOURCES
     "${CONFIG_DIR}/src/config_cmd.c"
     "${CONFIG_DIR}/src/config_users.c"
     "${CONFIG_DIR}/src/config_login.c"
+    "${CONFIG_DIR}/src/config_session.c"
 )
 
 # The font of the console is the one of the PC (port_x86_64_font.h, Spleen
@@ -261,6 +263,18 @@ if(MICRO_OS_X86_NET)
         "${PKG_DIR}/src/pkg_index.c"
         "${PKG_DIR}/src/pkg_verify.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
+    )
+endif()
+
+# The shell over the air (ADR 0033, the second half of the accounts): the
+# port of this machine on the network of QEMU, with the accounts of /etc. It
+# is off by default and on in the machine of `make x86-net-smoke` and of
+# `make x86-all`, where there is a card to listen on.
+set(TELNET_SOURCES)
+if(MICRO_OS_TELNET)
+    list(APPEND TELNET_SOURCES
+        "${TELNET_DIR}/src/telnet_proto.c"
+        "${TELNET_DIR}/src/telnet_server.c"
     )
 endif()
 
@@ -485,6 +499,11 @@ add_libc_program(poll SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
 add_libc_program(mmap SOURCES "${LIBC_USER_DIR}/src/unistd_ext.c"
                               "${LIBC_USER_DIR}/src/stat.c")
 add_libc_program(big)
+
+# The keyboard as events (ADR 0040): the smoke test of the USB types a key and
+# reads the code and the edge of it out of /dev/input0, which is the promise
+# the two keyboards of the machine share.
+add_libc_program(keys SOURCES "${LIBC_USER_DIR}/src/usleep.c")
 
 # The lane of 1.8: the directory of the task is the kernel's (call 48), so a
 # program moves it and its child starts there; the heap of a program grows
@@ -1338,6 +1357,13 @@ set(SQLITE_LIBC_SOURCES
     "${LIBC_USER_DIR}/src/realpath.c"
     "${LIBC_USER_DIR}/src/strptime.c"
     "${LIBC_USER_DIR}/src/glob.c"
+    # The command of a shell (1.8): `popen`/`pclose` are the pipe, the fork
+    # and the `execve` of the child of `src/popen.c`, the words of the line
+    # are `src/words.c`, and `system` is the same without a stream. The shell
+    # of the release has a `.system` that reaches it.
+    "${LIBC_USER_DIR}/src/popen.c"
+    "${LIBC_USER_DIR}/src/system.c"
+    "${LIBC_USER_DIR}/src/words.c"
     "${LIBC_USER_DIR}/src/gettimeofday.c"
     "${LIBC_USER_DIR}/src/resource.c"
     "${LIBC_USER_DIR}/src/usleep.c"
@@ -1431,6 +1457,17 @@ add_libc_program(awk
             "${LIBC_USER_DIR}/src/assert.c"
             "${LIBC_USER_DIR}/src/format_float.c"
             "${LIBC_USER_DIR}/src/unsupported.c"
+            # The command of a shell (1.8): awk's `"cmd" | getline` is
+            # `popen` and its `close()` is `pclose`, and the two are the
+            # pipe, the fork and the `execve` of `src/popen.c` over the
+            # words of `src/words.c`. `src/unistd_ext.c` carries the calls
+            # they build on (fork, pipe, dup2, execvp, waitpid) and `stat`
+            # is what its `access()` asks of `src/stat.c`. `system` is not
+            # here: awk answers it in its own port layer with a sentence.
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/popen.c"
+            "${LIBC_USER_DIR}/src/words.c"
     COMPILE_OPTIONS -DULIBC_WITH_FLOAT -include "${AWK_DIR}/port/awk_port.h"
         -Wno-unused-parameter -Wno-unused-but-set-variable -Os
 )
@@ -1448,9 +1485,9 @@ add_executable(microos64
     ${HASH_SOURCES}
     ${NET_SOURCES}
     ${PKG_SOURCES}
+    ${TELNET_SOURCES}
     src/boot64.S
     src/kmain.c
-    src/shell.c
     src/port_x86_64.c
     src/console.c
     src/vga.c
@@ -1460,6 +1497,10 @@ add_executable(microos64
     src/font_spleen.c
     src/pci.c
     src/ps2.c
+    src/xhci.c
+    src/usb_storage.c
+    src/usb_net.c
+    src/netdev.c
     src/fbdev.c
     src/inputdev.c
     src/gdt.c
@@ -1476,6 +1517,8 @@ add_executable(microos64
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c
+    src/ahci.c
+    src/nvme.c
     src/virtio.c
     src/virtio_blk.c
     src/virtio_net.c
@@ -1496,6 +1539,7 @@ target_include_directories(microos64 PRIVATE
     "${PROCFS_DIR}/include"
     "${DEVFS_DIR}/include"
     "${CONFIG_DIR}/include"
+    "${TELNET_DIR}/include"
     "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
     # The hash of /etc/shadow and of a signed image (components/config,

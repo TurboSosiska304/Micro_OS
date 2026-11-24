@@ -160,7 +160,19 @@ ssize_t readlink(const char *path, char *buffer, size_t size)
 
 int pipe(int fds[2])
 {
-    return posix((int)__ulibc_syscall6(KSYS_PIPE, (long)(unsigned long)fds, 0, 0, 0, 0, 0));
+    int rc = posix((int)__ulibc_syscall6(KSYS_PIPE, (long)(unsigned long)fds, 0, 0, 0, 0, 0));
+
+    if (rc != 0) {
+        return rc;
+    }
+
+    /* The ends are never the numbers of the console: a pipe that took 1 or 2
+     * of a program with no terminal would send its output into itself
+     * (src/syscall.c). */
+    fds[0] = __ulibc_fd_away(fds[0], fds[1]);
+    fds[1] = __ulibc_fd_away(fds[1], fds[0]);
+
+    return 0;
 }
 
 int dup2(int oldfd, int newfd)

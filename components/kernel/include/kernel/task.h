@@ -42,6 +42,22 @@ typedef enum {
 typedef void (*task_entry_fn)(void *arg);
 
 /*
+ * The kinds of terminal a session runs on: the console of the machine and a
+ * session of telnet (ADR 0033). Zero is a task that is not a session, which
+ * is every task of the system but the ones `who` names.
+ */
+#define TASK_TTY_NONE 0u
+#define TASK_TTY_CONSOLE 1u
+#define TASK_TTY_TELNET 2u
+
+/*
+ * The terminal of a task (kernel/console.h): NULL for the console of the
+ * port, which is what every task has. A session of telnet sets one so that
+ * the commands it runs read and write its socket.
+ */
+struct k_terminal;
+
+/*
  * The maximum number of the open files of a task. Sixteen slots hold the
  * journal and the tables of a program like SQLite, the stages of a pipeline
  * with their redirects, and the files `xargs` keeps open at once, while the
@@ -89,6 +105,15 @@ struct task {
      */
     k_u32_t uid;
     k_u32_t gid;
+    /*
+     * The session of the task: the kind of terminal it is the session of,
+     * and the terminal itself. A task with TASK_TTY_NONE is not a session
+     * and `who` does not name it; the terminal is NULL for the console of
+     * the port (kernel/console.h), so a task of telnet is the one case with
+     * a terminal of its own.
+     */
+    struct k_terminal *terminal;
+    k_u8_t tty;
     char name[TASK_NAME_MAX];
     task_state_t state;
     task_state_t wake_state; /* state to restore when a sleeping task wakes up */
@@ -249,6 +274,16 @@ void task_set_gid(struct task *t, k_u32_t gid);
  */
 void task_set_creds(struct task *t, k_u32_t uid, k_u32_t gid);
 bool task_is_root(const struct task *t);
+
+/*
+ * The session of a task: `tty` is TASK_TTY_NONE for a task that is not one,
+ * and the name is a word for `who` and /proc/sessions. A session is marked by
+ * the task itself when it starts (the server that made it does not know when
+ * the child runs).
+ */
+void task_set_tty(struct task *t, k_u8_t tty);
+k_u8_t task_get_tty(const struct task *t);
+const char *task_tty_name(k_u8_t tty);
 
 /*
  * A child takes the credentials of its parent. task_create() already copies

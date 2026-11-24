@@ -149,6 +149,7 @@ static void test_input_names(void)
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_POINTER_X), "key.pointer.x");
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_POINTER_Y), "key.pointer.y");
     KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_BUTTON_LEFT), "key.button.left");
+    KT_CHECK_STR_EQ(k_input_key_name(K_INPUT_KEY_POINTER_WHEEL), "key.pointer.wheel");
 
     KT_CHECK_INT_EQ(K_INPUT_KEY_A, 1);
     KT_CHECK_INT_EQ(K_INPUT_KEY_Z, 26);
@@ -160,7 +161,8 @@ static void test_input_names(void)
     KT_CHECK_INT_EQ(K_INPUT_KEY_POINTER_X, 79);
     KT_CHECK_INT_EQ(K_INPUT_KEY_POINTER_Y, 80);
     KT_CHECK_INT_EQ(K_INPUT_KEY_BUTTON_LEFT, 81);
-    KT_CHECK_INT_EQ(K_INPUT_KEY_COUNT, 82);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_POINTER_WHEEL, 82);
+    KT_CHECK_INT_EQ(K_INPUT_KEY_COUNT, 83);
 
     /* A number that is not a key of the contract reads as the empty name and
      * not as a key of somebody else. */

@@ -22,6 +22,7 @@
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/partition.h"
+#include "kernel/volume.h"
 #include "kernel/vfs.h"
 
 /*
@@ -321,8 +322,22 @@ const char *k_root_type(const char *device)
      * The sentence of a volume no type of the image knows: the partition and
      * the bytes, because a person can tell from the four bytes whether the
      * volume is of a format this machine does not have or of one it failed
-     * to read.
+     * to read. A medium of another system is named for what it is - the rule
+     * of ADR 0041 refuses it at the mount - and a medium the rule does not
+     * know is named by its first bytes.
      */
+    {
+        struct k_volume_id volume;
+
+        if (k_volume_identify(dev, &volume) == 0 && volume.kind == K_VOLUME_FOREIGN &&
+            volume.format != NULL) {
+            kerror("root: %s carries the volume of another system (%s), this system did not "
+                   "make it and does not mount it",
+                   device, volume.format);
+            return NULL;
+        }
+    }
+
     if (read_bytes(dev, 0, head, sizeof(head)) != 0) {
         kerror("root: the volume of %s cannot be read", device);
     } else {
@@ -357,6 +372,16 @@ int k_root_mount(const char *device, const char **type)
     }
 
     kinfo("root: the root is %s on %s", found, device);
+
+    /*
+     * The writes are a decision of the mount and of the rule (ADR 0041 §2):
+     * the root is in the tree now, so its own /etc/volumes can be read, and
+     * a volume of this system that the list names opens the door of the
+     * controller. A refusal leaves the root mounted and read-only - the
+     * state of an ext2 root, which this image can read and this rule does
+     * not write - and the sentence of the refusal is in the log.
+     */
+    (void)vfs_mount_root_writes(K_ROOT_POINT, device);
 
     return 0;
 }

@@ -293,7 +293,11 @@ def check(output: str, firmware: str, media: str) -> list:
     expect("every command is answered", all(replies), "a command got no answer")
     expect(
         "uname names the system of the image",
-        re.search(r"MicroOS \d+\.\d+\.\d+ x86_64", replies[0]) is not None,
+        # The suffix of a candidate is part of the name (`1.8.0-rc3`): the
+        # first release that carried its own medium was a candidate, and this
+        # check met it for the first time with nothing to match it.
+        re.search(r"MicroOS \d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)? x86_64", replies[0])
+        is not None,
         replies[0],
     )
     expect(

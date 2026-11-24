@@ -119,6 +119,21 @@ int mfs_vfs_mount(const char *point, const char *device)
 
     rc = mfs_mount(dev);
     if (rc != MFS_OK) {
+        /*
+         * A medium with the door of ADR 0041 is never formatted by a mount:
+         * the rule does not make a volume on a disk it did not make, and a
+         * blank disk of a person is refused instead of claimed. The door is
+         * closed here (a mount that asked for the writes opens it after the
+         * rule said yes), and the format of such a volume is the act of a
+         * tool that names it.
+         */
+        if (k_blockdev_gated(dev)) {
+            kerror("mfs: the volume of '%s' cannot be mounted (rc=%d), this system does not "
+                   "format a disk it did not make",
+                   device, rc);
+            return (rc == MFS_ENOENT) ? MFS_ENOENT : MFS_EINVAL;
+        }
+
         if (!volume_is_fresh(dev)) {
             kerror("mfs: the volume of '%s' cannot be mounted (rc=%d), the data is kept", device,
                    rc);

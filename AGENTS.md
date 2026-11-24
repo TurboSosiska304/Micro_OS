@@ -243,3 +243,36 @@ Open items from `docs/roadmap.md`:
   `make test-smp`/`test-tsan`/`soak-host`). What is still open - the I/O
   APIC, the wake IPI of the scheduler, the FPU state, a guard page - is the
   K8 table of `docs/debts.md`; the decision is ADR 0012.
+
+## Tool economy (measured, 24 November 2026)
+
+A day of the autopilot, 171 agent sessions: 38 093 tool calls and **69 MB of
+tool output** (about 17 M tokens). Where it went, and what to do about it:
+
+| Tool | Calls | Output | Median | What it means |
+|---|---|---|---|---|
+| `shell` | 27 154 | 48 MB | 0.8 KB | mostly `make` and QEMU logs, one line each |
+| `read` | 2 503 | 19.6 MB | 4.4 KB | whole files, and **64 % of the bytes are in calls over 10 KB** |
+| `grep` (the tool) | 54 | 0.1 MB | 0.9 KB | cheap, and underused |
+| a `grep` inside `shell` | — | 18 MB (26 %) | — | filtering a log that is bigger than the answer |
+
+The grep *tool* costs nothing. What costs is reading a file whole and dumping a
+log without a filter. The rules that follow from the table:
+
+* **`grep -n` first, `read` with `offset`/`limit` after**: a file of 400 lines
+  read whole is 20 KB; the three lines a question is about are 0.3 KB.
+* **Cap at the source**: `| tail -5`, `grep -m 3`, `grep -c`. A build log is
+  never the answer, the last line of it is. `make ... 2>&1 | tail -3` beats
+  `make ... > /tmp/log; grep -aE ... /tmp/log`.
+* **The `grep` tool with `include` and `limit`** rather than `grep -r` in a
+  shell: the first filters by glob and caps, the second walks `build*/`,
+  `dist/` and the vendored trees.
+* **One script per task, not ten calls**: a heredoc that does the work costs
+  one command text; ten small calls cost ten, each re-sent with the context.
+* **A subagent for exploration**, whose report is the only thing that comes
+  back, and whose own reads stay in its context.
+
+Serena (`opencode.jsonc`, clangd through `compile_commands.json`) answers a
+symbol question in ~1 KB and is the right tool for "where is this defined";
+it needs an index per checkout, and the worktree of a lane has none until it
+builds - which is why the day above was grep and not Serena.

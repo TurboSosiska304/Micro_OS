@@ -22,7 +22,31 @@
  * header of the frame and no VLAN tag. */
 #define PORT_X86_64_FRAME_MAX 1518u
 
-/* The name of the device, "virtio0", or NULL when the machine has none. */
+/*
+ * The operations of one controller under the stack. A driver registers one
+ * of these when it brings its device up (`src/netdev.c`), and the calls
+ * below are the stack's view of the first one that did: the virtio card of
+ * the PCI bus or the wire of the USB (ADR 0040). A machine has one network
+ * device of the release, and a driver that arrives second does not take the
+ * stack from the one that is there.
+ */
+struct port_x86_64_nic_ops {
+    const char *name;
+    bool (*mac)(k_u8_t mac[6]);
+    bool (*link)(void);
+    bool (*receive)(void *buf, k_size_t size, k_size_t *length);
+    bool (*send)(const void *frame, k_size_t length);
+    k_u64_t (*rx_frames)(void);
+    k_u64_t (*tx_frames)(void);
+    k_u64_t (*rx_dropped)(void);
+};
+
+/* Offer a controller to the stack. The first registration wins; the pointer
+ * has to live as long as the system does. */
+void port_x86_64_nic_register(const struct port_x86_64_nic_ops *ops);
+
+/* The name of the device, "virtio0" or "usbnet0", or NULL when the machine
+ * has none. */
 const char *port_x86_64_nic_name(void);
 
 /* True when the device was found, brought up and has its queues. */

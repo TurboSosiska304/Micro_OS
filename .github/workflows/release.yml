@@ -66,17 +66,26 @@ jobs:
       # before either build.
       # xorriso and limine write the CD of a BIOS and of a firmware, clang and
       # lld-link build the loader of a firmware, and sfdisk's table of the
-      # stick comes with util-linux. They are installed **here** and not in
-      # the step of the medium: an apt-get that replaces python3 after the
-      # environment of ESP-IDF is prepared breaks the build of the firmware
-      # (the module idf_component_manager disappears), which is what the
-      # release of 1.7.0 found on its own tag.
+      # stick comes with util-linux. They are asked for **here** and not in
+      # the step of the medium, so that nothing installs a package after the
+      # environment of ESP-IDF is prepared: an apt-get that replaces python3
+      # under it breaks the build of the firmware (the module
+      # idf_component_manager disappears), which is what the release of 1.7.0
+      # found on its own tag - and of 1.8.0-rc2, where the tools were asked
+      # for by name and `limine` is not in the sources of this image: an
+      # install that cannot find one of its packages fails the step and every
+      # thing after it. The four packages of the medium are asked for one by
+      # one and a missing one is a sentence, not a failure: the medium of the
+      # release is then built by the person and uploaded (docs/debts.md, K18).
       - name: the host tools of both machines
         run: |
           apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-              cmake ninja-build build-essential e2fsprogs dosfstools \
-              xorriso limine clang lld
+              cmake ninja-build build-essential e2fsprogs dosfstools
+          for tool in xorriso limine clang lld; do
+              apt-get install -y -qq --no-install-recommends "$tool" || \
+                  echo "the medium of the release lacks $tool on this image"
+          done
 
       # The steps of Actions run through docker exec and miss the
       # entrypoint of the image, the one that sources export.sh — the
@@ -121,6 +130,7 @@ jobs:
         run: |
           make x86-iso || echo "the image is not in this bundle: xorriso or limine is missing"
           make uefi-stick || echo "the stick is not in this bundle: clang or lld-link is missing"
+          ls -l build-x86-iso/microos.iso build-uefi/stick.img 2>/dev/null || true
 
       # The checks of the image are not part of the release gate - the package
       # of the firmware is not promised to the container - but a release log

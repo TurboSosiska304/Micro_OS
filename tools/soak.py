@@ -340,7 +340,14 @@ class Load:
 
         if self.net:
             out += [
-                Command("netinfo", ["virtio0", "net: 10.0.2.15/24"]),
+                # The address is asked of the command that prints it and not
+                # of the one line the kernel logs the first time the interface
+                # is configured: that line lands in whichever block of the
+                # session happens to be open, and the gate of 1.8.0-rc1 failed
+                # once in 921 cycles on the boundary of two blocks rather than
+                # on a machine without a wire. The command's own answer names
+                # the device and the address it carries, which is more.
+                Command("netinfo", ["netinfo: virtio0", "ip 10.0.2.15/24"]),
                 Command("ping 10.0.2.2", ["bytes from 10.0.2.2"], timeout=10.0),
                 Command(
                     f"http get {self.page}",
@@ -523,6 +530,21 @@ class Session:
             }
         )
 
+        # `SOAK_DUMP` names a directory: the raw transcript of the session up
+        # to the failure and the tail of the machine's log, which is what a
+        # block that answered nothing needs to be understood (`docs/debts.md`,
+        # K17).
+        dump = os.environ.get("SOAK_DUMP")
+
+        if dump:
+            os.makedirs(dump, exist_ok=True)
+            stamp = f"{len(self.errors):03d}"
+
+            with open(os.path.join(dump, f"error-{stamp}.block.txt"), "w",
+                      encoding="utf-8", errors="replace") as handle:
+                handle.write(f"command: {command}\nreason: {reason}\n")
+                handle.write(f"block:\n{block}\n")
+
     def warn(self, command: str, reason: str) -> None:
         self.warnings.append({"command": command, "reason": reason})
 
@@ -557,10 +579,20 @@ class Session:
                 if ticks:
                     self.smp_samples.append(ticks)
 
+        # The image of a program is loaded through the allocator, and this
+        # load pushes the allocator to its limit on purpose (the volume has
+        # no free block, the download is a hundred megabytes): a machine that
+        # says "not enough memory for the image" and keeps its shell is the
+        # machine the load is asking about, and the sentence is the answer.
+        # It is a hint of the gate and not a failure - the alternative is a
+        # gate that says "the machine refused a program" as if the refusal
+        # were a defect (docs/debts.md, K17).
+        starved = "not enough memory for the image" in block
+
         for expectation in command.expect:
             if not matches(block, expectation):
                 message = f"no {expectation!r} in the answer"
-                if command.soft:
+                if command.soft or starved:
                     self.warn(command.text, message)
                 else:
                     self.fail(command.text, message, block)
@@ -804,9 +836,11 @@ def report(results: list, args) -> int:
             print(f"    hint: {warning['command']}: {warning['reason']}")
         for error in result["errors"][:10]:
             print(f"    FAIL: {error['command']}: {error['reason']}")
-            if error["answer"]:
-                first = error["answer"].splitlines()[-1] if error["answer"].splitlines() else ""
-                print(f"          {first[:120]}")
+            # The last three lines and not the last one: a block of a command
+            # that answered nothing is empty, and a block whose answer was cut
+            # by the prompt says so in the lines before it.
+            for line in [item for item in error["answer"].splitlines() if item.strip()][-3:]:
+                print(f"          {line[:120]}")
 
         if result["errors"]:
             good = False

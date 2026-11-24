@@ -1,15 +1,21 @@
 /*
- * Micro OS — `login`, `su` and `id`: the console and the accounts.
+ * Micro OS — `login`, `su` and `id`: the door of a session.
  *
- * The console of this machine is the shell, and the shell starts as root: the
- * board and the machine of QEMU have no getty, no `init` that reads a line
- * before the shell and no program of a console of its own. So `login` does not
- * start a shell — one is already running — it asks for the name and the
- * password, and hands the running shell to that user: the uid and the gid of
- * the task move, the home becomes its directory, and every program the person
- * starts from then on inherits the identity. The prompt does not change, and
- * the line after the login says who the shell is; `id` says it again at any
- * moment.
+ * The console of this machine has no getty and no program of a console of
+ * its own: init makes a session task (config/session.h), the session reads
+ * the lines of its terminal and runs them through the shell of the kernel.
+ * `login` therefore does not start a shell — one is running — it asks for
+ * the name and the password of the terminal of the task and hands the
+ * session to that user: the uid and the gid of the task move, the home
+ * becomes its directory, and every program the person starts from then on
+ * inherits the identity. The prompt does not change, and the line after the
+ * login says who the shell is; `id` says it again at any moment.
+ *
+ * The terminal is the one of the task and not the console of the machine: a
+ * session of telnet reads its password from the socket it came in on, which
+ * is the defect of 1.6 that the cleanroom wrote down. `session_read_line()`
+ * echoes to the same terminal unless the line is a secret, so a password is
+ * not repeated on a screen and not in the transcript of a client.
  *
  * `login` is the door of a console that has no session, so only root runs it:
  * a shell that became a user is already somebody's session, and the way to
@@ -17,7 +23,7 @@
  * account it becomes. A task has one credential and no saved uid (ADR 0005,
  * docs/syscall-abi.md), so the shell cannot climb back with `setuid`; it
  * climbs with `su` and the password of root, which is a privileged act of the
- * console and not a program of the disk. That is the price of one credential
+ * session and not a program of the disk. That is the price of one credential
  * and the reason the door is the console and not a setuid bit in an image
  * (ADR 0033).
  */
@@ -25,15 +31,10 @@
 
 #include <string.h>
 
-#include "kernel/console.h"
+#include "config/session.h"
 #include "kernel/log.h"
 #include "kernel/task.h"
 #include "kshell/kshell.h"
-
-/* The attempts of a password at `login` before the door closes, and the
- * longest line a person types here. */
-#define LOGIN_ATTEMPTS 3
-#define LOGIN_LINE_MAX 64
 
 /* The sentences of a refusal. They are one place, so that `login` and `su`
  * cannot say different things about the same file. */
@@ -59,143 +60,12 @@ static void say_error(const char *command, int rc)
     }
 }
 
-/*
- * A line of the console. The prompt is written, the characters are read one
- * at a time and echoed unless `secret` is true — a password is not repeated on
- * the screen and not in the log of a telnet client. False when the console is
- * closed (the end of the input), which is not a wrong answer.
- */
-static bool console_line(const char *prompt, char *buf, k_size_t size, bool secret)
-{
-    k_size_t len = 0;
-
-    kshell_printf("%s", prompt);
-
-    for (;;) {
-        int c = k_console_getchar();
-
-        if (c < 0) {
-            buf[len] = '\0';
-            kshell_printf("\n");
-            return false;
-        }
-
-        if (c == '\n' || c == '\r') {
-            buf[len] = '\0';
-            kshell_printf("\n");
-            return true;
-        }
-
-        if (c == '\b' || c == 127) {
-            if (len > 0) {
-                len--;
-                if (!secret) {
-                    k_console_write("\b \b", 3);
-                }
-            }
-            continue;
-        }
-
-        if (c == 3) { /* Ctrl+C: the line is dropped and the door closes */
-            buf[0] = '\0';
-            kshell_printf("\n");
-            return false;
-        }
-
-        if (len + 1 < size) {
-            char typed = (char)c;
-
-            buf[len++] = typed;
-            if (!secret) {
-                k_console_write(&typed, 1);
-            }
-        }
-    }
-}
-
-/*
- * An answer of this file that is not one of the codes of config/users.h: the
- * person gave no name, the sentence is already on the console, and the caller
- * must not add another one.
- */
-#define LOGIN_ECANCEL (-100)
-
-/* A name from the command line or from the console; false when there is
- * none. */
-static bool ask_name(char *name, k_size_t size)
-{
-    char line[LOGIN_LINE_MAX];
-
-    if (!console_line("login: ", line, sizeof(line), false)) {
-        return false;
-    }
-
-    if (line[0] == '\0') {
-        /* A name of no letters is not a name that does not fit: the person
-         * pressed Enter and the shell says what it wanted. */
-        kshell_printf("login: a name is needed\n");
-        return false;
-    }
-
-    if (strlen(line) + 1 > size) {
-        kshell_printf("login: the name does not fit\n");
-        return false;
-    }
-
-    memcpy(name, line, strlen(line) + 1);
-
-    return true;
-}
-
-/*
- * The name and the password of a person, three times. The name is asked once
- * and the password again after a wrong one, as the console of a Unix-like
- * system does, and the third failure is the last.
- */
-static int ask_credentials(const char *given, struct user_account *account)
-{
-    char name[USERS_NAME_MAX];
-    char password[LOGIN_LINE_MAX];
-    int attempt;
-    int rc = USERS_EAUTH;
-
-    if (given != NULL) {
-        if (strlen(given) + 1 > sizeof(name)) {
-            kshell_printf("login: the name does not fit\n");
-            return USERS_ENOENT;
-        }
-        memcpy(name, given, strlen(given) + 1);
-    } else if (!ask_name(name, sizeof(name))) {
-        return LOGIN_ECANCEL;
-    }
-
-    for (attempt = 0; attempt < LOGIN_ATTEMPTS; attempt++) {
-        if (!console_line("password: ", password, sizeof(password), true)) {
-            return USERS_EAUTH;
-        }
-
-        rc = users_authenticate(name, password, account);
-        if (rc == USERS_OK) {
-            return USERS_OK;
-        }
-        if (rc != USERS_EAUTH) {
-            return rc; /* a missing account or a broken file: no retry helps */
-        }
-
-        /* The last failure is said by the caller, so the person sees one
-         * sentence per attempt and not two for the third. */
-        if (attempt + 1 < LOGIN_ATTEMPTS) {
-            kshell_printf("login: authentication failure\n");
-        }
-    }
-
-    return USERS_EAUTH;
-}
-
 static int cmd_login(int argc, char **argv)
 {
     struct task *self = task_self();
     struct user_account account;
+    char name[USERS_NAME_MAX];
+    const char *given = NULL;
     int rc;
 
     if (argc > 2) {
@@ -208,10 +78,42 @@ static int cmd_login(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    rc = ask_credentials((argc == 2) ? argv[1] : NULL, &account);
+    if (argc == 2) {
+        given = argv[1];
+    } else {
+        /*
+         * A name typed at the prompt of the command is one answer: an empty
+         * one is a person who wanted the shell back, and not a getty that
+         * asks again until a name comes. A session of telnet has the other
+         * rule (session_authenticate with no name asks again), because the
+         * terminal there belongs to that login and not to a shell that is
+         * already running.
+         */
+        bool too_long = false;
+
+        if (!session_read_line("login: ", name, sizeof(name), false, &too_long)) {
+            return KSHELL_ERROR;
+        }
+
+        if (too_long) {
+            kshell_printf("login: the name does not fit\n");
+            return KSHELL_ERROR;
+        }
+
+        if (name[0] == '\0') {
+            kshell_printf("login: a name is needed\n");
+            return KSHELL_ERROR;
+        }
+
+        given = name;
+    }
+
+    rc = session_authenticate(given, &account, SESSION_FAIL_DELAY_MS);
     if (rc != USERS_OK) {
-        /* No name at all: the sentence of the prompt is the answer. */
-        if (rc != LOGIN_ECANCEL) {
+        /* A wrong answer and a name that does not fit are sentences the
+         * dialogue has already said; a broken file is not, and the person
+         * who reads the message of the file needs it once. */
+        if (rc != USERS_EAUTH && rc != USERS_ENOENT) {
             say_error("login", rc);
         }
         return KSHELL_ERROR;
@@ -233,9 +135,10 @@ static int cmd_su(int argc, char **argv)
 {
     struct task *self = task_self();
     struct user_account account;
-    char password[LOGIN_LINE_MAX];
+    char password[SESSION_LINE_MAX];
     const char *name = "root";
     bool home = false;
+    bool too_long = false;
     int rc;
     int i;
 
@@ -267,11 +170,16 @@ static int cmd_su(int argc, char **argv)
     }
 
     if (!task_is_root(self) && task_get_uid(self) != account.uid) {
-        if (!console_line("password: ", password, sizeof(password), true)) {
+        bool ok;
+
+        if (!session_read_line("password: ", password, sizeof(password), true, &too_long)) {
             return KSHELL_ERROR;
         }
 
-        if (users_authenticate(account.name, password, &account) != USERS_OK) {
+        ok = !too_long && users_authenticate(account.name, password, &account) == USERS_OK;
+        memset(password, 0, sizeof(password));
+
+        if (!ok) {
             kshell_printf("su: authentication failure\n");
             return KSHELL_ERROR;
         }
@@ -327,8 +235,8 @@ int users_register(void)
                   "a wrong password after the third answer closes the door. The uid and the\n"
                   "gid of the shell become the ones of the account and the home directory\n"
                   "becomes the directory of the shell, so every program started from then on\n"
-                  "runs as that user. Only root may open a session, and the way back to root\n"
-                  "is a reboot: this system has one credential per task.\n",
+                  "runs as that user. Only root may open a session; the way back to root is\n"
+                  "`logout`, which ends the session and gives the console a new one.\n",
     };
     static const struct kshell_help su_help = {
         .summary = "become another user of /etc/passwd",
@@ -336,7 +244,8 @@ int users_register(void)
         .detail = "Without a name the user is root. Root becomes anybody without a password;\n"
                   "a user is asked for the password of the account it becomes. `-` (or `-l`)\n"
                   "makes the home directory of the account the directory of the shell, as a\n"
-                  "login would. The way back to root from a user is a reboot.\n",
+                  "login would. The way back to root from a user is `logout` on the console\n"
+                  "or the password of root under `su`.\n",
     };
     static const struct kshell_help id_help = {
         .summary = "the user of this shell",

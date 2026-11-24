@@ -103,6 +103,67 @@ long __ulibc_syscall6(long number, long a0, long a1, long a2, long a3, long a4, 
 #endif /* MOX_ARCH_XTENSA */
 }
 
+/*
+ * The numbers of the console, and a descriptor that must not take one of
+ * them.
+ *
+ * The rule of this system is Linux's: descriptors 1 and 2 are the console
+ * **while they are not open as a file** (the port writes them to the console
+ * itself). A program at the prompt has no terminal of its own behind them, so
+ * `pipe()` - the two lowest free numbers - and a bare `open()` hand out 1 and
+ * 2 first, and a program of POSIX that then writes its answer "to standard
+ * output" writes into its own file while the person at the console sees
+ * nothing (`tee` of sbase does exactly that). This call is the one place the
+ * library answers it: a new descriptor that lands on 1 or 2 moves to the
+ * lowest free number above them, and the console slot is left to the
+ * fallback. A caller that *asks* for 1 or 2 - `dup2(fd, 1)` of a redirect -
+ * is obeyed, because that is the caller's decision and not a number a call
+ * chose.
+ *
+ * Whether a number of the table is free is the question `fstat` answers: a
+ * read of a descriptor that is open for writing answers `EBADF` as a closed
+ * one does (`pipe()` of this system answers a written end and a read end of
+ * one object), while the record of an open descriptor is answered for every
+ * kind of it - a pipe is `ESPIPE` and an open file is a stat. The probe is the
+ * raw door, so the caller's `errno` is not touched.
+ */
+static int descriptor_free(int fd)
+{
+    struct vfs_statx info;
+    long rc = __ulibc_syscall6(KSYS_FSTAT, fd, (long)(uintptr_t)&info, 0, 0, 0, 0);
+
+    return rc == -EBADF;
+}
+
+int __ulibc_fd_away(int fd, int other)
+{
+    int candidate;
+
+    if (fd != ULIBC_STDOUT && fd != ULIBC_STDERR) {
+        return fd;
+    }
+
+    for (candidate = ULIBC_STDOUT + 1; candidate < TASK_MAX_FDS; candidate++) {
+        if (candidate == other) {
+            continue;
+        }
+        if (!descriptor_free(candidate)) {
+            continue;
+        }
+        if (__ulibc_syscall6(KSYS_DUP2, fd, candidate, 0, 0, 0, 0) < 0) {
+            return fd;
+        }
+        (void)__ulibc_syscall6(KSYS_CLOSE, fd, 0, 0, 0, 0, 0);
+
+        return candidate;
+    }
+
+    /* Every number above the console is taken: the descriptor keeps the one
+     * the kernel chose, and a program with the whole table in use has no room
+     * for another descriptor anyway. */
+    return fd;
+}
+
 /* The flags of the library to the flags of the call. The two sets are not the
  * same numbers: POSIX puts O_CREAT at 0100, the ABI of this kernel at 0x0100,
  * and the library is the one place where the two meet. */
@@ -149,14 +210,24 @@ int open(const char *path, int flags, ...)
     {
         long fd = __ulibc_result(
             __ulibc_syscall6(KSYS_OPEN, (long)(uintptr_t)resolved, open_flags(flags), 0, 0, 0, 0));
+        int number;
+
+        if (fd < 0) {
+            return (int)fd;
+        }
+
+        /* 1 and 2 are the console of the system while they are not open as a
+         * file, and a file that took one of them would receive what the
+         * program writes to its console (`__ulibc_fd_away` above). */
+        number = __ulibc_fd_away((int)fd, -1);
 
 #ifndef MOX_ARCH_XTENSA
-        if (fd >= 0 && (flags & ULIBC_O_DIRECTORY) != 0) {
-            __ulibc_dir_remember((int)fd, resolved);
+        if ((flags & ULIBC_O_DIRECTORY) != 0) {
+            __ulibc_dir_remember(number, resolved);
         }
 #endif
 
-        return (int)fd;
+        return number;
     }
 }
 

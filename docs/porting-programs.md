@@ -81,8 +81,8 @@ tends to need and the tree has:
 | Header | What is there |
 |---|---|
 | `<string.h>` | `strlen`, `strcmp`, `strncmp`, `strcoll`, `strstr`, `strspn`, `strcspn`, `strpbrk`, `strcpy`, `strncpy`, `strcat`, `strchr`, `strrchr`, `strdup` (a file of its own: it allocates), `memcpy`, `memmove`, `memset`, `memcmp`, `memchr` |
-| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `getenv`/`environ`, `setenv`, `unsetenv`, `putenv`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
-| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf`, `vfscanf`, and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
+| `<stdlib.h>` | `malloc`, `calloc`, `realloc`, `free`, `exit`, `abort`, `system` (1.8: a fork, the program of the first word of the line and its status; there is no shell), `getenv`/`environ`, `setenv`, `unsetenv`, `putenv`, `strtod`, `strtol`, `strtoul`, `strtoll`, `strtoull`, `atoi`, `atol`, `atof`, `abs`, `labs`, `qsort`, `EXIT_SUCCESS`, `EXIT_FAILURE` |
+| `<stdio.h>` | `printf`, `vprintf`, `fprintf`, `vfprintf`, `sprintf`, `snprintf`, `vsnprintf`, `puts`, `putchar`, `perror`, `getchar`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf`, `vfscanf`, `popen`/`pclose` (1.8: a pipe, a fork and the `execve` of the first word of the command, because there is no `/bin/sh`), and the streams `fopen`, `fdopen`, `freopen`, `tmpfile` (a failure: no `/tmp`), `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `ungetc`, `fputc`, `fgets`, `fputs`, `feof`, `ferror`, `clearerr`, `fflush`, `fseek`, `ftell`, `rewind`, `fileno`, `setvbuf` (accepted, no buffer), `stdin`, `stdout`, `stderr` |
 | `<sys/stat.h>` | `struct stat` with the `S_IS*` macros, `stat`, `lstat` (the same call: no links), `fstat` (the position of the end), `chmod`, `umask`. The record of the ABI itself is `ulibc_stat_call`, which fills `struct vfs_stat` |
 | `<dirent.h>` | `DIR`, `struct dirent`, `opendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight entries of the call `ulibc_readdir` |
 | `<libgen.h>` | `basename`, `dirname` |
@@ -290,11 +290,13 @@ The port layer answers two different questions:
   `bsearch`, `popen` and `pclose` are the library of a program's files and
   the program links them, because a name has one implementation in the tree;
 * the platform: `system` says on the error descriptor that the machine has no
-  shell and answers `-1`; `"cmd" | getline` and `print | "cmd"` reach the
-  `popen` of the library, which answers NULL with `ENOSYS`, so the call is
-  `-1` or a fatal error of the redirect. A script that reads a file with
-  `getline < "name"` and writes one with `print > "name"` works through the
-  VFS: the refusal is only the shell, and the smoke test checks both sides.
+  shell and answers `-1` (the port of the release owns the name; the library
+  has its own `system` now, and a port that drops the stub gets it); since 1.8
+  `"cmd" | getline` and `print | "cmd"` reach the `popen` of the library,
+  which is a pipe, a `fork` and the `execve` of the first word of the command,
+  so the command runs. A script that reads a file with `getline < "name"` and
+  writes one with `print > "name"` works through the VFS, as before: the smoke
+  test checks the three sides (`docs/ports-table.md`).
 
 `port/sys/wait.h` and `port/wctype.h` exist because the source includes
 those headers and the library of a program has neither; the path of the
@@ -448,6 +450,24 @@ and the key of the repository, and the machine installs it with `pkg`
 (ADR 0024, ADR 0025 §3). The SDK does not build for the board: a program of
 the ESP32 has 8 KiB windows and shares the address space of the kernel (ADR
 0018), and its images belong to the firmware build.
+
+### The gate of zero patches
+
+The proof that the recipe is not needed for a program of POSIX is
+`make ports-smoke` (lane M3 of 1.8, [`ports-table.md`](ports-table.md),
+[`tests/ports/`](../tests/ports/)): thirteen utilities of sbase - `true`,
+`false`, `echo`, `basename`, `dirname`, `pwd`, `printenv`, `sleep`, `cksum`,
+`tee`, `cmp`, `whoami`, `sha256sum` - are copied into `tests/ports/sbase/`
+byte for byte, built by the SDK and by no CMake of this tree, written into
+`/bin/ports` of a volume and typed at the shell of the machine. The gate
+fails on an edited source (the sha256 of the upstream commit is checked before
+the boot), on a program that does not link against the library, and on an
+answer that is not the answer of the release. The table of
+[`ports-table.md`](ports-table.md) has the three numbers of every one of them
+- source lines, port-layer lines and patched lines - and of the ten tools of
+this tree, which do have a port layer for two reasons worth knowing: a
+`double` in a program built with `-mgeneral-regs-only` (`sort -n`, `ls -h`)
+and an option the release never had (`grep -r`, `ls --color`).
 
 ## The second port: ten tools of sbase
 

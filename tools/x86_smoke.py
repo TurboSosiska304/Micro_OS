@@ -282,10 +282,17 @@ COMMANDS = [
     "exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}",
     # The status of a script that ends with `exit N` comes back to the shell.
     "exec /bin/awk BEGIN{exit(3)}",
-    # The two calls of a shell: this machine has none, and the interpreter
-    # says so on the error descriptor instead of pretending the line ran.
+    # The two calls of a shell. `system` is the port layer of awk, which still
+    # answers with its own sentence (the port of the release owns the name);
+    # `"cmd" | getline` reaches `popen` of the library now (1.8) and runs the
+    # program of the command, so the line is the one `echo` wrote.
     "exec /bin/awk \"BEGIN{print(system(\\\"true\\\"))}\"",
     "exec /bin/awk \"BEGIN{print(\\\"echo\\\"|getline)}\"",
+    # A command that reads a file: `popen` of the library runs `/bin/cat`, the
+    # stream is a pipe of this system, and the loop is the three lines of
+    # /etc/setting. The interpreter is the release; the port of the command is
+    # the library.
+    "exec /bin/awk \"BEGIN{while((\\\"cat /etc/setting\\\"|getline line)>0)n++;print(n)}\"",
     "exec /bin/awk -f /etc/no-such.awk",
     # The same script with no file: the interpreter reads descriptor 0, which
     # the shell does not open at the prompt yet, so awk reports a read error.
@@ -1383,6 +1390,26 @@ def check(output: str) -> list:
         "help names a program of the disk",
         "hello is a program at /bin/hello (type hello --help)" in answer("help hello"),
         repr(answer("help hello")),
+    )
+    # The list of the programs is the machine and not a table of the shell, so
+    # the list and the directory have to agree: the check reads `/bin` with the
+    # shell and asks `help` for every name of it. A program that the image
+    # gained and `help` does not name is a machine with a secret, which is what
+    # the list of twenty-four names and a `...` was (`docs/debts.md`, K19).
+    # The names of the listing are the lines without a space and without a
+    # colon: the echo of the line and the lines of the log of the kernel are
+    # not names of a program.
+    programs = [
+        line.strip()
+        for line in answer("ls /bin").splitlines()
+        if line.strip() and " " not in line.strip() and ":" not in line
+    ]
+    listing = answer("help")
+    absent = [name for name in programs if name not in listing]
+    expect(
+        "help names every program of /bin",
+        bool(programs) and not absent,
+        f"{len(programs)} program(s), not in help: {absent[:6]}",
     )
     help_ls = answer("help ls")
     expect(
@@ -2613,10 +2640,19 @@ def check(output: str) -> list:
     )
     awk_pipe = answer('exec /bin/awk "BEGIN{print(\\"echo\\"|getline)}"')
     expect(
-        "awk cmd | getline answers the failure of a machine without a shell",
-        re.search(r"(?m)^-1\r?$", awk_pipe) is not None
+        "awk cmd | getline runs the command through popen",
+        re.search(r"(?m)^1\r?$", awk_pipe) is not None
         and "the program exited with 0" in awk_pipe,
         awk_pipe,
+    )
+    awk_lines = answer(
+        'exec /bin/awk "BEGIN{while((\\"cat /etc/setting\\"|getline line)>0)n++;print(n)}"'
+    )
+    expect(
+        "awk reads a whole file through the pipe of popen",
+        re.search(r"(?m)^3\r?$", awk_lines) is not None
+        and "the program exited with 0" in awk_lines,
+        awk_lines,
     )
     awk_missing = answer("exec /bin/awk -f /etc/no-such.awk")
     expect(
@@ -3195,16 +3231,18 @@ USERS_SCRIPT = [
     ("password: ", "microos"),
     (PROMPT, "id"),
     # `su - guest` without a password, from root, and the directory of the
-    # account.
+    # account. The session is the one task of the console, so `who` names it
+    # as guest, and `whoami` is the name of the account and nothing else.
     (PROMPT, "su - guest"),
     (PROMPT, "pwd"),
+    (PROMPT, "whoami"),
+    (PROMPT, "who"),
     (PROMPT, "id"),
     # A user does not become root without the password of root.
     (PROMPT, "su - root"),
     ("password: ", "wrong"),
     (PROMPT, "id"),
-    # The file a user makes: the owner is root, which is the debt of
-    # docs/debts.md and not the rule this release ships.
+    # The file a user makes is the user's (the debt of 1.6 is paid).
     (PROMPT, "echo seven > /tmp/seven.txt"),
     (PROMPT, "stat /tmp/seven.txt"),
     (PROMPT, "id"),
@@ -3219,11 +3257,20 @@ USERS_SCRIPT = [
     ("password: ", "guest"),
     (PROMPT, "id"),
     # A login with no name: the empty answer is a name that is needed, and not
-    # a name that does not fit, and nothing else follows it.
+    # a name that does not fit, and it returns to the prompt of the shell.
     (PROMPT, "login"),
     ("login: ", "<enter>"),
     ("login: a name is needed", ""),
     (PROMPT, "id"),
+    # `logout` ends the session of the console and the init starts another
+    # one as root: that is the way back from a user, and `who` says it.
+    (PROMPT, "whoami"),
+    (PROMPT, "su - guest"),
+    (PROMPT, "logout"),
+    ("MicroOS shell ready", ""),
+    (PROMPT, "id"),
+    (PROMPT, "whoami"),
+    (PROMPT, "who"),
     (PROMPT, ""),
 ]
 
@@ -3330,6 +3377,11 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         index = indexes[occurrence]
         return blocks[index] if index < len(blocks) else ""
 
+    def last_line(text: str) -> str:
+        """The answer of a command, without the echo of the line that asked."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return lines[-1] if lines else ""
+
     expect(
         "the console answers the whole script",
         len(blocks) > len(USERS_COMMANDS),
@@ -3389,6 +3441,16 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "uid=7(guest) gid=7 home=/home/guest" in answer("id", 2),
         answer("id", 2),
     )
+    expect(
+        "whoami names the guest of the session",
+        last_line(answer("whoami", 0)) == "guest",
+        answer("whoami", 0),
+    )
+    expect(
+        "who lists the session of the console as its user",
+        "guest" in answer("who", 0) and "console" in answer("who", 0),
+        answer("who", 0),
+    )
 
     # A user does not become root without the password of root: the wrong one
     # is refused and the shell is still guest.
@@ -3403,12 +3465,12 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         answer("id", 3),
     )
 
-    # The file a user makes is owned by root: the create path of the VFS
-    # carries no owner yet (docs/debts.md).
+    # The file a user makes is owned by the user: the create path of the VFS
+    # carries the uid of the task that made the file.
     stat = answer("stat /tmp/seven.txt")
     expect(
-        "a file of a user is still owned by root (the debt)",
-        "owner: 0" in stat and "size: 6" in stat,
+        "a file of a user is owned by the user",
+        "owner: 7" in stat and "size: 6" in stat,
         stat,
     )
     expect(
@@ -3450,6 +3512,35 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "a login with no name changes nothing",
         "uid=0(root)" in answer("id", 7),
         answer("id", 7),
+    )
+
+    # The session of the console: `whoami` names the account, `who` lists the
+    # session, and `logout` ends it. The init of the port starts another one
+    # as root, which is the way back from a user of this system.
+    expect(
+        "whoami is root before the logout",
+        last_line(answer("whoami", 1)) == "root",
+        answer("whoami", 1),
+    )
+    expect(
+        "logout ends the session",
+        "logout: the session ends" in answer("logout"),
+        answer("logout"),
+    )
+    expect(
+        "the console starts again as root after a logout",
+        "uid=0(root)" in answer("id", 8),
+        answer("id", 8),
+    )
+    expect(
+        "whoami is root after the logout",
+        last_line(answer("whoami", 2)) == "root",
+        answer("whoami", 2),
+    )
+    expect(
+        "who names the new session of the console",
+        "root" in answer("who", 1) and "console" in answer("who", 1),
+        answer("who", 1),
     )
 
     return checks

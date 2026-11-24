@@ -1,0 +1,5 @@
+# The sources of the gate keep the style of the release: tabs, 80 columns and
+# the braces of suckless. `make format` and `make integrity` leave them alone,
+# and the gate of `make ports-smoke` compares them with the upstream commit
+# byte for byte (tests/ports/upstream.txt).
+DisableFormat: true

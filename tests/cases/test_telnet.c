@@ -179,10 +179,131 @@ static void test_special_bytes(void)
     KT_CHECK_STR_EQ(lines[0], "ok");
 }
 
+/*
+ * The property: the stream of an interactive session hands the bytes of the
+ * person back one at a time, keeps the negotiation out of them, and turns
+ * the option of echo into the answer of who repeats what.
+ */
+static void feed_stream(struct telnet_stream *stream, const uint8_t *bytes, size_t n, int *data,
+                        size_t data_max, size_t *data_len, char *reply, size_t *reply_len)
+{
+    size_t i;
+
+    *data_len = 0;
+    *reply_len = 0;
+
+    for (i = 0; i < n; i++) {
+        int byte = telnet_stream_feed(stream, bytes[i], reply, TELNET_REPLY_MAX, reply_len);
+
+        if (byte >= 0 && *data_len < data_max) {
+            data[(*data_len)++] = byte;
+        }
+    }
+}
+
+static void test_stream(void)
+{
+    struct telnet_stream stream;
+    int data[16];
+    size_t data_len;
+    char reply[TELNET_REPLY_MAX];
+    size_t reply_len;
+
+    ktest_begin("telnet: the stream of a session keeps the negotiation out");
+
+    telnet_stream_init(&stream);
+    {
+        static const uint8_t typed[] = {'l', 's', '\r', '\n'};
+
+        feed_stream(&stream, typed, sizeof(typed), data, 16, &data_len, reply, &reply_len);
+        KT_CHECK_INT_EQ((int)data_len, 3);
+        KT_CHECK_INT_EQ(data[0], 'l');
+        KT_CHECK_INT_EQ(data[1], 's');
+        KT_CHECK_INT_EQ(data[2], '\n');
+        KT_CHECK_INT_EQ((int)reply_len, 0);
+    }
+
+    /* A negotiation in the middle of the line: not one of its bytes is data,
+     * and the refusal of the option is answered. */
+    telnet_stream_init(&stream);
+    {
+        static const uint8_t mixed[] = {'a',        TELNET_IAC, TELNET_DO, 3,    'b',
+                                        TELNET_IAC, TELNET_IAC, 'c',       '\r', '\n'};
+
+        feed_stream(&stream, mixed, sizeof(mixed), data, 16, &data_len, reply, &reply_len);
+        KT_CHECK_INT_EQ((int)data_len, 5);
+        KT_CHECK_INT_EQ(data[0], 'a');
+        KT_CHECK_INT_EQ(data[1], 'b');
+        KT_CHECK_INT_EQ((int)(uint8_t)data[2], 0xFF);
+        KT_CHECK_INT_EQ(data[3], 'c');
+        KT_CHECK_INT_EQ(data[4], '\n');
+        KT_CHECK_INT_EQ((int)reply_len, 3);
+        KT_CHECK_INT_EQ((uint8_t)reply[0], TELNET_IAC);
+        KT_CHECK_INT_EQ((uint8_t)reply[1], TELNET_WONT);
+        KT_CHECK_INT_EQ((uint8_t)reply[2], 3);
+    }
+
+    ktest_begin("telnet: the echo is the one the client agreed to");
+
+    telnet_stream_init(&stream);
+    KT_CHECK(!stream.echo);
+
+    /* DO ECHO is the client accepting the offer: the server echoes now, and
+     * the acceptance is not answered with the generic WONT. */
+    {
+        static const uint8_t do_echo[] = {TELNET_IAC, TELNET_DO, TELNET_OPT_ECHO};
+
+        feed_stream(&stream, do_echo, sizeof(do_echo), data, 16, &data_len, reply, &reply_len);
+        KT_CHECK(stream.echo);
+        KT_CHECK_INT_EQ((int)data_len, 0);
+        KT_CHECK_INT_EQ((int)reply_len, 0);
+    }
+
+    /* DONT ECHO takes it back. */
+    {
+        static const uint8_t dont_echo[] = {TELNET_IAC, TELNET_DONT, TELNET_OPT_ECHO};
+
+        feed_stream(&stream, dont_echo, sizeof(dont_echo), data, 16, &data_len, reply, &reply_len);
+        KT_CHECK(!stream.echo);
+        KT_CHECK_INT_EQ((int)reply_len, 0);
+    }
+
+    /* A client that wants to echo itself is told not to: one of the two
+     * halves is the echo, and it is the server. */
+    {
+        static const uint8_t will_echo[] = {TELNET_IAC, TELNET_WILL, TELNET_OPT_ECHO};
+
+        feed_stream(&stream, will_echo, sizeof(will_echo), data, 16, &data_len, reply, &reply_len);
+        KT_CHECK(!stream.echo);
+        KT_CHECK_INT_EQ((int)reply_len, 3);
+        KT_CHECK_INT_EQ((uint8_t)reply[1], TELNET_DONT);
+        KT_CHECK_INT_EQ((uint8_t)reply[2], TELNET_OPT_ECHO);
+    }
+
+    ktest_begin("telnet: a stream that is cut anywhere is still the same stream");
+
+    telnet_stream_init(&stream);
+    {
+        static const uint8_t bytes[] = {TELNET_IAC, TELNET_WILL, 3, 'o', 'k'};
+
+        /* Two calls in the middle of the option: the state survives. */
+        feed_stream(&stream, bytes, 2, data, 16, &data_len, reply, &reply_len);
+        KT_CHECK_INT_EQ((int)data_len, 0);
+        feed_stream(&stream, bytes + 2, sizeof(bytes) - 2, data, 16, &data_len, reply, &reply_len);
+        KT_CHECK_INT_EQ((int)data_len, 2);
+        KT_CHECK_INT_EQ(data[0], 'o');
+        KT_CHECK_INT_EQ(data[1], 'k');
+        KT_CHECK_INT_EQ((int)reply_len, 3);
+        KT_CHECK_INT_EQ((uint8_t)reply[1], TELNET_DONT);
+        KT_CHECK_INT_EQ((uint8_t)reply[2], 3);
+    }
+}
+
 void test_telnet(void)
 {
     test_lines();
     test_negotiation();
     test_subnegotiation();
     test_special_bytes();
+    test_stream();
 }

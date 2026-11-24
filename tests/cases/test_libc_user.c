@@ -41,7 +41,12 @@ static void test_environment(void)
 {
     char *words[] = {"HOME=/root", "PATH=/bin", "EMPTY=", NULL};
     char own[] = "OWN=one";
+#ifndef MICROOS_TSAN
+    /* The case of the child is left out of the race detector (the fork copies
+     * the threads of the runtime into the child), and the status of the wait
+     * is used only there. */
     int status = -1;
+#endif
 
     environ = words;
     KT_CHECK_STR_EQ(getenv("HOME"), "/root");
@@ -759,6 +764,72 @@ static void test_signed_numbers(void)
     KT_CHECK(end != NULL && *end == '\0');
 }
 
+/* --- the words of a command --------------------------------------------- */
+
+/*
+ * `popen` and `system` have no shell behind them, so the library splits the
+ * line itself (src/words.c): the blanks end a word, `'...'` and `"..."` keep
+ * theirs and lose the quotes, and `\` escapes the next byte. The calls on the
+ * machine are the gate of `make ports-smoke` (`/bin/ports/command`); what the
+ * host checks here is the reader of the line itself.
+ */
+int __ulibc_split_words(char *text, char **words, int max);
+int __ulibc_command_words(const char *command, char *block, char **words, int max);
+
+static void test_words(void)
+{
+    char text[] = "  echo one\ttwo  ";
+    char quoted[] = "echo 'a b' \"c d\" e\\ f";
+    char block[512];
+    char empty[] = "   ";
+    char *words[10];
+    int count;
+
+    count = __ulibc_split_words(text, words, 8);
+    KT_CHECK_INT_EQ(count, 3);
+    KT_CHECK_STR_EQ(words[0], "echo");
+    KT_CHECK_STR_EQ(words[1], "one");
+    KT_CHECK_STR_EQ(words[2], "two");
+
+    /* The quotes keep a blank in the word and are not part of it, and the
+     * backslash takes the meaning of the blank away. */
+    count = __ulibc_split_words(quoted, words, 8);
+    KT_CHECK_INT_EQ(count, 4);
+    KT_CHECK_STR_EQ(words[1], "a b");
+    KT_CHECK_STR_EQ(words[2], "c d");
+    KT_CHECK_STR_EQ(words[3], "e f");
+
+    /* A line of blanks is no word at all, and a table that is too small is
+     * E2BIG and not a part of the line. */
+    KT_CHECK_INT_EQ(__ulibc_split_words(empty, words, 8), 0);
+    {
+        char too_many[] = "a b c d";
+
+        errno = 0;
+        KT_CHECK_INT_EQ(__ulibc_split_words(too_many, words, 3), -1);
+        KT_CHECK_INT_EQ(errno, E2BIG);
+    }
+
+    /* The vector of one `execve`: the copy of a command the caller owns, the
+     * words and the NULL, from one call. */
+    count = __ulibc_command_words("echo 'two words'", block, words, 8);
+    KT_CHECK_INT_EQ(count, 2);
+    KT_CHECK_STR_EQ(words[0], "echo");
+    KT_CHECK_STR_EQ(words[1], "two words");
+    KT_CHECK(words[2] == NULL);
+
+    /* A command longer than the block of the call is refused. */
+    {
+        char long_command[600];
+
+        memset(long_command, 'a', sizeof(long_command) - 1);
+        long_command[sizeof(long_command) - 1] = '\0';
+        errno = 0;
+        KT_CHECK_INT_EQ(__ulibc_command_words(long_command, block, words, 8), -1);
+        KT_CHECK_INT_EQ(errno, E2BIG);
+    }
+}
+
 void test_libc_user(void)
 {
     ktest_begin("libc_user");
@@ -770,4 +841,5 @@ void test_libc_user(void)
     test_long_options();
     test_scanf();
     test_glob();
+    test_words();
 }

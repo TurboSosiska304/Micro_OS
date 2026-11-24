@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: help all build test test-asan test-tsan test-smp test-minimal smoke integrity wiki-check ci sim clean format sdk idf-check idf-build idf-flash idf-monitor idf-size bundle bundle-board bundle-x86 x86-build x86-open-build x86-smp-build x86-smp-run x86-run x86-run-serial x86-smoke x86-root-smoke x86-volume-smoke uefi uefi-run uefi-smoke uefi-stick x86-vga-smoke x86-disk x86-run-disk x86-run-disk-serial x86-disk-smoke x86-fs-smoke x86-net-build x86-net-run x86-net-smoke x86-fat-build x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke coverage reproducible soak soak-image soak-host fuzz-long disk-stress board-soak x86-smp-smoke soak-smp bench
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 
 help:
 	@echo "Micro OS — available targets:"
@@ -40,6 +40,7 @@ help:
 	@echo "  make test       build and run the unit tests (host)"
 	@echo "  make test-asan  the same tests with the address and UB sanitizers"
 	@echo "  make test-tsan  the same tests under the race detector (two cores)"
+	@echo "  make test-valgrind  the suite under valgrind, as the cloud runs it"
 	@echo "  make test-smp   the host tests of the kernel of two cores (KERNEL_SMP)"
 	@echo "  make test-minimal  the host tests with the optional features off"
 	@echo "  make smoke      boot the simulator and check its answers"
@@ -63,6 +64,8 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
+	@echo "                  the machine: the gate of a program nobody rewrote"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
 	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
@@ -72,10 +75,18 @@ help:
 	@echo "  make x86-smp-smoke  boot the kernel of two cores and check both of them"
 	@echo "  make x86-disk   the image of the disk: /bin and /etc of MicroFS"
 	@echo "  make x86-vga-smoke   check the screen and the keyboard without a display"
+	@echo "  make usb-smoke  the keyboard, the stick and the wire of the USB"
+	@echo "  make usb-stick-smoke  USB_STICK=/dev/sdc attached read-only, hashed"
 	@echo "  make x86-run-disk   boot the window with an 8 MB disk of the machine"
 	@echo "  make x86-run-disk-serial  the same disk in a terminal (-nographic)"
-	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both"
-	@echo "                  (X86_DISK_BUS=virtio puts the disk on the virtio device)"
+	@echo "  make x86-disk-smoke two boots on one disk image, a file survives both:"
+	@echo "                  the IDE channel, the SATA controller and NVMe"
+	@echo "                  (X86_DISK_BUS=virtio for the virtio device)"
+	@echo "  make ahci-smoke  the same image on the SATA controller of a chipset: a"
+	@echo "                  named volume is written and survives a reset, an unnamed"
+	@echo "                  one is read-only with the SHA-256 unchanged (ADR 0041)"
+	@echo "  make nvme-smoke  the same image on the NVMe controller of a laptop: the"
+	@echo "                  same writes, the same rule, the same proof (ADR 0042)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
 	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
 	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
@@ -132,6 +143,23 @@ test-asan:
 	cmake -B $(ASAN_DIR) -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug -DMICRO_OS_SANITIZE=ON
 	cmake --build $(ASAN_DIR)
 	ctest --test-dir $(ASAN_DIR) --output-on-failure
+
+# The suite under the memory checker of the cloud, byte for byte what the
+# workflow runs. It was the gate of the cloud alone and it was red for two
+# days - a checksum over the padding of a record and a `strstr` over the
+# bytes a file did not write - without a single failed check of the suite:
+# a child of a fork inherits the count and its exit code turns into the 42 of
+# `--error-exitcode`, which the case reads as the exit code of its program.
+# A gate of the cloud that can be run here is a gate somebody runs.
+test-valgrind: test
+	valgrind --error-exitcode=42 --track-origins=yes ./$(BUILD_DIR)/tests/microos_tests
+
+# The gate of a release in one command: every smoke, the two sessions, the
+# board, the integrity against the tag and a Release from an empty directory,
+# with a table of the answers (`tools/release_gate.sh`). It keeps going after a
+# failed gate, so one red line does not hide the others.
+release-gate:
+	sh tools/release_gate.sh $(RELEASE_GATE_ARGS)
 
 # The second host configuration (ADR 0010): the optional features off. It is
 # a target of its own, not a part of `make ci` at first: it proves that the
@@ -190,14 +218,16 @@ wiki-check:
 # TSan is a part of the list: the host kernel is one address space and the
 # race detector is the closest the tests get to preemption, so a push that
 # passes only the plain and ASan builds has not seen the same code the cloud
-# sees. The boot of the x86-64 port is not: QEMU is a machine of its own and
+# sees. The minimal build is a part of it for the same reason: it links a
+# subset of the tree and a symbol that only one feature asked for keeps it
+# green, and it was red for a release and a half before anybody ran it. The boot of the x86-64 port is not: QEMU is a machine of its own and
 # not every laptop has it. The cloud installs it and runs x86-smoke; here it
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind release-gate test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke x86-root-smoke
+CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -208,7 +238,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke and x86-root-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
 endif
 
 sim: build
@@ -216,12 +246,12 @@ sim: build
 
 clean:
 	rm -rf $(BUILD_DIR) $(ASAN_DIR) $(MINIMAL_DIR) $(COVERAGE_DIR) $(SMP_DIR) \
-		build-tsan build-sdk
+		build-tsan build-sdk build-ports
 
 format:
 	@command -v clang-format >/dev/null 2>&1 || { echo "clang-format not found"; exit 1; }
 	find components ports main tests -type f \( -name '*.c' -o -name '*.h' \) \
-		-exec clang-format -i {} +
+		-not -path 'tests/ports/sbase/*' -exec clang-format -i {} +
 	@echo "sources formatted"
 
 # The SDK: the headers of a program, the library of a program, the crt and the
@@ -388,6 +418,23 @@ x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
+# The gate of a program nobody rewrote (lane M3 of 1.8, docs/ports-table.md):
+# the console set of sbase - true, false, echo, basename, dirname, pwd,
+# printenv, sleep, cksum, tee, cmp - is built by **the SDK** and not by the
+# CMake of this tree, and every file of it is the release of the upstream
+# byte for byte (tests/ports/upstream.txt). The volume of the run is the image
+# of `make x86-disk` with /bin/ports added to it, so the boot and the shell
+# are the machine of the release; the programs are typed at the shell and the
+# answers are the answers of the release. The three calls of a command that
+# 1.8 added to the library - popen, pclose and system - are the program
+# /bin/ports/command of the same gate.
+PORTS_BUILD := build-ports
+
+ports-smoke: x86-disk
+	sh tools/ports_build.sh --build $(PORTS_BUILD)
+	python3 tools/ports_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
+		--disk $(X86_DISK_BUS) --timeout 180
+
 # The gate of ADR 0027: one machine boots two roots. The first image is the
 # MicroFS volume of `make x86-disk`, the second is the same /bin and /etc in an
 # ext2 volume, and the same commands (`ls /bin`, `cat /etc/setting`, `exec
@@ -520,6 +567,28 @@ bench: x86-build build
 x86-vga-smoke: x86-build x86-disk
 	python3 tools/x86_vga_smoke.py --image $(X86_PROGRAMS_IMAGE)
 
+# The keyboard of the USB (ADR 0040): the machine of this run has no PS/2
+# controller at all (`-machine pc,i8042=off`) and the only keyboard on it is a
+# device of the xHCI controller, so a line typed through the monitor of QEMU
+# reaches the kernel through the rings of the controller and the reports of the
+# HID device, and nothing else. The same image of the disk as the smoke test =
+# the shell, /bin and /etc are the files of the release.
+usb-smoke: x86-build x86-disk x86-net-build
+	python3 tools/x86_usb_smoke.py --image $(X86_PROGRAMS_IMAGE) \
+		--ext2-image $(X86_PROGRAMS_EXT2_IMAGE) --net-build $(X86_NET_BUILD) --timeout 180
+
+# The same gate under the name of the other machines of the port.
+x86-usb-smoke: usb-smoke
+
+# The stick of a person, attached to the controller of the USB read-only: the
+# test mounts its first partition, lists it and compares the SHA-256 of the
+# whole device before and after. The device is the one a person names and the
+# run needs the permission to read it (`USB_STICK=/dev/sdb`, or sudo).
+USB_STICK ?= /dev/sdc
+
+usb-stick-smoke: x86-build x86-disk
+	python3 tools/x86_usb_smoke.py --image $(X86_PROGRAMS_IMAGE) --stick $(USB_STICK)
+
 # The disk of the port (ADR 0008): the same image of `make x86-disk`, copied
 # once to a disk of its own. A person boots the machine, writes a file, boots
 # it again and finds the file there, which is the whole point of a disk.
@@ -554,6 +623,34 @@ x86-run-disk-serial: x86-build $(X86_DISK_IMAGE)
 
 x86-disk-smoke: x86-disk
 	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke.img --disk $(X86_DISK_BUS)
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-ahci.img --disk ahci
+	python3 tools/x86_disk_smoke.py --image $(X86_BUILD)/disk-smoke-nvme.img --disk nvme
+
+# The disk of a laptop (ADR 0041): the same image of `make x86-disk` on the
+# SATA controller of a chipset, in a machine of the q35 family that has no IDE
+# channel at all. The kernel finds the controller (class 01/06), reads the
+# identify data, the table and the volume of the first partition, and mounts
+# it read-write: the volume carries the header of MicroFS and `/etc/volumes`
+# names `ahci0p1`, so the rule lets the writes through and the root mount
+# asks for them. The tool writes a file, boots the same image again and reads
+# it out of the medium - the file survives a reset. Two more boots prove the
+# refusals: a copy whose `/etc/volumes` names nothing is mounted read-only and
+# a write is refused with the sentence of the rule, and a copy with the magic
+# of btrfs is refused at the mount. The SHA-256 of each negative image is the
+# same before and after the boot.
+ahci-smoke: x86-build x86-disk
+	python3 tools/x86_ahci_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD)
+
+# The disk of a modern laptop (ADR 0042): the same image of `make x86-disk` on
+# the NVMe controller of the PCI bus - the admin queue, the two identifiers and
+# one I/O queue pair created through the admin queue - in a machine of the
+# i440fx family, where the function sits on the bus 0. The same four boots as
+# the SATA gate: the volume of `nvme0p1` named in `/etc/volumes` is written and
+# its file survives the reset, the volume the list does not name is read-only
+# with the hash of the image unchanged, and a volume of btrfs is refused at the
+# mount.
+nvme-smoke: x86-build x86-disk
+	python3 tools/x86_nvme_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD)
 
 # The filesystem of 1.4: rename and rmdir through the programs of /bin,
 # `fsck ext2 -y` on a broken image (and e2fsck of the host after it), and the
@@ -579,7 +676,7 @@ X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
 
 x86-net-build:
 	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+		-DMICRO_OS_X86_NET=ON -DMICRO_OS_TELNET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_NET_BUILD) --target image
 
 x86-net-run: x86-net-build
@@ -604,7 +701,7 @@ X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
 
 x86-all-build:
 	cmake -B $(X86_ALL_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+		-DMICRO_OS_X86_NET=ON -DMICRO_OS_TELNET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_ALL_BUILD) --target image
 
 x86-all: x86-all-build build
