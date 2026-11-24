@@ -153,6 +153,13 @@ test-asan:
 test-valgrind: test
 	valgrind --error-exitcode=42 --track-origins=yes ./$(BUILD_DIR)/tests/microos_tests
 
+# The gate of a release in one command: every smoke, the two sessions, the
+# board, the integrity against the tag and a Release from an empty directory,
+# with a table of the answers (`tools/release_gate.sh`). It keeps going after a
+# failed gate, so one red line does not hide the others.
+release-gate:
+	sh tools/release_gate.sh $(RELEASE_GATE_ARGS)
+
 # The second host configuration (ADR 0010): the optional features off. It is
 # a target of its own, not a part of `make ci` at first: it proves that the
 # sources still build without the PSRAM, the MOX1 runtime and the network,
@@ -217,7 +224,7 @@ wiki-check:
 # joins the list when `qemu-system-x86_64` is on PATH and is skipped with a
 # message when it is not. A missing optional machine must not fail a run.
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
-CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
+CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind release-gate test-smp smoke coverage
 ifneq ($(CI_QEMU),)
 CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
 endif
