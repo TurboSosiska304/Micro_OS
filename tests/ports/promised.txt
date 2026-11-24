@@ -1,0 +1,89 @@
+# Micro OS — the names an image of the release promises
+#
+# One line: a name and where it comes from. `make x86-smoke` boots the image of
+# the release and asks the machine for every line of this file: a file of /bin
+# or of /bin/ports is in the listing of that directory and `help NAME` finds it
+# through PATH, and a command of the shell answers `help NAME` at all.
+#
+# The file is the one place of the list. A release note or a page of the docs
+# that promises a name adds it here in the same change, and a name here that
+# the image does not carry is the failure of that promise: 1.9 promised `kilo`
+# in its notes and `date` was a command of the board only, so the owner's
+# laptop answered `command not found` for a name the release had promised.
+#
+# The first column is the name, the second where it lives: `/bin`, `/bin/ports`
+# (the programs of the SDK, `make ports-build`) or `shell` (a command of the
+# kernel's own shell).
+
+# --- 1.0 to 1.3: the programs of the tree -------------------------------
+hello /bin
+cat /bin
+echo /bin
+ls /bin
+wc /bin
+head /bin
+grep /bin
+mkdir /bin
+mv /bin
+rm /bin
+rmdir /bin
+pwd /bin
+streams /bin
+truncate /bin
+spawn /bin
+procs /bin
+
+# --- 1.1: zlib, the first port of somebody else -------------------------
+zcat /bin
+
+# --- 1.4: the interpreters and the calculators --------------------------
+lua /bin
+bc /bin
+dc /bin
+
+# --- 1.5: the type of a file and the programs of the release ------------
+zstd /bin
+zstdcat /bin
+pcre2grep /bin
+file /bin
+sqlite3 /bin
+awk /bin
+tail /bin
+sort /bin
+find /bin
+xargs /bin
+sed /bin
+
+# --- 1.7: the desktop ---------------------------------------------------
+ui /bin
+edit /bin
+fm /bin
+wm /bin
+
+# --- 1.8 and 1.9: the console set of the SDK (no port layer) ------------
+true /bin/ports
+false /bin/ports
+echo /bin/ports
+basename /bin/ports
+dirname /bin/ports
+pwd /bin/ports
+printenv /bin/ports
+sleep /bin/ports
+cksum /bin/ports
+tee /bin/ports
+cmp /bin/ports
+whoami /bin/ports
+sha256sum /bin/ports
+
+# --- 1.9: the terminal, a program we did not write ----------------------
+kilo /bin/ports
+
+# --- the shell of the kernel: the clock and the accounts ----------------
+date shell
+id shell
+groups shell
+who shell
+whoami shell
+login shell
+su shell
+logout shell

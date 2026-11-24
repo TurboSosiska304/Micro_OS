@@ -71,8 +71,12 @@ COMMANDS = [
     "kill -TERM 3",
     "uname",
     "uptime",
+    "date",
     "ulimit",
     "ls /bin",
+    # The same directory with the mode of every entry: the programs are the
+    # lines of a regular file, and a directory of /bin (`ports`) is not one.
+    "ls -l /bin",
     # The one file of /etc is on the disk as well, and reading it is the
     # proof that the tree of the image is the tree of the machine.
     "cat /etc/setting",
@@ -522,6 +526,7 @@ COMMANDS = [
 # that follow (the run works on a copy of the image, but a clean tree is
 # easier to read in a failure).
 MANY_FILES = 70
+COMMANDS += ["ls /bin/ports"]
 COMMANDS += ["mkdir /many"]
 COMMANDS += [f"write /many/f{index:02d} x" for index in range(MANY_FILES)]
 COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
@@ -555,6 +560,45 @@ BUILD = os.path.join(ROOT, "build-x86")
 # firmware describes two and the kernel knows how many it has started.
 MACHINE_SMP = "2"
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
+
+# The names an image of the release promises: the one list of the tree
+# (`tests/ports/promised.txt`), read by the gate of the machine here and by
+# `tools/ports_smoke.py` for the half that the SDK builds. A name here that the
+# image does not carry is the defect the owner's laptop found in 1.9: `kilo`
+# in the notes and not in the image, `date` a command of the board only.
+PROMISED_FILE = os.path.join(ROOT, "tests", "ports", "promised.txt")
+
+
+def read_promised(path: str = PROMISED_FILE) -> list:
+    """The lines of the file of promises, as (name, where) pairs.
+
+    A line is `name where`, a `#` begins a comment, and `where` is `/bin`,
+    `/bin/ports` or `shell`. A line that is not one of those is an error of
+    the file: a promise the gate cannot read is a promise nobody keeps.
+    """
+    promises = []
+
+    if not os.path.isfile(path):
+        raise RuntimeError(f"missing {path}: the list of the names of a release")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+
+            fields = line.split()
+            if len(fields) != 2 or fields[1] not in ("/bin", "/bin/ports", "shell"):
+                raise RuntimeError(f"{path}:{number}: {line!r} is not `name /bin`, `name /bin/ports` or `name shell`")
+
+            promises.append((fields[0], fields[1]))
+
+    if not promises:
+        raise RuntimeError(f"{path} is empty")
+
+    return promises
+
+
 RUN_IMAGE = os.path.join(BUILD, "programs-smoke.img")
 
 # The base of the higher half (ADR 0007): the kernel is linked there and the
@@ -1410,11 +1454,13 @@ def check(output: str) -> list:
     # The names of the listing are the lines without a space and without a
     # colon: the echo of the line and the lines of the log of the kernel are
     # not names of a program.
-    programs = [
-        line.strip()
-        for line in answer("ls /bin").splitlines()
-        if line.strip() and " " not in line.strip() and ":" not in line
-    ]
+    programs = []
+    for line in answer("ls -l /bin").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].startswith("-") and len(fields[0]) == 10:
+            name = fields[-1].split("/")[-1].strip()
+            if name and ":" not in name and name not in programs:
+                programs.append(name)
     listing = answer("help")
     absent = [name for name in programs if name not in listing]
     expect(
@@ -1422,6 +1468,73 @@ def check(output: str) -> list:
         bool(programs) and not absent,
         f"{len(programs)} program(s), not in help: {absent[:6]}",
     )
+    # The promises of the notes and of the docs, asked of the machine. The list
+    # is one file and not a second table here: a name of it is a line of the
+    # directory that the list names, and a command of the shell is a line of
+    # the table of `help` (a name of PATH is in the list of the programs).
+    def lines_of(text: str) -> list:
+        return [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and " " not in line.strip() and ":" not in line
+        ]
+
+    ports_programs = lines_of(answer("ls /bin/ports"))
+    bin_programs = lines_of(answer("ls /bin"))
+    help_text = answer("help")
+    # The table of the commands ends where the list of the programs of PATH
+    # begins: a line of the table is a name and a summary, and the programs
+    # are named packed in the lines below the heading.
+    table, _, programs_text = help_text.partition("programs in PATH:")
+    help_commands = {
+        line.split()[0]
+        for line in table.splitlines()
+        if line.strip() and line.split()[0] != "command"
+    }
+
+    missing_ports = []
+    missing_bin = []
+    missing_commands = []
+    unnamed = []
+    for name, where in read_promised():
+        if where == "/bin/ports":
+            if name not in ports_programs:
+                missing_ports.append(name)
+        elif where == "/bin":
+            if name not in bin_programs:
+                missing_bin.append(name)
+        else:
+            if name not in help_commands:
+                missing_commands.append(name)
+
+        # Every file of PATH is a name of the list of the programs of `help`,
+        # which is how a person learns it is there at all.
+        if where != "shell" and re.search(
+            rf"(?<![A-Za-z0-9._-]){re.escape(name)}(?![A-Za-z0-9._-])", programs_text
+        ) is None:
+            unnamed.append(name)
+
+    expect(
+        "the programs of the SDK are in /bin/ports of the image",
+        bool(ports_programs) and not missing_ports,
+        f"{len(ports_programs)} program(s) of the SDK, missing: {missing_ports[:8]}",
+    )
+    expect(
+        "every program the notes promise is a file of /bin",
+        not missing_bin,
+        f"missing from /bin: {missing_bin[:8]}",
+    )
+    expect(
+        "every command the notes promise is a command of the shell",
+        not missing_commands,
+        f"missing: {missing_commands[:8]}",
+    )
+    expect(
+        "help names every promised program of PATH",
+        not unnamed,
+        f"not in the list of help: {unnamed[:8]}",
+    )
+
     help_ls = answer("help ls")
     expect(
         "help names the two sides of a name",
@@ -1454,6 +1567,14 @@ def check(output: str) -> list:
     expect(
         "uptime prints the time",
         re.search(r"up \d+ s", answer("uptime")) is not None,
+    )
+    # The wall clock of the machine: the CMOS of QEMU read by the port at the
+    # boot, printed as UTC. It was a command of the board's driver only, so
+    # the laptop of the owner answered `command not found` for it.
+    expect(
+        "date prints the moment of the machine",
+        re.search(r"(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\r?$", answer("date")) is not None,
+        repr(answer("date")),
     )
     # The limits of the shell come from the kernel: the memory, the CPU time
     # and the descriptors, at the ceiling of the system after the boot.

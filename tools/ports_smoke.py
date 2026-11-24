@@ -352,6 +352,45 @@ def check(output: str) -> list:
     return checks
 
 
+def promised_checks(programs: str) -> list:
+    """The list of /bin/ports of `tests/ports/promised.txt` is this build.
+
+    The one list of the names a release promises is read by two gates: the
+    machine asks its image (`tools/x86_smoke.py`), and this one asks the build
+    of the SDK - a program that the notes promise and `tests/ports` does not
+    build is a name no image can carry, and the failure is here and not at the
+    laptop of a person.
+    """
+    checks = []
+    path = os.path.join(ROOT, "tests", "ports", "promised.txt")
+
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            promised = [
+                line.split("#", 1)[0].split()
+                for line in handle
+                if line.split("#", 1)[0].strip()
+            ]
+    except OSError as error:
+        return [("the list of the names of a release is readable", False, str(error))]
+
+    wanted = [fields[0] for fields in promised if len(fields) == 2 and fields[1] == "/bin/ports"]
+    built = {
+        os.path.splitext(name)[0] for name in os.listdir(programs) if name.endswith(".mox")
+    }
+    missing = [name for name in wanted if name not in built]
+
+    checks.append(
+        (
+            "every name the notes promise is built by the SDK",
+            bool(wanted) and not missing,
+            f"{len(built)} program(s) built, missing: {missing[:8]}",
+        )
+    )
+
+    return checks
+
+
 def build_image(image: str, x86: str, programs: str, verbose: bool) -> int:
     """The volume of the run: the tree of `make x86-disk` and /bin/ports."""
     mkfs = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
@@ -461,6 +500,7 @@ def main(argv: list) -> int:
         print(output)
 
     checks += check(output)
+    checks += promised_checks(programs)
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the gate of a program nobody rewrote (make ports-smoke)")
