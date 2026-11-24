@@ -4,7 +4,8 @@ The table of lane M3 of 1.8 ([`plan-1.8.md`](plan-1.8.md)): what a program of
 somebody else costs in this tree, in three numbers — the lines of its own
 source, the lines of a port layer this system adds, and the lines of the
 upstream source that had to be **edited**. The lane promises zero for the
-console set, and `make ports-smoke` is the gate that says so on the machine
+console set and for the terminal set of 1.9, and `make ports-smoke` and
+`make tty-smoke` are the gates that say so on the machine
 ([`tests/ports/`](../tests/ports/)).
 
 The recipe of a port is [`porting-programs.md`](porting-programs.md); the
