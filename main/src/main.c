@@ -8,6 +8,7 @@
  */
 #include "board/board.h"
 #include "config/config.h"
+#include "config/session.h"
 #include "drivers/drivers.h"
 #include "drivers/power.h"
 #include "drivers/rtc.h"
@@ -19,6 +20,7 @@
 #include "kernel/vfs.h"
 #include "kernel/port.h"
 #include "kernel/port/power.h"
+#include "kernel/ksys.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
@@ -176,12 +178,14 @@ static int fs_subsys_init(void)
     return 0;
 }
 
-/* The shell: the input comes from the UART, the output goes to the UART
- * and to the display of the board. */
-static void shell_task(void *arg)
+/*
+ * The console of the board, once the boot is proven: the panel becomes a sink
+ * of the text, the slot of the update is kept (ADR 0022), and init starts the
+ * session that reads the UART. This is the getty of the board: a `logout`
+ * ends a session and the loop of init starts another one as root.
+ */
+static void console_bring_up(void)
 {
-    K_UNUSED(arg);
-
     tft_console_start();
     kshell_set_sink(tft_console_write);
 
@@ -193,8 +197,6 @@ static void shell_task(void *arg)
      * a stopped shell.
      */
     (void)port_esp32_ota_confirm();
-
-    kshell_run();
 }
 
 /*
@@ -392,13 +394,23 @@ static void init_task(void *arg)
         kwarn("init: the scripts of %s did not run", INITD_DIR);
     }
 
-    /* And finally it starts the shell. */
-    if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
-        kerror("init: cannot start the shell");
+    /* And finally the console: a session that starts as root, and another
+     * one after every `logout`, which is the way back from a user. */
+    console_bring_up();
+
+    if (session_console_start() == 0) {
+        kerror("init: cannot start the session of the console");
     }
 
     for (;;) {
-        k_sched_sleep_ms(1000);
+        int status = 0;
+        int pid;
+
+        while ((pid = ksys_waitpid(-1, &status, KSYS_WNOHANG)) > 0) {
+            session_console_reaped((k_u32_t)pid, status);
+        }
+
+        k_sched_sleep_ms(100);
     }
 }
 

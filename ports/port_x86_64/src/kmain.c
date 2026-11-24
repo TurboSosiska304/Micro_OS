@@ -37,6 +37,7 @@
 #include "kernel/vfs.h"
 
 #include "config/config.h"
+#include "config/session.h"
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_input.h"
@@ -53,6 +54,10 @@
 #include "pkg/pkg.h"
 #endif
 
+#if MICRO_OS_TELNET
+#include "telnet/telnet.h"
+#endif
+
 #include "devfs/devfs.h"
 #include "mfs/mfs_vfs.h"
 #include "procfs/procfs.h"
@@ -62,9 +67,6 @@
 #if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
 #include "fs_ext2/ext2.h"
 #endif
-
-/* The body of the shell task, in src/shell.c. */
-void port_x86_64_shell_run(void);
 
 /* The volume the boot mounts: the first partition of the disk of QEMU when
  * one was attached, "ram0" otherwise (src/ata.c, ADR 0008). */
@@ -89,13 +91,6 @@ static const struct kernel_board g_board = {
     .has_ir = false,
     .has_mic = false,
 };
-
-static void shell_task(void *arg)
-{
-    K_UNUSED(arg);
-
-    port_x86_64_shell_run();
-}
 
 /* --- the filesystem and the program of the boot -------------------------- */
 
@@ -344,9 +339,30 @@ static void init_task(void *arg)
      */
     k_console_set_ansi(true);
 
-    if (task_create("shell", shell_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
-        kerror("x86-64: cannot start the shell");
+    /*
+     * The console session: a task of the kernel with the UART for a terminal,
+     * which starts as root and asks nothing - the person in front of the
+     * machine is the machine (ADR 0033). `logout` ends the task and this
+     * init, which is the getty of the port, starts another one as root.
+     */
+    if (session_console_start() == 0) {
+        kerror("x86-64: cannot start the session of the console");
     }
+
+#if MICRO_OS_TELNET
+    /*
+     * The shell over the air, with the accounts of /etc (ADR 0033). It is
+     * registered here and not in kmain: the task of the listener is the
+     * second task the machine makes and the boot context hands the CPU to
+     * the first one it creates (k_port_task_start), so a task created before
+     * the init would have left the machine without an init at all. The
+     * order puts the session of the console at pid 3, where the smoke test
+     * of this port knows it.
+     */
+    if (telnet_register() != 0) {
+        kwarn("x86-64: the telnet server is not registered");
+    }
+#endif
 
     /*
      * The init of the machine is also the parent of the last resort: a child
@@ -355,11 +371,15 @@ static void init_task(void *arg)
      * table of 32, and a console that forks programs in a loop (the soak of
      * the port) would fill the table. The interval is a tenth of a second:
      * the wait of a finite timeout costs nothing and the slot is back before
-     * a person or a test can see it.
+     * a person or a test can see it. A child that was the console and left
+     * with a logout is a session to start again.
      */
     for (;;) {
-        while (ksys_waitpid(-1, NULL, KSYS_WNOHANG) > 0) {
-            /* One orphan reaped; the next scan starts at once. */
+        int status = 0;
+        int pid;
+
+        while ((pid = ksys_waitpid(-1, &status, KSYS_WNOHANG)) > 0) {
+            session_console_reaped((k_u32_t)pid, status);
         }
 
         k_sched_sleep_ms(100u);
@@ -546,6 +566,7 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
         kwarn("x86-64: not every command of components/net is registered");
     }
 #endif
+
 
 #if MICRO_OS_PKG
     /* The installer of programs (ADR 0024): the tree of /usr/bin, /var and
