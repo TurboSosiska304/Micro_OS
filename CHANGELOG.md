@@ -344,6 +344,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
+- A wait of a pipe or of `poll` could sleep for as long as the machine was up:
+  `k_wait_block` registers the waiter after the caller has looked at the
+  object, so a wake that arrived in that window found no record and was lost,
+  and a wait without a deadline never looked again. A pipeline of the shell
+  never finished under a slow runner of the cloud - the test suite died on its
+  timeout with no failed check, which is what a hang looks like. A wait is
+  twenty milliseconds long now (`KFILE_WAIT_CHUNK_MS`), which is the chunk the
+  sleep already had, so a lost wake costs a turn of the loop and not the line;
+  the cause and its fix are K15 of `docs/debts.md`.
 - The read ahead of the block layer (ADR 0032) armed the wait of the stream
   *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
   36 MiB of the disk before it wrote a byte. The wait belongs to the stream and

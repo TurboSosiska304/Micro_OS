@@ -1249,7 +1249,10 @@ static void disable_slot(k_u32_t slot)
 static bool keyboard_attach(k_u32_t slot, k_u32_t port, k_u32_t speed, k_u16_t vendor,
                             k_u16_t product, k_u32_t length)
 {
-    struct usb_keyboard keyboard;
+    /* The parser fills the fields it finds and the caller reads the ones it
+     * asked for; a compiler that cannot see the two in one pass wants the
+     * whole of the record written first (GCC 11 of the cloud, -O2). */
+    struct usb_keyboard keyboard = {0};
     k_u32_t index;
     k_u32_t dci;
     k_u32_t interval;

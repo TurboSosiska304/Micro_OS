@@ -340,6 +340,21 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K15 - The wakeup of a wait, and the window of its registration
+
+`k_wait_block` registers the waiter **after** the caller has looked at the
+object. A wake that arrives between the look and the registration finds no
+record of that task and is lost: with a wait that has no deadline, the waiter
+sleeps for as long as the machine is up. It is the shape of the failure that
+the unit test of the host showed under a slow runner of the cloud: a case of
+the shell's pipelines never finished and the suite died on its timeout of 120
+seconds, with no failed check and no sentence - a hang, not a wrong answer.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The window is closed by a bound and not by the cause: a pipe and a `poll(-1)` now wait twenty milliseconds at a time (`KFILE_WAIT_CHUNK_MS`), so a lost wakeup costs a turn of the loop instead of the line. The cause - register, then look, then sleep, and give the waiter back its place when the look says the state is already the one it wants - is the arm/sleep/disarm pair of the kernel API and the lock of the object taken across it. | `components/kernel/src/wait.c`, `src/kfile.c`, `src/ksys.c`, `components/kernel/include/kernel/{wait,kfile}.h` | open | `k_wait_arm` / `k_wait_sleep` / `k_wait_disarm` with the object's lock held across the arm and the look, a case that puts the two tasks in the window on purpose (the wake needs a moment of the scheduler between them), and the wake of the port by the line of the timer instead of by the tick - the same lane that takes the latency of a pipe from 1.006 ms to under 100 µs (`docs/bench.md`). |
+| The latency of a wake is one tick: `k_wait_wake` moves `wake_tick` to the present and the sleeping task becomes runnable at the next tick of the timer, so a round trip of a pipe of the host or of the board is 1.006 ms. | `components/kernel/src/wait.c` (`wake_locked`), `src/sched.c` | open | The wake runs the queue of the core (or sends the IPI of K8), and the port's sleep is cut by the wake itself; the bench of `make bench` and `tools/x86_bench.py` show the two halves. |
+
 ## Decisions, not debts
 
 * **The campaign of 1.0 is a release duty, not a push check.** `make soak`,
