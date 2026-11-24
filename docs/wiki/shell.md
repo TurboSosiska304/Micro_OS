@@ -117,17 +117,21 @@ command   what it does
 mkfs      format the volume: mkfs -y
 ...
 programs in PATH:
-  hello crash fork badptr signals cat echo ls ...
+  hello crash fork badptr signals cat echo ls mkdir mv edit kilo ...
 microos> help exec
 usage: exec <program> [arguments...]
 run a program
 ```
 
 `help` with no argument is the list of the commands of the shell, and below it
-the programs found in `PATH`: the executable files of the directories,
-read from the directories themselves and not from a table, at most 24 names
-and `...` when there are more. A program is not a command of the shell and was
-missing from this list before 1.2.1.
+**every** program found in `PATH`: the executable files of the directories,
+read from the directories themselves and not from a table. The list used to
+stop at twenty-four names and a `...` for the screen of a small board, which
+made the rest of the machine a secret of the repository (`/bin/edit` was never
+named); the whole of it is printed now, and `make x86-smoke` reads `/bin` with
+the shell and asks `help` for every name of it, so the two cannot drift apart.
+A program is not a command of the shell and was missing from this list before
+1.2.1.
 
 `help NAME` answers with the command of the shell, the program, or both. A
 name that is only a program says where it is:
