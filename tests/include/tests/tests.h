@@ -52,6 +52,7 @@ void test_ir_nec(void);
 void test_sound_detect(void);
 void test_console_sinks(void);
 void test_telnet(void);
+void test_session(void);
 void test_text_wrap(void);
 void test_ksys(void);
 void test_ksys_process(void);

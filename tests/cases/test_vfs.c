@@ -240,6 +240,60 @@ static void test_attributes(void)
     teardown();
 }
 
+/*
+ * The property: the owner of a file or a directory that the open or the
+ * mkdir made is the task that made it, and not root - the debt of 1.6 that
+ * the second half of the accounts pays. Root makes root's files, which is
+ * the same rule and not a special case, and an object that was already
+ * there keeps its owner whatever the open was.
+ */
+static void test_owner_of_new(void)
+{
+    struct task *self = task_self();
+    struct vfs_file file;
+    /* The place for the data of the filesystem of an open file. */
+    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
+    struct vfs_stat stat;
+
+    ktest_begin("vfs: the owner of a new object is the uid of its maker");
+
+    setup();
+
+    /* A directory that everybody may write in, as a home of the machine of
+     * more than one person: /users is 0777 and the object in it is made by
+     * uid 7. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/users"), 0);
+    KT_CHECK_INT_EQ(vfs_chmod("/users", 0777), 0);
+
+    task_set_uid(self, 7);
+
+    KT_CHECK_INT_EQ(vfs_open("/users/seven.txt", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/users/seven"), 0);
+
+    task_set_uid(self, 0);
+
+    KT_CHECK_INT_EQ(vfs_stat("/users/seven.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+    KT_CHECK_INT_EQ(vfs_stat("/users/seven", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+
+    /* Root makes root's objects: the rule has no exception for zero. */
+    KT_CHECK_INT_EQ(vfs_open("/users/root.txt", VFS_O_RDWR | VFS_O_CREAT, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/users/root.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 0);
+
+    /* An open of a file that was already there does not move the owner of
+     * somebody else, even when root opens it for writing. */
+    KT_CHECK_INT_EQ(vfs_open("/users/seven.txt", VFS_O_RDWR, &file, file_data), 0);
+    KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/users/seven.txt", &stat), 0);
+    KT_CHECK_INT_EQ(stat.owner, 7);
+
+    teardown();
+}
+
 static void test_statfs(void)
 {
     struct vfs_statfs stat;
@@ -978,6 +1032,7 @@ void test_vfs(void)
     test_mkdir_p();
     test_mount_points();
     test_attributes();
+    test_owner_of_new();
     test_directory_search();
     test_directory_descriptor();
     test_statfs();

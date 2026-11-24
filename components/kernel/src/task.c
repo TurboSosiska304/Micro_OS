@@ -261,6 +261,44 @@ bool task_is_root(const struct task *t)
     return task_get_uid(t) == 0u;
 }
 
+/*
+ * The session of a task. The mark is one byte and is written by the task
+ * itself when it starts: a server creates a session and the child runs
+ * before the server's next line, so the child is the one that can say what
+ * it is without a race.
+ */
+void task_set_tty(struct task *t, k_u8_t tty)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->tty = tty;
+    k_port_exit_critical();
+}
+
+k_u8_t task_get_tty(const struct task *t)
+{
+    if (t == NULL) {
+        return TASK_TTY_NONE;
+    }
+
+    return t->tty;
+}
+
+const char *task_tty_name(k_u8_t tty)
+{
+    switch (tty) {
+    case TASK_TTY_CONSOLE:
+        return "console";
+    case TASK_TTY_TELNET:
+        return "telnet";
+    default:
+        return "none";
+    }
+}
+
 void task_creds_inherit(struct task *child, const struct task *parent)
 {
     k_u32_t uid;

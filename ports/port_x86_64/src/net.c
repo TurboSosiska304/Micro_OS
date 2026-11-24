@@ -72,11 +72,15 @@
  * than the window of the last acknowledgement, so the buffer is the window. */
 #define NET_TCP_RX_SIZE 4096u
 
-#define NET_TCP_SOCKETS 4u
+/* The sessions of the machine: one of the shell of telnet and the three of
+ * the page of the state, with one left for the close that a server is still
+ * holding. Each one is a receive buffer, so the number is a few kilobytes and
+ * not a table of a hundred. */
+#define NET_TCP_SOCKETS 6u
 
-/* The doors of the machine: the page of the state and a shell of telnet are
- * enough, and a listener is twenty bytes. */
-#define NET_TCP_SERVERS 2u
+/* The doors of the machine: the page of the state, the files beside it and
+ * the shell of telnet. A listener is twenty bytes. */
+#define NET_TCP_SERVERS 3u
 
 /* A session of a listener that never confirmed the handshake is dropped
  * after this long: the table is small and a half-open session has no owner

@@ -16,7 +16,7 @@ if(ESP_PLATFORM)
         idf_component_register(
             SRCS ${MICRO_OS_TELNET_SRCS}
             INCLUDE_DIRS "include"
-            REQUIRES kernel kshell
+            REQUIRES kernel kshell config
         )
 
         # The discipline of the host build: the sources of the project are
@@ -29,7 +29,7 @@ if(ESP_PLATFORM)
         # them in a pass where CONFIG_ is not known yet.
         idf_component_register(
             INCLUDE_DIRS "include"
-            REQUIRES kernel kshell
+            REQUIRES kernel kshell config
         )
         # An interface target cannot carry a definition for its own sources.
         set(MICRO_OS_TELNET_SCOPE INTERFACE)
@@ -50,6 +50,9 @@ else()
 
     add_library(microos_telnet STATIC ${MICRO_OS_TELNET_SRCS})
     target_include_directories(microos_telnet PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
-    target_link_libraries(microos_telnet PUBLIC microos_kernel microos_kshell)
+    # The session of a client is the one of config/session.h: the accounts of
+    # /etc and the dialogue of the door belong to config, and the server of
+    # telnet is the transport that hands it a socket.
+    target_link_libraries(microos_telnet PUBLIC microos_kernel microos_kshell microos_config)
     target_compile_features(microos_telnet PUBLIC c_std_11)
 endif()

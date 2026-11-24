@@ -676,7 +676,7 @@ X86_NET_RUN_DEVICE := -netdev user,id=n0,hostfwd=tcp:127.0.0.1:8080-:8080 \
 
 x86-net-build:
 	cmake -B $(X86_NET_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+		-DMICRO_OS_X86_NET=ON -DMICRO_OS_TELNET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_NET_BUILD) --target image
 
 x86-net-run: x86-net-build
@@ -701,7 +701,7 @@ X86_ALL_RUN := $(X86_ALL_BUILD)/run.sh
 
 x86-all-build:
 	cmake -B $(X86_ALL_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_X86_NET=ON $(X86_SIGN_ARGS)
+		-DMICRO_OS_X86_NET=ON -DMICRO_OS_TELNET=ON $(X86_SIGN_ARGS)
 	cmake --build $(X86_ALL_BUILD) --target image
 
 x86-all: x86-all-build build

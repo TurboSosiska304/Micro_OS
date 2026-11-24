@@ -14,6 +14,7 @@
 
 #include <string.h>
 
+#include "config/session.h"
 #include "config/users.h"
 #include "kshell/kshell.h"
 #include "kernel/vfs.h"
@@ -346,6 +347,9 @@ int config_register(void)
 
     /* The accounts of /etc and the three commands of the console. */
     rc |= users_register();
+
+    /* A session: `logout`, `who` and `whoami` beside them. */
+    rc |= session_register();
 
     return rc;
 }

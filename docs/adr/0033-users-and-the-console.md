@@ -1,6 +1,8 @@
 # ADR 0033 - The second half of the users: a file of accounts, a console, and no setuid bit
 
-* Status: accepted
+* Status: accepted; the session and the door of the network are extended by
+  ADR 0045 (1.8), and the refusal of the setuid bit and of the group of a
+  record still stands
 * Date: 2026-11-23
 * Related: ADR 0005 (programs and protection), ADR 0006 (the entry of a
   program), ADR 0016 (the userland), ADR 0020 (the signed image), ADR 0022

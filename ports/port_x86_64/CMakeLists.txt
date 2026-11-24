@@ -33,6 +33,7 @@ set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
 set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
+set(TELNET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/telnet")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
 
 # The second filesystem of the machine (ADR 0009). On: the boot of the root
@@ -195,6 +196,7 @@ set(SETTINGS_SOURCES
     "${CONFIG_DIR}/src/config_cmd.c"
     "${CONFIG_DIR}/src/config_users.c"
     "${CONFIG_DIR}/src/config_login.c"
+    "${CONFIG_DIR}/src/config_session.c"
 )
 
 # The font of the console is the one of the PC (port_x86_64_font.h, Spleen
@@ -261,6 +263,18 @@ if(MICRO_OS_X86_NET)
         "${PKG_DIR}/src/pkg_index.c"
         "${PKG_DIR}/src/pkg_verify.c"
         "${CMAKE_CURRENT_SOURCE_DIR}/loader/ed25519.c"
+    )
+endif()
+
+# The shell over the air (ADR 0033, the second half of the accounts): the
+# port of this machine on the network of QEMU, with the accounts of /etc. It
+# is off by default and on in the machine of `make x86-net-smoke` and of
+# `make x86-all`, where there is a card to listen on.
+set(TELNET_SOURCES)
+if(MICRO_OS_TELNET)
+    list(APPEND TELNET_SOURCES
+        "${TELNET_DIR}/src/telnet_proto.c"
+        "${TELNET_DIR}/src/telnet_server.c"
     )
 endif()
 
@@ -1471,9 +1485,9 @@ add_executable(microos64
     ${HASH_SOURCES}
     ${NET_SOURCES}
     ${PKG_SOURCES}
+    ${TELNET_SOURCES}
     src/boot64.S
     src/kmain.c
-    src/shell.c
     src/port_x86_64.c
     src/console.c
     src/vga.c
@@ -1525,6 +1539,7 @@ target_include_directories(microos64 PRIVATE
     "${PROCFS_DIR}/include"
     "${DEVFS_DIR}/include"
     "${CONFIG_DIR}/include"
+    "${TELNET_DIR}/include"
     "${SETTINGS_DIR}/include"
     "${NET_DIR}/include"
     # The hash of /etc/shadow and of a signed image (components/config,

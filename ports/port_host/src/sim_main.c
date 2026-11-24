@@ -13,12 +13,14 @@
 
 #include "board/board.h"
 #include "config/config.h"
+#include "config/session.h"
 #include "config/users.h"
 #include "devfs/devfs.h"
 #include "graphics/tft_console.h"
 #include "init/initd.h"
 #include "kernel/boot.h"
 #include "kernel/errno.h"
+#include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -156,21 +158,18 @@ static int fs_subsys_init(void)
     return 0;
 }
 
-static void shell_task(void *arg)
+/*
+ * The console of the simulator, once the boot is proven. The board mirrors
+ * the shell to the panel; the simulator does the same when a file screen was
+ * asked for. Without one there is no renderer and the console of the display
+ * stays silent, so it is not started.
+ */
+static void console_bring_up(void)
 {
-    K_UNUSED(arg);
-
-    /*
-     * The board mirrors the shell to the panel; the simulator does the same
-     * when a file screen was asked for. Without one there is no renderer and
-     * the console of the display stays silent, so it is not started.
-     */
     if (port_host_screen_enabled()) {
         tft_console_start();
         kshell_set_sink(tft_console_write);
     }
-
-    kshell_run();
 }
 
 /*
@@ -295,12 +294,27 @@ static void init_task(void *arg)
         kwarn("sim: the scripts of %s did not run", INITD_DIR);
     }
 
-    if (task_create("shell", shell_task, NULL, 6) == NULL) {
-        kerror("sim: cannot start the shell");
+    /*
+     * The console: a session that starts as root, and another one after every
+     * `logout`. The init of the board does the same; here the loop is also
+     * the reaper of the tasks a person starts from the shell, so the table of
+     * 32 slots does not fill with zombies.
+     */
+    console_bring_up();
+
+    if (session_console_start() == 0) {
+        kerror("sim: cannot start the session of the console");
     }
 
     for (;;) {
-        k_sched_sleep_ms(1000);
+        int status = 0;
+        int pid;
+
+        while ((pid = ksys_waitpid(-1, &status, KSYS_WNOHANG)) > 0) {
+            session_console_reaped((k_u32_t)pid, status);
+        }
+
+        k_sched_sleep_ms(100);
     }
 }
 

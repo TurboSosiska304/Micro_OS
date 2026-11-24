@@ -964,6 +964,7 @@ static int path_search_check(const char *path)
 int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
 {
     const struct mount *m = resolve(path, NULL);
+    bool creating = false;
     int rc;
 
     if (m == NULL || out == NULL) {
@@ -1010,6 +1011,7 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
             if (rc != 0) {
                 return rc;
             }
+            creating = true;
         }
     }
 
@@ -1027,6 +1029,23 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
     if (rc != 0) {
         out->ops = NULL;
         out->fs = NULL;
+        return rc;
+    }
+
+    /*
+     * The owner of a file that the open made is the task that made it (the
+     * debt of 1.6): the record of a filesystem is born with the uid of root
+     * because a filesystem has no task, and the VFS is the layer that knows
+     * who is calling. The gain is a home a person can write in without root
+     * taking the file back, and the price is that the group of the record
+     * stays root until a call sets one - the filesystems have an owner but
+     * no operation for the group yet (docs/debts.md).
+     *
+     * A create of a name that was already there is not a create: its owner
+     * does not move because somebody opened it.
+     */
+    if (creating && caller_uid() != VFS_UID && m->ops->chown != NULL) {
+        (void)m->ops->chown(m->ctx, path, caller_uid());
     }
 
     return rc;
@@ -1321,6 +1340,12 @@ int vfs_mkdir(const char *path)
     }
 
     rc = m->ops->mkdir(m->ctx, path);
+
+    if (rc == 0 && caller_uid() != VFS_UID && m->ops->chown != NULL) {
+        /* A directory made by a person is that person's, for the same
+         * reason a file is (see vfs_open). */
+        (void)m->ops->chown(m->ctx, path, caller_uid());
+    }
 
     return rc;
 }

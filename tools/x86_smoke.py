@@ -3211,16 +3211,18 @@ USERS_SCRIPT = [
     ("password: ", "microos"),
     (PROMPT, "id"),
     # `su - guest` without a password, from root, and the directory of the
-    # account.
+    # account. The session is the one task of the console, so `who` names it
+    # as guest, and `whoami` is the name of the account and nothing else.
     (PROMPT, "su - guest"),
     (PROMPT, "pwd"),
+    (PROMPT, "whoami"),
+    (PROMPT, "who"),
     (PROMPT, "id"),
     # A user does not become root without the password of root.
     (PROMPT, "su - root"),
     ("password: ", "wrong"),
     (PROMPT, "id"),
-    # The file a user makes: the owner is root, which is the debt of
-    # docs/debts.md and not the rule this release ships.
+    # The file a user makes is the user's (the debt of 1.6 is paid).
     (PROMPT, "echo seven > /tmp/seven.txt"),
     (PROMPT, "stat /tmp/seven.txt"),
     (PROMPT, "id"),
@@ -3235,11 +3237,20 @@ USERS_SCRIPT = [
     ("password: ", "guest"),
     (PROMPT, "id"),
     # A login with no name: the empty answer is a name that is needed, and not
-    # a name that does not fit, and nothing else follows it.
+    # a name that does not fit, and it returns to the prompt of the shell.
     (PROMPT, "login"),
     ("login: ", "<enter>"),
     ("login: a name is needed", ""),
     (PROMPT, "id"),
+    # `logout` ends the session of the console and the init starts another
+    # one as root: that is the way back from a user, and `who` says it.
+    (PROMPT, "whoami"),
+    (PROMPT, "su - guest"),
+    (PROMPT, "logout"),
+    ("MicroOS shell ready", ""),
+    (PROMPT, "id"),
+    (PROMPT, "whoami"),
+    (PROMPT, "who"),
     (PROMPT, ""),
 ]
 
@@ -3346,6 +3357,11 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         index = indexes[occurrence]
         return blocks[index] if index < len(blocks) else ""
 
+    def last_line(text: str) -> str:
+        """The answer of a command, without the echo of the line that asked."""
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return lines[-1] if lines else ""
+
     expect(
         "the console answers the whole script",
         len(blocks) > len(USERS_COMMANDS),
@@ -3405,6 +3421,16 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "uid=7(guest) gid=7 home=/home/guest" in answer("id", 2),
         answer("id", 2),
     )
+    expect(
+        "whoami names the guest of the session",
+        last_line(answer("whoami", 0)) == "guest",
+        answer("whoami", 0),
+    )
+    expect(
+        "who lists the session of the console as its user",
+        "guest" in answer("who", 0) and "console" in answer("who", 0),
+        answer("who", 0),
+    )
 
     # A user does not become root without the password of root: the wrong one
     # is refused and the shell is still guest.
@@ -3419,12 +3445,12 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         answer("id", 3),
     )
 
-    # The file a user makes is owned by root: the create path of the VFS
-    # carries no owner yet (docs/debts.md).
+    # The file a user makes is owned by the user: the create path of the VFS
+    # carries the uid of the task that made the file.
     stat = answer("stat /tmp/seven.txt")
     expect(
-        "a file of a user is still owned by root (the debt)",
-        "owner: 0" in stat and "size: 6" in stat,
+        "a file of a user is owned by the user",
+        "owner: 7" in stat and "size: 6" in stat,
         stat,
     )
     expect(
@@ -3466,6 +3492,35 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "a login with no name changes nothing",
         "uid=0(root)" in answer("id", 7),
         answer("id", 7),
+    )
+
+    # The session of the console: `whoami` names the account, `who` lists the
+    # session, and `logout` ends it. The init of the port starts another one
+    # as root, which is the way back from a user of this system.
+    expect(
+        "whoami is root before the logout",
+        last_line(answer("whoami", 1)) == "root",
+        answer("whoami", 1),
+    )
+    expect(
+        "logout ends the session",
+        "logout: the session ends" in answer("logout"),
+        answer("logout"),
+    )
+    expect(
+        "the console starts again as root after a logout",
+        "uid=0(root)" in answer("id", 8),
+        answer("id", 8),
+    )
+    expect(
+        "whoami is root after the logout",
+        last_line(answer("whoami", 2)) == "root",
+        answer("whoami", 2),
+    )
+    expect(
+        "who names the new session of the console",
+        "root" in answer("who", 1) and "console" in answer("who", 1),
+        answer("who", 1),
     )
 
     return checks
