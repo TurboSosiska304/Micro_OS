@@ -859,6 +859,22 @@ static int journal_replay(void)
     return MFS_OK;
 }
 
+/* The transaction the journal of the mounted volume still holds, if any. */
+k_u32_t mfs_priv_journal_pending(void)
+{
+    struct mfs_journal_header header;
+
+    if (!journaled()) {
+        return 0u;
+    }
+
+    if (journal_header_read(&header) != MFS_OK) {
+        return 0u;
+    }
+
+    return (header.state == MFS_JOURNAL_STATE_COMMITTED) ? header.slots : 0u;
+}
+
 /* --- the bitmap of the free blocks --- */
 
 static k_u32_t bitmap_bytes(void)

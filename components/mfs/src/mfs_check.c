@@ -1876,7 +1876,21 @@ int mfs_repair_locked(const struct mfs_private *view, struct mfs_check_report *r
 
 int mfs_check_locked(const struct mfs_private *view, struct mfs_check_report *report)
 {
+    k_u32_t journal;
     int rc;
+
+    /*
+     * The journal of a version 4 volume is replayed by the mount, so a
+     * committed transaction here means that the medium changed under the
+     * volume that is mounted: the check names it instead of walking a state
+     * the mount does not have (ADR 0047).
+     */
+    journal = mfs_priv_journal_pending();
+
+    if (journal != 0u) {
+        add_error(report, CHECK_SUBJECT_VOLUME, journal,
+                  "the journal holds a transaction the mount did not replay");
+    }
 
     rc = claimed_alloc(view, report);
     if (rc != MFS_OK) {
