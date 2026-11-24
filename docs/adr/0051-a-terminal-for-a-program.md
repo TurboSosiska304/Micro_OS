@@ -208,11 +208,12 @@ a transcript and not a terminal.
 ### 8. The keys belong to the program that reads them
 
 The caller of `execve` waits for the program and reads the console for Ctrl+C.
-That read now stops while a program is reading the terminal itself: the tty
-keeps a `reading` flag for as long as a read of the console is blocked, and the
-waiter asks `k_tty_console_claimed()` before it polls. A key typed at an editor
-is the editor's byte; Ctrl+C is a byte too while `ISIG` is off, and the
-program's own `read` is the only reader of it.
+That read now stops while a program owns the terminal: the console keeps the
+pid of the task that read it or put it in raw mode (`owner`), the read of a
+key and the `TCSETS` of a mode set it, and the waiter asks
+`k_tty_console_claimed()` before it polls. A key typed at an editor is the
+editor's byte; Ctrl+C is a byte too while `ISIG` is off, and the program's own
+`read` is the only reader of it.
 
 The flag is a property of the console, so a session of telnet never claims the
 keyboard of the board, and a program that dies in the middle of a read releases
