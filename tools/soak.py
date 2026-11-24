@@ -430,7 +430,7 @@ class Load:
             # foreground task. Its answer is not compared (the program has
             # its own SIGINT story), only the prompt afterwards.
             Command("exec /bin/signals", interrupt=True, soft=True),
-            Command("kill 9999", ["no such process"]),
+            Command("kill 999999999", ["no such process"]),
             Command("sleep 50", ["slept 50 ms"], forbid=("usage", "not a number")),
             Command("write /tmp/soak.one hello", ["bytes written"]),
             Command("cat /tmp/soak.one", ["hello"]),
