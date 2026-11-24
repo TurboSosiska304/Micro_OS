@@ -162,7 +162,8 @@ class Machine:
     """The emulated machine, its serial port and the monitor of QEMU."""
 
     def __init__(self, loader: str, kernel: str, image: str, workdir: str,
-                 devices: list, serial_only: bool = False) -> None:
+                 devices: list, serial_only: bool = False,
+                 controller: str = "qemu-xhci,id=xhci") -> None:
         os.makedirs(workdir, exist_ok=True)
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
@@ -184,7 +185,7 @@ class Machine:
             "-machine",
             "pc,i8042=off",
             "-device",
-            "qemu-xhci,id=xhci",
+            controller,
             "-display",
             "none",
             "-serial",
@@ -797,6 +798,88 @@ def run_mouse(loader: str, kernel: str, image: str, workdir: str, timeout: float
     return checks
 
 
+def run_usb3(loader: str, kernel: str, image: str, workdir: str, timeout: float) -> list:
+    """The port of the third generation: a reset that ends in U0 and PED.
+
+    The controller of the machine has one port and it is a USB3 one
+    (`qemu-xhci,p2=0,p3=1`), and the device on it is a UAS disk - a device of
+    the SuperSpeed generation this release names and does not drive. What the
+    case proves is the half that matters on a laptop: the reset of a USB3
+    port waits for PRC, then for PLS = U0 and PED, the descriptors of a
+    SuperSpeed device are read, and a device of a class no driver of this
+    release speaks is a warning with the port of it and not silence.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    devices = ["-device", "usb-uas,id=uas,bus=xhci.0"]
+
+    try:
+        machine = Machine(loader, kernel, image, workdir, devices,
+                          controller="qemu-xhci,id=xhci,p2=0,p3=1")
+    except (OSError, RuntimeError) as error:
+        expect("the machine of the SuperSpeed port starts", False, str(error))
+        return checks
+
+    try:
+        booted = machine.wait_serial(PROMPT, timeout)
+        text = machine.read_serial()
+
+        expect("the machine boots with one port of the third generation", booted, text[-600:])
+        expect(
+            "the controller reports its one port",
+            re.search(r"xhci: controller at [0-9a-f]+, version \d+\.\d+, 1 port\(s\)", text)
+            is not None,
+            "the controller of the run did not name its port",
+        )
+
+        found = re.search(r"xhci: port 1: a device at speed (\d+) \((\w+)\), PORTSC ([0-9a-f]{8})",
+                          text)
+        expect(
+            "the port of the third generation is enabled after its reset",
+            found is not None and "not enabled after its reset" not in text,
+            "the reset of the port did not end in PED",
+        )
+        expect(
+            "the speed of the port is the one of a SuperSpeed device",
+            found is not None and found.group(1) == "4" and found.group(2) == "super",
+            found.group(0) if found is not None else text[-400:],
+        )
+        if found is not None:
+            portsc = int(found.group(3), 16)
+            expect(
+                "PORTSC of the port says connected and enabled at speed 4",
+                (portsc & 0x3) == 0x3 and ((portsc >> 10) & 0xF) == 4,
+                f"PORTSC {found.group(3)}",
+            )
+        else:
+            expect("PORTSC of the port says connected and enabled at speed 4", False,
+                   "no PORTSC in the line of the port")
+
+        expect(
+            "the descriptors of the SuperSpeed device are read",
+            re.search(r"usb: port 1: [0-9a-f]{4}:[0-9a-f]{4} ", text) is not None,
+            "the enumeration of the device did not reach its descriptors",
+        )
+        expect(
+            "a class no driver of the release speaks is named, not silent",
+            "is not a device of a class this release drives" in text,
+            text[-400:],
+        )
+        expect(
+            "a port with a device and no class is a warning with its number",
+            re.search(r"usb: 1 port\(s\) of the controller have a device and none of them "
+                      r"enumerated", text) is not None,
+            text[-400:],
+        )
+    finally:
+        machine.close()
+
+    return checks
+
+
 def run_net(loader: str, kernel: str, image: str, workdir: str, timeout: float) -> list:
     """One boot of the network image with the wire of the USB on the user net."""
     checks = []
@@ -1024,6 +1107,8 @@ def main(argv: list) -> int:
                           os.path.join(workdir, "hub"), args.timeout)
         checks += run_hotplug(loader, kernel, args.image,
                               os.path.join(workdir, "hotplug"), args.timeout)
+        checks += run_usb3(loader, kernel, args.image,
+                           os.path.join(workdir, "usb3"), args.timeout)
         checks += run_mouse(loader, kernel, args.image,
                             os.path.join(workdir, "mouse"), args.timeout)
     except FileNotFoundError as error:

@@ -154,6 +154,25 @@ extern void isr_irq_xhci(void);
 #define XHCI_SPEED_HIGH 3u
 #define XHCI_SPEED_SUPER 4u
 
+/* The link states of PORTSC.PLS (bits 5..8). A USB3 port is enabled when it
+ * is in U0; a port in Polling (7) has not finished its reset, and a port in
+ * Inactive (6) has no partner. */
+#define XHCI_PLS_U0 0u
+#define XHCI_PLS_POLLING 7u
+#define XHCI_PLS_INACTIVE 6u
+
+/*
+ * The waits of a port reset. The budget of the reset itself is the one of the
+ * specification (500 ms, and a device behind a bad cable may use all of it),
+ * the enable after PRC is the moment of the device, and the power of the port
+ * is a rail that comes up in twenty milliseconds (§4.19.1).
+ */
+#define XHCI_PORT_POWER_MS 20u
+#define XHCI_RESET_TIMEOUT_US 500000u
+#define XHCI_RESET_ENABLE_US 100000u
+#define XHCI_RESET_SETTLE_MS 10u
+#define XHCI_RESET_ATTEMPTS 5u
+
 /* --- the TRBs -------------------------------------------------------------- */
 
 /* One transfer request block: sixteen bytes, a parameter, a status and a
@@ -372,6 +391,12 @@ static struct xhci_hub g_hubs[XHCI_HUBS];
 #define XHCI_HUB_SCAN_MS 250u
 static k_u32_t g_next_hub_scan_ms;
 
+/* The controller controls the power of its ports (HCCPARAMS1.PPC). A
+ * controller without it powers every port itself, and PP reads zero for
+ * ever: writing it or waiting for it on such a machine is a wait for a bit
+ * that no register of it holds. */
+static bool g_ppc;
+
 /* The line of the controller: true when the function gave this driver an
  * interrupt, and the vector it arrived on. */
 static bool g_irq;
@@ -502,6 +527,27 @@ static bool wait_until(k_u32_t offset, k_u32_t mask, k_u32_t value, k_u32_t time
     }
 
     return (op_read(offset) & mask) == value;
+}
+
+/*
+ * The clock of the waits of this file, in microseconds. The tick of the port
+ * is a millisecond and the reset of a port is decided in tens of them; the
+ * time stamp counter is the clock the boot calibrated against the PIT, and it
+ * is what a deadline of a reset is measured with. A machine whose boot could
+ * not calibrate it keeps the tick, which is coarse and true.
+ */
+static k_u64_t now_us(void)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+
+    if (info != NULL && info->tsc_calibrated && info->cpu_hz != 0u) {
+        k_u64_t cycles = port_rdtsc();
+        k_u64_t hz = info->cpu_hz;
+
+        return (cycles / hz) * 1000000u + ((cycles % hz) * 1000000u) / hz;
+    }
+
+    return k_port_uptime_us();
 }
 
 /* Spend a few milliseconds without a ring to wait on. The clock of the
@@ -2457,71 +2503,212 @@ static bool enumerate_device(const struct xhci_where *where, k_u32_t speed)
 
 /* --- the port of the controller -------------------------------------------- */
 
-/* Reset one port that has a device, and answer its speed. A port with nothing
- * on it is not an error and says nothing. */
-static bool port_reset(k_u32_t port, k_u32_t *speed)
+/* The name of a speed, for the lines of the log a person reads. */
+static const char *speed_name(k_u32_t speed)
+{
+    switch (speed) {
+    case XHCI_SPEED_FULL:
+        return "full";
+    case XHCI_SPEED_LOW:
+        return "low";
+    case XHCI_SPEED_HIGH:
+        return "high";
+    case XHCI_SPEED_SUPER:
+        return "super";
+    default:
+        return "unknown";
+    }
+}
+
+/*
+ * The power of the port, before anything else: a port that is not powered is
+ * a port whose reset is not a reset.
+ *
+ * This is the defect the laptop of the report showed. The write of PP is
+ * posted, and the old code read the register back at once, saw zero and
+ * wrote the reset with the zero in it - which turned the port off in the
+ * same write that reset it, and no PED ever came. A controller with PPC
+ * clear (HCCPARAMS1 bit 3) powers its ports itself and PP reads zero for
+ * ever; there the write and the wait are the price of a bit that is not
+ * there, and the reset goes on - a port with a device on it is powered on
+ * such a machine by definition.
+ */
+static bool port_power(k_u32_t address, k_u32_t state)
+{
+    k_u64_t started;
+
+    if (!g_ppc || (state & XHCI_PORT_PP) != 0u) {
+        return true;
+    }
+
+    op_write(address, (state & ~XHCI_PORT_CHANGE) | XHCI_PORT_PP);
+    (void)op_read(address);
+
+    started = now_us();
+
+    while ((op_read(address) & XHCI_PORT_PP) == 0u) {
+        if (now_us() - started > (k_u64_t)XHCI_PORT_POWER_MS * 1000u) {
+            kwarn("usb: the port at %x did not take its power (PORTSC %08x)", (unsigned)address,
+                  (unsigned)op_read(address));
+            return false;
+        }
+    }
+
+    /* The rail is up: the device behind it has the twenty milliseconds of the
+     * specification before it is reset (§4.19.1). */
+    delay_ms(XHCI_PORT_POWER_MS);
+
+    return true;
+}
+
+/*
+ * One attempt of a reset, and the PORTSC of the moment it gave up. The order
+ * is the one of the specification and of the driver of Linux:
+ *
+ *   1. the change bits of an earlier scan (or of the firmware) are cleared,
+ *      because a PRC that is already set is not the end of this reset;
+ *   2. PR is written with the bits the port keeps - its power, its speed and
+ *      its link state - and the write is read back, because a posted write
+ *      that has not landed yet reads as a port that is not resetting;
+ *   3. the answer is PRC and not the clearing of PR: on a real controller PR
+ *      clears before the device is on the bus of the port, which is exactly
+ *      how this driver read PED too early on the laptop of the report. The
+ *      budget is 500 ms of the specification;
+ *   4. the change bit of the reset is cleared after the enable, and PED is
+ *      waited for in a loop: on a USB2 port it can lag the change bit by a
+ *      few reads, and a USB3 port is enabled when PLS is U0 and not when it
+ *      is Polling.
+ */
+static bool port_reset_once(k_u32_t address, k_u32_t *final, k_u32_t *speed)
+{
+    k_u32_t state = op_read(address);
+    k_u64_t started;
+    k_u32_t neutral;
+
+    op_write(address, state | XHCI_PORT_CHANGE);
+    (void)op_read(address);
+
+    state = op_read(address);
+
+    if ((state & XHCI_PORT_CCS) == 0u) {
+        *final = state;
+        return false;
+    }
+
+    neutral = state & (XHCI_PORT_PP | XHCI_PORT_PLS_MASK | XHCI_PORT_SPEED_MASK);
+    op_write(address, neutral | XHCI_PORT_PR);
+    (void)op_read(address);
+
+    started = now_us();
+
+    for (;;) {
+        state = op_read(address);
+
+        if ((state & XHCI_PORT_PRC) != 0u) {
+            break;
+        }
+
+        if (now_us() - started > XHCI_RESET_TIMEOUT_US) {
+            *final = state;
+            return false;
+        }
+    }
+
+    /* The reset is over: the change bit of it goes back as a one, and the
+     * port is asked for its enable. */
+    op_write(address, (state & ~XHCI_PORT_CHANGE) | XHCI_PORT_PRC);
+    state = op_read(address);
+
+    {
+        k_u32_t speed_now = (state & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
+        k_u64_t enabled = now_us();
+
+        for (;;) {
+            k_u32_t pls = (state & XHCI_PORT_PLS_MASK) >> 5;
+
+            if ((state & XHCI_PORT_PED) != 0u &&
+                (speed_now != XHCI_SPEED_SUPER || pls == XHCI_PLS_U0)) {
+                break;
+            }
+
+            if (now_us() - enabled > XHCI_RESET_ENABLE_US) {
+                *final = state;
+                return false;
+            }
+
+            state = op_read(address);
+        }
+    }
+
+    /* The change bits after the enable: the connect and the reset of this
+     * attempt are read and cleared, so the next scan does not see them. */
+    op_write(address, state | XHCI_PORT_CHANGE);
+    *final = op_read(address);
+
+    if ((*final & XHCI_PORT_PED) == 0u) {
+        return false;
+    }
+
+    *speed = (*final & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
+
+    return true;
+}
+
+/* Reset one port that has a device, and answer its speed and the PORTSC it
+ * had before the reset. A port with nothing on it is not an error and says
+ * nothing; a port with a device that does not come up is a warning with the
+ * two PORTSC of the attempts, because that line is what a person sends when
+ * the keyboard of a laptop does not work. */
+static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
 {
     k_u32_t address = g_port_base + (port - 1u) * 16u;
     k_u32_t state = op_read(address);
-    k_u64_t deadline;
-    k_u32_t guard;
+    k_u32_t final = state;
+    k_u32_t attempt;
+
+    *before = state;
 
     if ((state & XHCI_PORT_CCS) == 0u) {
         return false;
     }
 
-    /* The power of the port first: a port that is not powered is a port
-     * whose reset is not a reset. */
-    if ((state & XHCI_PORT_PP) == 0u) {
-        op_write(address, state | XHCI_PORT_PP);
-
-        for (guard = 0; guard < 100u; guard++) {
-            if ((op_read(address) & XHCI_PORT_PP) != 0u) {
-                break;
-            }
-        }
-    }
-
-    /* The reset bit, with the change bits of the moment as they are: the
-     * write-back of a one to a change bit clears it and never sets it. */
-    state = op_read(address);
-    op_write(address,
-             (state & (XHCI_PORT_CCS | XHCI_PORT_PP | XHCI_PORT_PLS_MASK | XHCI_PORT_SPEED_MASK)) |
-                 XHCI_PORT_PR);
-
-    /* A reset of a port takes tens of milliseconds; the clock is the limit
-     * and the count is the guard of a machine whose clock is not there. */
-    deadline = k_port_uptime_ms() + 500u;
-
-    for (guard = 0; guard < 1000000u; guard++) {
-        state = op_read(address);
-
-        if ((state & XHCI_PORT_PR) == 0u || k_port_uptime_ms() > deadline) {
-            break;
-        }
-    }
-
-    state = op_read(address);
-
-    /* The change bits of the reset and of the connection are cleared by the
-     * write of a one; PED says the port is enabled and speaks. */
-    op_write(address, state | XHCI_PORT_CHANGE);
-    state = op_read(address);
-
-    if ((state & XHCI_PORT_PED) == 0u) {
-        kwarn("usb: the port %u is not enabled after its reset (%x)", (unsigned)port,
-              (unsigned)state);
+    if (!port_power(address, state)) {
         return false;
     }
 
-    *speed = (state & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
+    kdebug("usb: port %u: PORTSC %08x before the reset", (unsigned)port, (unsigned)state);
 
-    /* The specification gives the device a moment after the reset of its
-     * port before it answers the first command (Linux spends 10 ms here),
-     * and a controller of a real laptop is not QEMU about it. */
-    delay_ms(10u);
+    for (attempt = 0; attempt < XHCI_RESET_ATTEMPTS; attempt++) {
+        if (port_reset_once(address, &final, speed)) {
+            kdebug("usb: port %u: PORTSC %08x after the reset (attempt %u, speed %s)",
+                   (unsigned)port, (unsigned) final, (unsigned)(attempt + 1u), speed_name(*speed));
 
-    return true;
+            /* The specification gives the device a moment after the reset of
+             * its port before it answers the first command (Linux spends
+             * 10 ms here), and a controller of a real laptop is not QEMU
+             * about it. */
+            delay_ms(XHCI_RESET_SETTLE_MS);
+
+            return true;
+        }
+
+        /* A device that left during the reset is not a port of retries, and
+         * a machine of a person unplugs one while it boots. */
+        if ((op_read(address) & XHCI_PORT_CCS) == 0u) {
+            kinfo("usb: the port %u lost its device during its reset (PORTSC %08x)", (unsigned)port,
+                  (unsigned) final);
+            return false;
+        }
+
+        /* The core of Linux tries the reset five times: a USB2 port whose
+         * device was still settling comes up on the second one. */
+        delay_ms(XHCI_RESET_SETTLE_MS);
+    }
+
+    kwarn("usb: the port %u is not enabled after its reset (PORTSC %08x -> %08x, %u attempt(s))",
+          (unsigned)port, (unsigned)state, (unsigned) final, (unsigned)attempt);
+
+    return false;
 }
 
 /*
@@ -2560,12 +2747,15 @@ static void root_port_scan(void)
         {
             struct xhci_where where;
             k_u32_t speed = 0;
+            k_u32_t before = 0;
 
-            if (!port_reset(port, &speed)) {
+            if (!port_reset(port, &speed, &before)) {
                 continue;
             }
 
-            kinfo("xhci: port %u: a device arrived at speed %u", (unsigned)port, (unsigned)speed);
+            kinfo("xhci: port %u: a device arrived at speed %u (%s), PORTSC %08x -> %08x",
+                  (unsigned)port, (unsigned)speed, speed_name(speed), (unsigned)before,
+                  (unsigned)op_read(address));
 
             where.root_port = (k_u8_t)port;
             where.depth = 0u;
@@ -2671,6 +2861,7 @@ static bool controller_init(k_u64_t base, k_u32_t size)
 
     g_max_slots = parameters & 0xFFu;
     g_max_ports = (parameters >> 24) & 0xFFu;
+    g_ppc = (parameters & 0x00000008u) != 0u;
 
     if (g_max_slots == 0u || g_max_slots > 64u) {
         kwarn("xhci: the controller reports %u slots", (unsigned)g_max_slots);
@@ -3435,23 +3626,49 @@ void port_x86_64_xhci_init(void)
      * the middle of the boot. */
     controller_line(&device);
 
-    for (port = 1; port <= g_max_ports; port++) {
-        struct xhci_where where;
+    {
+        k_u32_t attached = 0u;
+        k_u32_t enumerated = 0u;
 
-        if (!port_reset(port, &speed)) {
-            continue;
+        for (port = 1; port <= g_max_ports; port++) {
+            struct xhci_where where;
+            k_u32_t before = 0;
+
+            if ((op_read(g_port_base + (port - 1u) * 16u) & XHCI_PORT_CCS) != 0u) {
+                attached++;
+            }
+
+            if (!port_reset(port, &speed, &before)) {
+                continue;
+            }
+
+            /* The line a person reads when a port of a laptop misbehaves:
+             * the register before the reset and after it, and the speed the
+             * controller named. */
+            kinfo("xhci: port %u: a device at speed %u (%s), PORTSC %08x -> %08x", (unsigned)port,
+                  (unsigned)speed, speed_name(speed), (unsigned)before,
+                  (unsigned)op_read(g_port_base + (port - 1u) * 16u));
+
+            where.root_port = (k_u8_t)port;
+            where.depth = 0u;
+            where.parent_slot = 0u;
+            where.route = 0u;
+
+            /* Every port is enumerated: a laptop has a keyboard and a stick
+             * at the same time, and the second one is not a reason to stop. */
+            if (enumerate_device(&where, speed)) {
+                enumerated++;
+            }
         }
 
-        kinfo("xhci: port %u: a device at speed %u", (unsigned)port, (unsigned)speed);
-
-        where.root_port = (k_u8_t)port;
-        where.depth = 0u;
-        where.parent_slot = 0u;
-        where.route = 0u;
-
-        /* Every port is enumerated: a laptop has a keyboard and a stick at
-         * the same time, and the second one is not a reason to stop. */
-        (void)enumerate_device(&where, speed);
+        /* A controller with devices on its ports and none of them
+         * enumerated is not "a machine without a keyboard": it is a driver
+         * that did not finish one device, and the line says which number to
+         * look at. */
+        if (attached > 0u && enumerated == 0u) {
+            kwarn("usb: %u port(s) of the controller have a device and none of them enumerated",
+                  (unsigned)attached);
+        }
     }
 
     g_next_hub_scan_ms = (k_u32_t)k_port_uptime_ms() + XHCI_HUB_SCAN_MS;
