@@ -21,6 +21,31 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- The policy of the MMU (ADR 0052): the page tables of a program have rules
+  now, and the hardware enforces them. `mmap` of `PROT_WRITE|PROT_EXEC` is
+  refused with `EINVAL` **before** a page exists, and the audit of `exec` stays
+  as the second lock; the stack grows on the fault of its guard page up to the
+  ceiling of the task (`ulimit -m`), with the base read from the tables; `brk`
+  and the anonymous mappings are charged against the same ceiling, and the
+  heap of the kernel (calls 20-22) is not a program's to take; the kernel is
+  unreachable from ring 3 by the supervisor bit on every machine and by
+  **SMEP and SMAP** where the processor has them, with a window around each
+  copy (`k_port_exec_user_access_begin/end`, the contract of the port **1.14**);
+  and a bad access answers `EFAULT` with its address in the log.
+  `make mmu-smoke` is 52 checks on a processor with SMEP and SMAP and 51 on one
+  without: a program that writes its text, executes its stack, writes a kernel
+  address, grows past its heap ceiling or touches a page it does not own ends
+  with `EFAULT` and the shell answers the next line.
+- The desk of a person (ADR 0054): the machine boots into the desktop - `init`
+  starts the session, `/etc/session` runs `/bin/wm` - and the window of the
+  **terminal** runs a command of `/bin` on two pipes: the keys go to it, `Ctrl+C`
+  is a signal, `Ctrl+T` is the second size of the font (16x32), `Ctrl+Q` leaves.
+  The clock of the panel is the time of the machine in the format of
+  `/etc/console`, and a second of it repaints **only the rectangle of the
+  hour**. `make x86-vga-smoke` is 266 checks, and the lane found a defect of
+  1.7 on the way: the damage of a window was compared with the edges of the
+  frame instead of the rectangle, so one key repainted 1280x765 - it is 640x16
+  now, and two screenshots around a key hold it.
 - The wire of a person, first half (ADR 0055): **DHCP** as a client of the
   library (`components/net/src/dhcp.c`): DISCOVER/OFFER/REQUEST/ACK, T1 and T2,
   a NAK that starts again, the lease in `/etc/network` (read before the request,
