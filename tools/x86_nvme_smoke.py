@@ -7,25 +7,34 @@ The other smoke tests of this machine boot the disk on the legacy IDE channel
 of a modern laptop (ADR 0042): a function of the PCI bus with a window of
 registers, an admin queue and a pair of I/O rings, and no channels at all.
 
-Two boots, and the second one is the rule of ADR 0041:
+Four boots, and the rule of ADR 0041 is the difference between them:
 
-  1. **a volume of this system** - the image `make x86-disk` builds, on the
-     NVMe namespace 1. The boot finds the controller, enables it, identifies
-     the controller and the namespace, creates the I/O queue pair, reads the
-     partition table and mounts the MicroFS volume of `nvme0p1`; the shell
-     lists `/bin`, reads `/etc/setting` and asks `df /`, and `/bin/hello` runs
-     out of a file of the NVMe disk. A write is attempted on purpose and the
-     driver refuses it with the sentence of the rule, and the SHA-256 of the
+  1. **a volume of this system that `/etc/volumes` names** - the image `make
+     x86-disk` builds, on the NVMe namespace 1. The boot finds the controller,
+     enables it, identifies the controller and the namespace, creates the I/O
+     queue pair, reads the partition table and mounts the MicroFS volume of
+     `nvme0p1` read-write (the rule allows it and the root mount asked); the
+     shell lists `/bin`, reads `/etc/setting`, asks `df /`, and writes
+     `/note.txt`. `/proc/mounts` says `rw`, and `/bin/hello` runs out of a file
+     of the NVMe disk.
+
+  2. **the same image after a reset** - the machine starts again on the file
+     the first boot left, mounts the volume it finds, and `cat /note.txt` reads
+     the line the first boot wrote. `fsck` says the volume is consistent.
+
+  3. **a copy without the name** - built with `--volumes none`, so that
+     `/etc/volumes` does not name `nvme0p1`. The root is mounted read-only,
+     the write is refused with the sentence of the rule, and the SHA-256 of the
      whole image is the same before and after the boot: not one byte.
 
-  2. **a volume of another system** - a copy of the same image with the magic
-     of btrfs over the volume and no header of MicroFS left. The mount is
-     refused with the name of the foreign system, the boot stops instead of
-     running a shell over somebody else's bytes, and the SHA-256 of the image
-     is again the same before and after.
+  4. **a volume of another system** - a copy of the image with the magic of
+     btrfs over the volume and no header of MicroFS left. The mount is refused
+     with the name of the foreign system, the boot stops instead of running a
+     shell over somebody else's bytes, and the SHA-256 of the image is again
+     the same before and after.
 
-The exit status is 0 when both boots are what they have to be, 2 when a tool
-or an image is missing, and 1 when a check failed.
+The exit status is 0 when every boot is what it has to be, 2 when a tool or an
+image is missing, and 1 when a check failed.
 """
 
 from __future__ import annotations
@@ -35,6 +44,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import sys
 
 from qemu_session import Machine, MachineError, MachineTimeout, disk_name
@@ -42,6 +52,8 @@ from qemu_session import Machine, MachineError, MachineTimeout, disk_name
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
+DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
+IMAGE_TOOL = os.path.join(ROOT, "tools", "x86_image.py")
 
 PROMPT = "microos> "
 
@@ -57,13 +69,13 @@ HELLO_LINE = "PROGRAM: hello from /bin"
 # The first line of /etc/setting, written by tools/x86_image.py.
 SETTING_LINE = "hostname=x86_64"
 
-# A file the boot must not be able to write: the volume of a disk this system
-# did not format by naming it in /etc/volumes is read-only.
-WRITE_PATH = "/nvme.txt"
-WRITE_TEXT = "the disk is read-only"
+# The file the first boot writes and the second one reads.
+NOTE_PATH = "/note.txt"
+NOTE_TEXT = "the disk remembers the NVMe queue"
 
-# The sentence of the refusal of the driver.
-REFUSAL = "the write of"
+# The sentences of the mount and of the refusal of the rule.
+RW_LINE = "is mounted read-write"
+RO_LINE = "is mounted read-only"
 REFUSAL_REASON = "the volume is not named in /etc/volumes"
 
 # The magic of btrfs at the start of its superblock (the third copy, at
@@ -129,13 +141,35 @@ def make_foreign(image: str) -> None:
         handle.write(b"\x00" * 8)
 
 
+def build_unnamed(image: str, build: str, mkfs: str) -> None:
+    """Write the same tree into a volume whose /etc/volumes names nothing."""
+    command = [
+        sys.executable,
+        IMAGE_TOOL,
+        "--image",
+        image,
+        "--build",
+        build,
+        "--mkfs",
+        mkfs,
+        "--volumes",
+        "none",
+    ]
+
+    result = subprocess.run(command, capture_output=True, check=False)
+
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or b"").decode("utf-8", "replace")
+        raise RuntimeError(f"the image without a name: {message.strip()}")
+
+
 def expect(checks: list, title: str, condition: bool, detail: str = "") -> None:
     checks.append((title, bool(condition), detail))
 
 
-def boot_volume(machine: Machine, boot: str, checks: list) -> None:
-    """The shell of the machine on the volume of this system."""
-    commands = ["ls /bin", "cat /etc/setting", "exec /bin/hello", "df /"]
+def boot_writable(machine: Machine, boot: str, checks: list) -> None:
+    """The shell of the machine on the volume the rule allows to write."""
+    commands = ["ls /bin", "cat /etc/setting", "exec /bin/hello", "df /", "cat /proc/mounts"]
     answers = [machine.run(command, timeout=60.0) for command in commands]
 
     expect(checks, "the boot finds the NVMe controller",
@@ -150,14 +184,15 @@ def boot_volume(machine: Machine, boot: str, checks: list) -> None:
            f"x86-64: the root volume is {ROOT_DEVICE}" in boot)
     expect(checks, "the volume of this system is recognised",
            f"nvme0: {ROOT_DEVICE}: a volume of this system (mfs)" in boot)
-    expect(checks, "the disk is read-only and the reason is printed",
-           "nvme0: the disk is read-only: " + REFUSAL_REASON in boot)
-    expect(checks, "the first boot of the controller writes nothing",
+    expect(checks, "the controller registers the disk read-only",
            "nvme: 1 disk(s) on the controller, read-only, nothing written" in boot)
     expect(checks, "the root is mounted from the NVMe disk",
            f"root: the root is mfs on {ROOT_DEVICE}" in boot)
     expect(checks, "the boot does not fall back to the volume of the memory",
            "root: the root is mfs on ram0" not in boot)
+    expect(checks, "the volume is named in /etc/volumes and the writes are open",
+           f"root: {ROOT_DEVICE} {RW_LINE}" in boot and
+           f"nvme0: the writes of {ROOT_DEVICE} are open" in boot, boot)
 
     expect(checks, "ls /bin reads the tree of the disk", "hello" in answers[0], answers[0])
     expect(checks, "cat /etc/setting reads a file of the disk", SETTING_LINE in answers[1],
@@ -166,17 +201,54 @@ def boot_volume(machine: Machine, boot: str, checks: list) -> None:
            answers[2])
     expect(checks, "df / counts the volume of the disk",
            re.search(r"\d+ KB", answers[3]) is not None, answers[3])
+    expect(checks, "/proc/mounts says the root is read-write",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+rw", answers[4]) is not None,
+           answers[4])
 
-    # The write of the rule: there is no WRITE command in the driver, and the
-    # call of the shell comes back as the error of the medium.
-    refused = machine.run(f"write {WRITE_PATH} {WRITE_TEXT}", timeout=30.0)
-    expect(checks, "a write to the volume of the disk is refused",
-           f"write: {WRITE_PATH}" in refused and "error" in refused.lower(), refused)
-    expect(checks, "the driver says why the writes are refused",
-           REFUSAL in boot and REFUSAL_REASON in boot)
+    written = machine.run(f"write {NOTE_PATH} {NOTE_TEXT}", timeout=30.0)
+    expect(checks, "the shell writes a file of the volume",
+           "bytes written to " + NOTE_PATH in written and "error" not in written.lower(), written)
+
+    read_back = machine.run(f"cat {NOTE_PATH}", timeout=30.0)
+    expect(checks, "the file is read back at the first boot", NOTE_TEXT in read_back, read_back)
+
+
+def boot_after_reset(machine: Machine, boot: str, checks: list) -> None:
+    """The second boot of the positive image: the file outlives the machine."""
+    expect(checks, "the second boot reaches the shell", PROMPT in boot or boot != "", boot[:200])
+    expect(checks, "the second boot mounts the volume it finds",
+           f"root: the root is mfs on {ROOT_DEVICE}" in boot)
+
+    read_back = machine.run(f"cat {NOTE_PATH}", timeout=30.0)
+    expect(checks, "the file of the first boot survives the reset", NOTE_TEXT in read_back,
+           read_back)
+
+    fsck = machine.run("fsck", timeout=120.0)
+    expect(checks, "the volume is still consistent after the writes",
+           "the volume is consistent" in fsck, fsck)
+
+    mounts = machine.run("cat /proc/mounts", timeout=30.0)
+    expect(checks, "the root of the second boot is read-write again",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+rw", mounts) is not None, mounts)
+
+
+def boot_read_only(machine: Machine, boot: str, checks: list) -> None:
+    """The volume of this system that /etc/volumes does not name."""
+    expect(checks, "the volume is still one of this system",
+           f"nvme0: {ROOT_DEVICE}: a volume of this system (mfs)" in boot, boot)
+    expect(checks, "the mount asks for the writes and the rule refuses",
+           f"root: {ROOT_DEVICE} {RO_LINE}: {REFUSAL_REASON}" in boot, boot)
+
+    mounts = machine.run("cat /proc/mounts", timeout=30.0)
+    expect(checks, "/proc/mounts says the root is read-only",
+           re.search(rf"{re.escape(ROOT_DEVICE)}\s+/\s+mfs\s+ro", mounts) is not None, mounts)
+
+    refused = machine.run(f"write {NOTE_PATH} {NOTE_TEXT}", timeout=30.0)
+    expect(checks, "a write to a volume the rule does not name is refused",
+           f"write: {NOTE_PATH}" in refused and "error" in refused.lower(), refused)
 
     listed = machine.run("ls /", timeout=30.0)
-    expect(checks, "the file of the refused write does not exist", WRITE_TEXT not in listed,
+    expect(checks, "the file of the refused write does not exist", "note.txt" not in listed,
            listed)
 
 
@@ -184,6 +256,7 @@ def main(argv: list) -> int:
     parser = argparse.ArgumentParser(description="the smoke test of the NVMe disk of x86-64")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image with /bin of the disk")
     parser.add_argument("--build", default=BUILD, help="the build of the port (loader and kernel)")
+    parser.add_argument("--mkfs", default=DEFAULT_MKFS, help="the host tool that writes a volume")
     parser.add_argument("--timeout", type=float, default=180.0, help="the seconds a boot gets")
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
@@ -191,7 +264,7 @@ def main(argv: list) -> int:
     loader = os.path.join(args.build, "loader32.elf")
     kernel = os.path.join(args.build, "microos64.bin")
 
-    for path in (loader, kernel, args.image):
+    for path in (loader, kernel, args.image, args.mkfs):
         if not os.path.isfile(path):
             print(f"missing {path}: run make x86-disk", file=sys.stderr)
             return 2
@@ -199,6 +272,7 @@ def main(argv: list) -> int:
     # A copy of each image: a test never touches the image of the build, and
     # the SHA-256 of the copy is the proof of what the boot did to it.
     run_image = os.path.join(args.build, "nvme-smoke.img")
+    unnamed_image = os.path.join(args.build, "nvme-unnamed.img")
     foreign_image = os.path.join(args.build, "nvme-foreign.img")
 
     checks: list = []
@@ -210,18 +284,50 @@ def main(argv: list) -> int:
         with Machine(args.build, run_image, disk="nvme") as machine:
             try:
                 boot = machine.open(timeout=args.timeout)
-                boot_volume(machine, boot, checks)
+                boot_writable(machine, boot, checks)
             except (MachineError, MachineTimeout) as error:
                 expect(checks, "the machine boots on the NVMe disk", False, str(error))
 
-        after = digest(run_image)
+        after_first = digest(run_image)
         if args.verbose:
             print(machine.transcript.decode("utf-8", errors="replace"))
-        expect(checks, "the SHA-256 of the image is the same after the boot", before == after,
-               f"before {before}, after {after}")
-        print(f"the image of the first boot: sha-256 {before}")
+        expect(checks, "the writes of the first boot reached the medium", after_first != before,
+               f"before {before}, after {after_first}")
 
-        # The second boot: the volume of another system, on the same disk.
+        # The reset: a new machine on the same file.
+        with Machine(args.build, run_image, disk="nvme") as machine:
+            try:
+                boot = machine.open(timeout=args.timeout)
+                boot_after_reset(machine, boot, checks)
+            except (MachineError, MachineTimeout) as error:
+                expect(checks, "the machine boots again on the same disk", False, str(error))
+
+        after_second = digest(run_image)
+        if args.verbose:
+            print(machine.transcript.decode("utf-8", errors="replace"))
+        expect(checks, "the file of the first boot is in the bytes of the image",
+               after_second == after_first, f"before {after_first}, after {after_second}")
+
+        # The third boot: the same tree, and /etc/volumes that names nothing.
+        build_unnamed(unnamed_image, args.build, args.mkfs)
+        unnamed_before = digest(unnamed_image)
+
+        with Machine(args.build, unnamed_image, disk="nvme") as machine:
+            try:
+                boot = machine.open(timeout=args.timeout)
+                boot_read_only(machine, boot, checks)
+            except (MachineError, MachineTimeout) as error:
+                expect(checks, "the machine boots on the unnamed volume", False, str(error))
+
+        unnamed_after = digest(unnamed_image)
+        if args.verbose:
+            print(machine.transcript.decode("utf-8", errors="replace"))
+        expect(checks, "the SHA-256 of the unnamed image is the same after the boot",
+               unnamed_before == unnamed_after,
+               f"before {unnamed_before}, after {unnamed_after}")
+        print(f"the unnamed image: sha-256 {unnamed_before}")
+
+        # The fourth boot: the volume of another system, on the same disk.
         shutil.copyfile(args.image, foreign_image)
         make_foreign(foreign_image)
         foreign_before = digest(foreign_image)
@@ -245,8 +351,8 @@ def main(argv: list) -> int:
                f"root: {ROOT_DEVICE} carries the volume of another system (btrfs)" in console)
         expect(checks, "the machine stops without a root instead of running a shell",
                "x86-64: the boot stops, there is no root filesystem to run from" in console)
-        expect(checks, "no shell over the volume of another system",
-               PROMPT not in console.split("there is no root filesystem to run from")[-1])
+        expect(checks, "no shell over the volume of another system", PROMPT not in console.split(
+            "there is no root filesystem to run from")[-1])
 
         foreign_after = digest(foreign_image)
         expect(checks, "the SHA-256 of the foreign image is the same after the boot",
@@ -254,7 +360,7 @@ def main(argv: list) -> int:
                f"before {foreign_before}, after {foreign_after}")
         print(f"the image of the foreign boot: sha-256 {foreign_before}")
     finally:
-        for path in (run_image, foreign_image):
+        for path in (run_image, unnamed_image, foreign_image):
             if os.path.exists(path):
                 os.remove(path)
 
