@@ -10,6 +10,17 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+### The release
+
+- 1.9.0-rc1: the release of the machine that owns its files - of the wake that
+  preempts (ADR 0046), of the journal (ADR 0047), of the guard of a stack
+  (ADR 0048), of the machine that switches itself off (ADR 0050) and of the
+  terminal of a program (ADR 0051, with kilo of somebody else on it)
+  (`docs/releases/1.9.md`).
+
+
 ## [1.8.0] - 2026-11-24
 
 ### The release
