@@ -1599,11 +1599,20 @@ def check(output: str) -> list:
     )
     # The wall clock of the machine: the CMOS of QEMU read by the port at the
     # boot, printed as UTC. It was a command of the board's driver only, so
-    # the laptop of the owner answered `command not found` for it.
+    # the laptop of the owner answered `command not found` for it, and when
+    # the command came the port's read of the year was one pass of BCD too
+    # many - 2026 printed as 2020 - so the check compares the day with the
+    # host and not only the shape of the line.
+    moment = answer("date")
     expect(
         "date prints the moment of the machine",
-        re.search(r"(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\r?$", answer("date")) is not None,
-        repr(answer("date")),
+        re.search(r"(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\r?$", moment) is not None,
+        repr(moment),
+    )
+    expect(
+        "date names the day of the machine and not another year",
+        time.strftime("%Y-%m-%d") in moment,
+        f"{repr(moment)}, the host is {time.strftime('%Y-%m-%d')}",
     )
     # The limits of the shell come from the kernel: the memory, the CPU time
     # and the descriptors, at the ceiling of the system after the boot.
