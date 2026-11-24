@@ -81,7 +81,7 @@ static void sched_unlock(void)
 
 /*
  * A task has just been put in the queue of `cpu`, and the caller holds the
- * lock. The core is told after the lock is dropped (sched_wake_flush), and
+ * lock. The core is told after the lock is dropped (k_sched_wake_flush), and
  * only when it is another core: a task of this core needs no interrupt, the
  * caller either keeps the CPU or is inside the tick that will look at the
  * queue anyway.
@@ -115,7 +115,7 @@ static void wake_note_locked(k_u32_t cpu)
  * lock and cleared there, so two cores that wake two others in the same
  * moment each send their own and neither loses the other's.
  */
-static void sched_wake_flush(void)
+void k_sched_wake_flush(void)
 {
     k_u32_t mask;
     k_u32_t cpu;
@@ -217,6 +217,22 @@ static void ready_move_to_tail(struct task *t)
 {
     ready_remove(t);
     ready_enqueue(t);
+}
+
+/* --- the table of the sleeping tasks (callers hold the lock) --- */
+
+static void sleep_remove_locked(struct task *t)
+{
+    k_size_t i;
+
+    for (i = 0; i < g_sleeping_count; i++) {
+        if (g_sleeping[i] == t) {
+            g_sleeping_count--;
+            g_sleeping[i] = g_sleeping[g_sleeping_count];
+            g_sleeping[g_sleeping_count] = NULL;
+            return;
+        }
+    }
 }
 
 /*
@@ -323,6 +339,8 @@ void k_sched_tick(void)
     k_size_t i = 0;
     struct task *current;
     struct k_cpu *self = k_cpu_self();
+    struct task *poke[TASK_MAX_TASKS];
+    k_size_t poked = 0;
     bool charge;
 
     sched_lock();
@@ -360,6 +378,17 @@ void k_sched_tick(void)
                 /* The task may belong to another core: that core is told after
                  * the lock is dropped, below. */
                 wake_note_locked(task_cpu(t));
+
+                /*
+                 * A port whose sleep only ends with its deadline is told as
+                 * well: the deadline has passed (or a signal cut the sleep),
+                 * and the task must not sit out the rest of a longer sleep of
+                 * the port - the host sleeps in the condition of its task
+                 * (ADR 0046).
+                 */
+                if (poked < K_ARRAY_SIZE(poke)) {
+                    poke[poked++] = t;
+                }
             }
             continue;
         }
@@ -391,6 +420,15 @@ void k_sched_tick(void)
     charge = current != NULL && current->state == TASK_STATE_RUNNING;
 
     sched_unlock();
+
+    /*
+     * The sleeps of the port that the tick ended are cut here, with the
+     * scheduler lock dropped: the door of a port takes a lock of its own (the
+     * host's condition), and the kernel never holds this one across a wait.
+     */
+    for (i = 0; i < poked; i++) {
+        k_port_task_wake(poke[i]);
+    }
 
     if (__atomic_exchange_n(&g_queue_full, 0, __ATOMIC_SEQ_CST) != 0) {
         k_u8_t prio = (k_u8_t)__atomic_load_n(&g_queue_full_prio, __ATOMIC_SEQ_CST);
@@ -427,7 +465,7 @@ void k_sched_tick(void)
 
     /* A sleeping task of another core came back above: that core starts it
      * now instead of at its own next tick. */
-    sched_wake_flush();
+    k_sched_wake_flush();
 }
 
 void k_sched_set_quantum(k_u32_t ticks)
@@ -516,20 +554,35 @@ void k_sched_yield(void)
 
 void k_sched_sleep_ms(k_u32_t ms)
 {
+    (void)k_sched_sleep_unless(ms, NULL);
+}
+
+bool k_sched_sleep_unless(k_u32_t ms, const bool *stop)
+{
     struct task *self = task_self();
     task_state_t previous;
-    k_size_t i;
 
     if (self == NULL) {
         /* Not running in a task context: just wait. */
         k_port_task_sleep_ms(ms);
-        return;
+        return true;
     }
 
     /* The time before the wait is processor time; the wait itself is not. */
     task_cpu_tick(self);
 
     sched_lock();
+
+    /*
+     * The flag is the record of a wait (kernel/wait.c) and is written under
+     * this lock: a wakeup that has already happened is not slept on, which is
+     * the window of K15 closed at its source.
+     */
+    if (stop != NULL && *stop) {
+        sched_unlock();
+        return false;
+    }
+
     previous = self->state;
     self->state = TASK_STATE_SLEEPING;
     /*
@@ -553,14 +606,9 @@ void k_sched_sleep_ms(k_u32_t ms)
     /* The wait is not processor time: the clock starts again here. */
     self->cpu_stamp_ms = k_sched_uptime_ms();
 
-    /* The task may already have been woken up by the tick handler. */
-    for (i = 0; i < g_sleeping_count; i++) {
-        if (g_sleeping[i] == self) {
-            g_sleeping[i] = g_sleeping[g_sleeping_count - 1];
-            g_sleeping_count--;
-            break;
-        }
-    }
+    /* The task may already have been woken up by the tick handler, or by the
+     * wake of the object it waits for. */
+    sleep_remove_locked(self);
 
     /*
      * A block or an unblock that arrived while the task was sleeping is
@@ -585,6 +633,40 @@ void k_sched_sleep_ms(k_u32_t ms)
     }
 
     sched_unlock();
+
+    return true;
+}
+
+/*
+ * Wake a task that is asleep, now (kernel/wait.c, the wake of a channel).
+ *
+ * The task leaves the table of the sleepers and becomes what its sleep was
+ * going to make it - READY for every wait, BLOCKED for a task that was
+ * blocked before it slept. A READY task enters the queue of its core and the
+ * core is marked in the mask of the hand-overs, which the caller sends after
+ * dropping the lock; a task of this very core needs no interrupt, the caller
+ * either keeps the CPU or is inside the tick that looks at the queue anyway.
+ *
+ * The task is not moved to another core here: the wake puts it where it was
+ * going to run and the scheduler decides the rest (ADR 0012).
+ */
+bool k_sched_wake_task_locked(struct task *t)
+{
+    if (t == NULL || t->state != TASK_STATE_SLEEPING) {
+        return false;
+    }
+
+    sleep_remove_locked(t);
+    t->state = t->wake_state;
+
+    if (t->state != TASK_STATE_READY && t->state != TASK_STATE_RUNNING) {
+        return false;
+    }
+
+    ready_enqueue(t);
+    wake_note_locked(task_cpu(t));
+
+    return true;
 }
 
 void k_sched_block(struct task *t)
@@ -632,7 +714,7 @@ void k_sched_unblock(struct task *t)
 
     sched_unlock();
 
-    sched_wake_flush();
+    k_sched_wake_flush();
 }
 
 /*
@@ -907,7 +989,7 @@ void k_sched_task_ready(struct task *t)
     wake_note_locked(task_cpu(t));
     sched_unlock();
 
-    sched_wake_flush();
+    k_sched_wake_flush();
 }
 
 void k_sched_task_running(struct task *t)
@@ -938,8 +1020,6 @@ void k_sched_task_running(struct task *t)
 
 void k_sched_task_terminated(struct task *t)
 {
-    k_size_t i;
-
     if (t == NULL) {
         return;
     }
@@ -948,14 +1028,7 @@ void k_sched_task_terminated(struct task *t)
 
     /* The task is not in the run queue any more. */
     ready_remove(t);
-
-    for (i = 0; i < g_sleeping_count; i++) {
-        if (g_sleeping[i] == t) {
-            g_sleeping[i] = g_sleeping[g_sleeping_count - 1];
-            g_sleeping_count--;
-            break;
-        }
-    }
+    sleep_remove_locked(t);
 
     t->state = TASK_STATE_ZOMBIE;
 
@@ -974,7 +1047,7 @@ int k_sched_migrate(struct task *t, k_u32_t cpu)
     rc = migrate_locked(t, cpu);
     sched_unlock();
 
-    sched_wake_flush();
+    k_sched_wake_flush();
 
     return rc;
 }

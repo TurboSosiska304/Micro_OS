@@ -65,6 +65,7 @@ if(NOT ESP_PLATFORM)
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c
+        cases/test_wait.c
         cases/test_sign.c
         cases/test_progs.c
         cases/test_zlib.c

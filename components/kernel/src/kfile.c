@@ -292,24 +292,26 @@ static k_ssize_t pipe_read(struct kfile *f, void *buf, k_size_t count)
          * An empty pipe with no writer is the end of the file, the zero of
          * POSIX. A pipe whose writer is still there is not: the reader waits
          * for the bytes, and a reader slower than its writer is an ordinary
-         * pipeline and not an error. The wait is bounded (KFILE_WAIT_CHUNK_MS)
-         * so that a wakeup lost in the window of the registration costs one
-         * turn of this loop; a signal cuts it short with EINTR, exactly as
-         * `waitpid` does.
+         * pipeline and not an error.
          */
         if (p->writers == 0) {
             k_mutex_unlock(&g_fd_lock);
             return 0;
         }
 
+        /*
+         * The record is armed under the lock the writer needs to put the
+         * bytes in, so the state just looked at cannot change between the
+         * look and the arm and a wakeup cannot be lost (docs/debts.md, K15).
+         * The wait has no bound: the writer wakes it when the pipe has a
+         * byte, and a signal cuts it with EINTR, exactly as `waitpid` does.
+         */
+        (void)k_wait_arm(K_WAIT_CHANNEL_PIPES, NULL);
         k_mutex_unlock(&g_fd_lock);
 
-        /*
-         * The wait is the scheduler's and not a sleep of a millisecond: the
-         * writer wakes a reader of this channel when it puts bytes in, and a
-         * signal cuts the wait with EINTR.
-         */
-        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
+        answer = k_wait_sleep(K_WAIT_INFINITE);
+        k_wait_disarm();
+
         if (answer == K_WAIT_SIGNAL) {
             return KERR_INTR;
         }
@@ -363,9 +365,14 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
          */
         if (done == 0 && count <= KFILE_PIPE_BUF) {
             if (room < count) {
+                /* Armed under the lock: the reader cannot make room between
+                 * the look above and this line. */
+                (void)k_wait_arm(K_WAIT_CHANNEL_PIPES, NULL);
                 k_mutex_unlock(&g_fd_lock);
 
-                answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
+                answer = k_wait_sleep(K_WAIT_INFINITE);
+                k_wait_disarm();
+
                 if (answer == K_WAIT_SIGNAL) {
                     return KERR_INTR;
                 }
@@ -386,18 +393,27 @@ static k_ssize_t pipe_write(struct kfile *f, const void *buf, k_size_t count)
             done += put;
         }
 
+        if (done == count) {
+            k_mutex_unlock(&g_fd_lock);
+            k_wait_wake(K_WAIT_CHANNEL_PIPES);
+            return (k_ssize_t)done;
+        }
+
+        /*
+         * The pipe is full: wait for the reader to make room. The record is
+         * armed under the lock and the bytes already put are published after
+         * it, so the reader that takes them finds the waiter of the room.
+         */
+        (void)k_wait_arm(K_WAIT_CHANNEL_PIPES, NULL);
         k_mutex_unlock(&g_fd_lock);
 
         if (put > 0) {
             k_wait_wake(K_WAIT_CHANNEL_PIPES);
         }
 
-        if (done == count) {
-            return (k_ssize_t)done;
-        }
+        answer = k_wait_sleep(K_WAIT_INFINITE);
+        k_wait_disarm();
 
-        /* The pipe is full: wait for the reader to make room. */
-        answer = k_wait_block(K_WAIT_CHANNEL_PIPES, NULL, KFILE_WAIT_CHUNK_MS);
         if (answer == K_WAIT_SIGNAL) {
             return (done > 0) ? (k_ssize_t)done : KERR_INTR;
         }

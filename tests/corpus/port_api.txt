@@ -19,7 +19,9 @@
 #   * the execution substrate (kernel/port_task.h, the k_port_task_* calls) is
 #     not in this list: it is the part of a port that has no machine behind it
 #     to be checked against, and the tests of the scheduler cover it. The
-#     version of the contract is the version of the ten headers below.
+#     version of the contract is the version of the ten headers below, and the
+#     one call that moved it without a header above (the cut of a sleep,
+#     ADR 0046) is a call of that substrate.
 #
 # Eleven headers, 59 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
 # mem 6, mm 11, net 8, power 3, time 2.

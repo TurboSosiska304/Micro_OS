@@ -1,3 +1,5 @@
+#include <stdatomic.h>
+
 #include "ktest.h"
 #include "tests/tests.h"
 
@@ -433,8 +435,8 @@ static void test_large_blocks(void)
  * block of one task has to stay its own while the other task paints
  * its own block next door.
  */
-static volatile int g_hammer_failed;
-static volatile int g_hammer_done;
+static atomic_int g_hammer_failed;
+static atomic_int g_hammer_done;
 
 static void hammer_task(void *arg)
 {

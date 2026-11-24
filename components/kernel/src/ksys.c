@@ -638,6 +638,16 @@ static k_ssize_t sys_dup2(ksys_arg_t oldfd, ksys_arg_t newfd, ksys_arg_t a2, ksy
 }
 
 /*
+ * The step of a `poll` that waits on something other than a pipe or the
+ * console. Such a list has no channel to arm - the state of a regular file
+ * and of a device of the VFS is always the one it reports - so the wait is a
+ * plain sleep and the list is looked at again after each step: `poll` with no
+ * descriptor and no deadline is a wait of the life of the machine, and a step
+ * keeps it from being one number of ticks that wraps.
+ */
+#define KSYS_POLL_IDLE_MS 10u
+
+/*
  * The readiness of one descriptor for `poll`. The answer is the bits of
  * revents, and the rules are the ones of the object: a pipe knows whether a
  * byte is there, a regular file of this system never makes a read wait, and
@@ -763,18 +773,21 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
         k_u16_t events;
         bool piped = false;
         bool console = false;
+        bool armed = false;
+        k_u32_t step;
 
         count = 0;
 
+        /*
+         * The channels this list can be woken by, from the kind of each
+         * descriptor: the kind does not change under the call. The record is
+         * armed before the list is looked at, so a state that changes while
+         * this loop runs is either seen by the look below or wakes the
+         * record - there is no window in which the wakeup finds nothing
+         * (docs/debts.md, K15).
+         */
         for (i = 0; i < (k_u32_t)nfds; i++) {
             struct kfile *file = ((k_i32_t)list[i].fd < 0) ? NULL : fd_get(list[i].fd);
-
-            events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
-            list[i].revents = poll_entry(list[i].fd, events);
-
-            if (list[i].revents != 0) {
-                count++;
-            }
 
             if (file != NULL) {
                 if (file->kind == KFILE_PIPE) {
@@ -785,7 +798,24 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
             }
         }
 
+        if (piped || console) {
+            armed = k_wait_arm(piped ? K_WAIT_CHANNEL_PIPES : NULL,
+                               console ? K_WAIT_CHANNEL_CONSOLE : NULL);
+        }
+
+        for (i = 0; i < (k_u32_t)nfds; i++) {
+            events = (k_u16_t)(list[i].events & (KSYS_POLLIN | KSYS_POLLOUT));
+            list[i].revents = poll_entry(list[i].fd, events);
+
+            if (list[i].revents != 0) {
+                count++;
+            }
+        }
+
         if (count > 0) {
+            if (armed) {
+                k_wait_disarm();
+            }
             break;
         }
 
@@ -793,6 +823,9 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
             k_u64_t now = k_sched_uptime_ms();
 
             if (now >= deadline) {
+                if (armed) {
+                    k_wait_disarm();
+                }
                 break;
             }
 
@@ -801,23 +834,40 @@ static k_ssize_t sys_poll(ksys_arg_t fds, ksys_arg_t nfds, ksys_arg_t timeout, k
 
         /*
          * The wait is the scheduler's: the task leaves the run queue and a
-         * pipe or the console wakes it when the state it watches changes.
-         * Nothing is polled in a loop, and the timeout is the deadline of the
-         * scheduler's sleep.
+         * pipe or the console wakes it when the state it watches changes -
+         * at once, not at the next tick, because the record is armed and the
+         * wake of the channel moves the task back into the run queue.
          */
-        /*
-         * A wait without a deadline is a wait of one chunk and not of the
-         * life of the machine: the waiter registers after the list is looked
-         * at, so a wakeup that arrives in that window is lost (K15), and the
-         * chunk is what makes the list be looked at again. The sleep of a
-         * wait is ten milliseconds either way.
-         */
-        if (infinite) {
-            wait_ms = KFILE_WAIT_CHUNK_MS;
+        if (!armed) {
+            /*
+             * Nothing of the list can wake a task (no pipe, no console): the
+             * state is looked at once more after a step of the plain sleep
+             * and the call answers. `poll` with no descriptor and no deadline
+             * is a wait of the life of the machine, and a step keeps it from
+             * being one number of ticks that wraps.
+             */
+            step = wait_ms;
+
+            if (step > KSYS_POLL_IDLE_MS) {
+                step = KSYS_POLL_IDLE_MS;
+            }
+
+            if (!infinite) {
+                k_u64_t now = k_sched_uptime_ms();
+
+                if (now >= deadline) {
+                    break;
+                }
+
+                step = (k_u32_t)K_MIN((k_u64_t)step, deadline - now);
+            }
+
+            k_sched_sleep_ms(step);
+            continue;
         }
 
-        rc = k_wait_block(piped ? K_WAIT_CHANNEL_PIPES : NULL,
-                          console ? K_WAIT_CHANNEL_CONSOLE : NULL, wait_ms);
+        rc = k_wait_sleep(wait_ms);
+        k_wait_disarm();
 
         if (rc == K_WAIT_SIGNAL) {
             return KERR_INTR;

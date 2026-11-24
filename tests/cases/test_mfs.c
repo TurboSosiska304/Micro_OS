@@ -1,3 +1,5 @@
+#include <stdatomic.h>
+
 #include "ktest.h"
 #include "tests/tests.h"
 
@@ -1282,8 +1284,8 @@ static void test_persistence(void)
 }
 
 /* The state of the two tasks of the test of the lock. */
-static volatile int s_writers_failed;
-static volatile int s_writers_done;
+static atomic_int s_writers_failed;
+static atomic_int s_writers_done;
 
 /*
  * The two writers update these counters at the same moment, and a plain

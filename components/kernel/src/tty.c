@@ -269,12 +269,23 @@ static int tty_wait_byte(struct k_tty *tty, k_u32_t timeout_ms)
          * the board and the keyboard of x86-64 wake the task through
          * K_WAIT_CHANNEL_CONSOLE and the chunk costs them nothing.
          */
-        switch (k_wait_block(K_WAIT_CHANNEL_CONSOLE, NULL, wait)) {
+        /* The arm holds across the look and the sleep (ADR 0046): the byte
+         * that arrives between the poll and the sleep is a wake and not a
+         * lost one. The console has no lock of its own to hold, and the
+         * record is taken down after every chunk. */
+        if (!k_wait_arm(K_WAIT_CHANNEL_CONSOLE, NULL)) {
+            continue; /* a wake is already pending: look again at once */
+        }
+
+        switch (k_wait_sleep(wait)) {
         case K_WAIT_WOKEN:
+            k_wait_disarm();
             continue; /* look at the console again */
         case K_WAIT_SIGNAL:
+            k_wait_disarm();
             return TTY_SIGNAL;
         default:
+            k_wait_disarm();
             continue; /* the chunk passed: poll, and sleep again if quiet */
         }
     }
