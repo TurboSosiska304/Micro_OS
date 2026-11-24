@@ -39,8 +39,11 @@
 /* The shortest inode of the format; a longer one keeps more attributes. */
 #define EXT2_INODE_MIN_SIZE 128u
 
-/* The largest sector of a device this reader accepts: the ports use 1 KiB. */
-#define EXT2_DEV_SECTOR_MAX 1024u
+/* The largest sector of a device this reader accepts: the ports move 1 KiB
+ * sectors, and the view of a volume of 4096-byte blocks is a device of 4 KiB
+ * (ADR 0042). It is the buffer of one sector below, so it is the largest block
+ * of the format as well. */
+#define EXT2_DEV_SECTOR_MAX 4096u
 
 /* The largest block of the format this reader walks. */
 #define EXT2_BLOCK_MAX 4096u
@@ -144,6 +147,16 @@ struct ext2_volume {
     k_mutex_t lock;
     bool mounted;
     char point[VFS_PATH_MAX];
+
+    /*
+     * The grain of the volume over the grain of the medium (ADR 0042). A
+     * volume of 4096-byte blocks on a disk of 1 KiB sectors reads a block per
+     * call of the block layer and not four, and `dev` above points at the view
+     * while the volume is mounted. A volume whose block is the sector of the
+     * medium has no view and `dev` is the device the mount named.
+     */
+    struct k_blockdev_view view;
+    bool view_open;
 
     k_u32_t block_size;
     k_u32_t first_data_block;
