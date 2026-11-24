@@ -164,8 +164,11 @@ The record of an object has a new flag: `MFS_INODE_PENDING` (bit 2 of
 opened this object for writing and has not closed it".
 
 * `mfs_open()` with `O_CREAT` and a write marks the new record pending
-  before it returns; `O_TRUNC` resets the record and marks it pending in
-  the same write.
+  in the transaction of the create itself, before the open returns;
+  `O_TRUNC` resets the record and marks it pending in the same write. A
+  `mfs_create()` that is a call of its own - `touch`, a directory of an
+  image - is a whole empty file and is not a draft: a cut after it leaves
+  the empty file, which is what the call promised.
 * The first `mfs_write()` or `mfs_truncate()` of an object that is not
   pending marks it pending, in a transaction of its own.
 * `mfs_close()` writes the record again without the flag, with the size and
@@ -229,7 +232,12 @@ record with `MFS_INODE_PENDING` is not reached by its name, so its entry is
 removed like an entry that names a free record, and the pass of the orphans
 and of the map does the rest. `mfs_check()` names a pending record as a
 problem - "a write that a close did not publish" - so a person who checks a
-volume the mount refused to repair still reads what is there. Because the
+volume the mount refused to repair still reads what is there. The check reads
+the header of the journal too: a transaction that is still committed says that
+the medium changed under the mounted volume, and the report names it rather
+than walk a state the mount does not have. The number of the blocks the mount
+replayed is in `report.journal_replayed`, so a boot or a test can say what the
+cut cost. Because the
 mount repairs before it answers, a plain `fsck` after a cut finds the
 volume consistent and **no problem**, which is the gate.
 
@@ -300,6 +308,17 @@ counted by `make x86-mfs-smoke` and the gate of the cut is
   program wrote: the publication of the file is the close, and the call
   that would say "these bytes are on the medium now" is still
   `docs/debts.md`.
+* The journal is not on by default: `mfs_format()` still writes version 3 and
+  the flag of `mkfs` is what makes a version 4 volume. The board's volume is
+  made by the mount of a blank device, which asks for no journal, and the
+  reason is the flash: an erase sector is 4 KB and the header of the journal
+  is one block of it, so a brownout can leave a header that does not
+  checksum. The mount of such a volume refuses it - the home blocks are the
+  state of the last checkpoint, and a mount that guessed between a torn
+  commit and no commit could apply half of one - and the repair of a volume
+  that cannot be mounted is the work of the host tools, not of a release.
+  The x86-64 image is the caller that asks for the journal today; the board
+  asks when the flash of the board is studied for it.
 * ext2 has no journal in this release (`docs/debts.md`, M4 of the plan):
   the subset of ext3 that fits the writer of 1.8 is named there, and the
   gate of a cut runs on MicroFS only.

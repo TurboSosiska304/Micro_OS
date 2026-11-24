@@ -158,6 +158,8 @@ run "x86-vga-smoke" m x86-vga-smoke
 run "x86-disk-smoke" m x86-disk-smoke
 run "x86-root-smoke" m x86-root-smoke
 run "x86-volume-smoke" m x86-volume-smoke
+run "x86-mfs-smoke" m x86-mfs-smoke
+run "x86-cut-smoke" m x86-cut-smoke
 run "x86-smp-smoke" m x86-smp-smoke
 run "x86-net-smoke" m x86-net-smoke
 run "usb-smoke" m usb-smoke
