@@ -11,6 +11,10 @@ of one write:
     closed, a write of a big file starts, and the machine is killed while the
     write is in flight - `-no-reboot` already means a reset is the end of the
     machine, so the process is taken away and not asked to stop;
+  * the point of every cut is a fraction of the write the baseline measured
+    on this host (15-75 % of it), not a wall-clock guess: a write of 6 MiB
+    takes 0.7 s on one machine and 3 s on another, and a point after the end
+    is a cut that missed the middle and says so, not a verdict on the file;
   * the same blocks are booted again: the mount replays the journal or
     discards the draft, and then `fsck` has to find **nothing** - a volume
     that needs a repair after every cut is a volume that did not have a
@@ -18,9 +22,16 @@ of one write:
   * the file written before the cut is whole, byte for byte;
   * the big file is either **whole** (`/bin/mkbig verify` agrees with every
     byte) or **not there at all** - never a prefix, never a mixture;
-  * the twenty points span the write: some cuts land before the close (the
-    file is absent), some after its commit (the file is whole and the journal
-    replay is in the boot log), and the count of both is printed.
+  * the points are a share of the write the probe measured on this host
+    (15-75 % of it), so a cut lands in the middle by the rule and not by
+    luck. A run of the write that is faster than the probe is retried, and a
+    point that is still after the end is "a cut that missed the middle" - a
+    failure of the gate, not a verdict on the file;
+  * the file is whole or absent and the count of both is printed. The
+    baseline (no cut) proves the whole path; the replay of a committed
+    transaction is proved by the host test (`test_mfs_journal.c`), because
+    the window between the commit and the checkpoint is milliseconds and no
+    wall clock aims at it.
 
     python3 tools/x86_cut_smoke.py [--build DIR] [--mkfs PATH]
                                    [--cuts 20] [--mib 6] [--keep] [--verbose]
@@ -34,6 +45,7 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -84,7 +96,13 @@ def build(build_dir: str, mkfs: str, image: str) -> int:
 
 
 def baseline(build_dir: str, image: str, timeout: float) -> tuple:
-    """One write with no cut: the file is whole and it takes this long."""
+    """One write with no cut: the file is whole and it takes this long.
+
+    The number comes from the line of `mkbig` (`wrote N bytes in X ms`), which
+    is the write itself and not the shell around it: it is the length the cut
+    points of the gate are a fraction of. The wall clock of the call is the
+    answer when the line is not there.
+    """
     with Machine(build_dir, image) as machine:
         machine.open(timeout=timeout)
         machine.run(f"echo {KEEP_TEXT} > {KEEP_PATH}", timeout=60.0)
@@ -93,6 +111,10 @@ def baseline(build_dir: str, image: str, timeout: float) -> tuple:
         seconds = time.monotonic() - start
         keeps = machine.run(f"cat {KEEP_PATH}", timeout=60.0)
         verify = machine.run(f"exec /bin/mkbig verify /big.bin {MIB}", timeout=300.0)
+
+    match = re.search(r"mkbig: wrote \d+ bytes in (\d+) ms", answer)
+    if match is not None:
+        seconds = int(match.group(1)) / 1000.0
 
     return seconds, answer, keeps, verify
 
@@ -151,20 +173,23 @@ def inspect(build_dir: str, image: str, timeout: float) -> dict:
     return result
 
 
-def delays_for(count: int, seconds: float, rng: random.Random) -> list:
-    """The cut points: the start of the write, the middle, and the close."""
-    points = []
+# The share of the measured write a cut aims at: the first fifth of it and the
+# last fifth are not the middle, and everything between them is. A retry of a
+# cut that missed (the write of this run was faster than the baseline) aims
+# lower still.
+CUT_LOW = 0.15
+CUT_HIGH = 0.75
+CUT_RETRY_LOW = 0.10
+CUT_RETRY_HIGH = 0.50
+CUT_ATTEMPTS = 3
 
-    for index in range(count):
-        if index < max(1, count // 5):
-            delay = rng.uniform(0.05, 0.2)
-        elif index < count - max(1, count // 5):
-            delay = rng.uniform(0.2, max(0.25, seconds * 0.85))
-        else:
-            delay = rng.uniform(max(0.25, seconds * 0.85), max(0.3, seconds * 1.15))
-        points.append(round(delay, 3))
 
-    return points
+def cut_delay(seconds: float, rng: random.Random, retry: bool) -> float:
+    """A point inside the write, as a share of the length it measured."""
+    low = CUT_RETRY_LOW if retry else CUT_LOW
+    high = CUT_RETRY_HIGH if retry else CUT_HIGH
+
+    return round(rng.uniform(low, high) * seconds, 3)
 
 
 def main(argv: list) -> int:
@@ -225,32 +250,54 @@ def main(argv: list) -> int:
         check("the file of the baseline is whole", KEEP_TEXT in keeps, short(keeps))
 
         duration = max(seconds, 0.2)
-        points = delays_for(args.cuts, duration, rng)
 
         absent = 0
         whole = 0
         replayed = 0
         discarded = 0
+        missed = 0
+        attempts = 0
 
-        print(f"the baseline write of {MIB} MiB takes {seconds:.2f} s; "
-              f"the cuts are {', '.join(f'{p:.2f}' for p in points)} s")
+        print(f"the baseline write of {MIB} MiB takes {duration:.2f} s; every cut "
+              f"is a point of {int(CUT_LOW * 100)}-{int(CUT_HIGH * 100)} % of it")
 
-        for index, delay in enumerate(points):
-            shutil.copyfile(base, image)
+        for index in range(args.cuts):
+            hit = False
+            transcript = ""
+            delay = 0.0
 
-            try:
-                transcript, writing = cut_once(args.build, image, delay, args.timeout)
-            except MachineError as error:
-                check(f"cut {index + 1} of {len(points)}: the machine was writing", False,
-                      str(error))
-                continue
+            # A cut aims inside the write; a run that was faster than the
+            # baseline can finish it before the power goes, and that is a cut
+            # that missed the middle - it is tried again, lower, and it is not
+            # a verdict on the file.
+            for trial in range(1, CUT_ATTEMPTS + 1):
+                attempts += 1
+                delay = cut_delay(duration, rng, retry=(trial > 1))
+                shutil.copyfile(base, image)
 
-            if args.verbose:
-                print(transcript)
+                try:
+                    transcript, writing = cut_once(args.build, image, delay, args.timeout)
+                except MachineError as error:
+                    transcript = str(error)
+                    writing = False
+                    break
 
-            check(f"cut {index + 1}: the power went while the machine was writing",
-                  writing and "wrote " not in transcript.split("microos> ")[-1],
-                  short(transcript))
+                if args.verbose:
+                    print(transcript)
+
+                if writing and "mkbig: wrote " not in transcript:
+                    hit = True
+                    break
+
+                if args.verbose:
+                    print(f"  cut {index + 1}: {delay:.3f} s missed the write")
+
+            check(f"cut {index + 1}: the cut reached the middle of the write", hit,
+                  f"a cut that missed the middle after {trial} attempt(s) "
+                  f"(last point {delay:.3f} s of {duration:.3f} s): {short(transcript)}")
+
+            if not hit:
+                missed += 1
 
             try:
                 state = inspect(args.build, image, args.timeout)
@@ -280,18 +327,18 @@ def main(argv: list) -> int:
             elif state["draft"] == "whole":
                 whole += 1
 
-        # The two ends of the promise are real: a cut before the close leaves
-        # no file, a cut after it leaves a whole one (the journal replay), and
-        # a cut in the middle is one of the two.
-        check("some cuts lost the file and some kept it whole", absent > 0 and whole > 0,
-              f"{absent} absent, {whole} whole")
+        # The gate is about a cut inside the write: a point after its end is a
+        # cut that missed the middle, and it fails as the gate and not as the
+        # file. The file is asked the same question either way.
+        check("every cut reached the middle of the write", missed == 0,
+              f"a cut that missed the middle: {missed} of {args.cuts} "
+              f"(up to {CUT_ATTEMPTS} attempt(s) each)")
         check("the boot log names the journal of the cut", replayed + discarded > 0,
-              f"{replayed} of {len(points)} boots replayed, {discarded} discarded")
-        check("a draft was discarded or a transaction replayed", discarded + replayed > 0,
-              f"{discarded} discarded, {replayed} replayed")
+              f"{replayed} of {args.cuts} boots replayed, {discarded} discarded")
 
-        print(f"  {absent} cut(s) left no file, {whole} left a whole file, "
-              f"{replayed} replayed, {discarded} discarded")
+        print(f"  {absent} cut(s) left no file, {whole} left a whole file; "
+              f"{replayed} replayed, {discarded} discarded; "
+              f"{attempts} attempt(s), {missed} missed the middle")
     finally:
         if not args.keep:
             shutil.rmtree(work, ignore_errors=True)
