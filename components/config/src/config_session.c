@@ -447,7 +447,7 @@ static int cmd_who(int argc, char **argv)
     count = task_count();
     for (i = 0; i < count + 8; i++) {
         struct task *task = task_get_by_index(i);
-        char number[12];
+        char name[USERS_NAME_MAX];
         k_u8_t tty;
 
         if (task == NULL) {
@@ -459,7 +459,7 @@ static int cmd_who(int argc, char **argv)
             continue;
         }
 
-        kshell_printf("%-15s %-8s %u\n", account_name(task_get_uid(task), number, sizeof(number)),
+        kshell_printf("%-15s %-8s %u\n", account_name(task_get_uid(task), name, sizeof(name)),
                       task_tty_name(tty), (unsigned)task->pid);
     }
 
@@ -469,7 +469,7 @@ static int cmd_who(int argc, char **argv)
 static int cmd_whoami(int argc, char **argv)
 {
     struct task *self = task_self();
-    char number[12];
+    char name[USERS_NAME_MAX];
 
     (void)argv;
 
@@ -482,7 +482,7 @@ static int cmd_whoami(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    kshell_printf("%s\n", account_name(task_get_uid(self), number, sizeof(number)));
+    kshell_printf("%s\n", account_name(task_get_uid(self), name, sizeof(name)));
 
     return KSHELL_OK;
 }
