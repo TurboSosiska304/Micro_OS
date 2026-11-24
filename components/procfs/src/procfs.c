@@ -281,10 +281,9 @@ static int read_mounts(char *buf, k_size_t size, k_u32_t pid)
 }
 
 static const struct proc_file s_root_files[] = {
-    {"version", read_version},   {"uptime", read_uptime},   {"meminfo", read_meminfo},
-    {"tasks", read_tasks},       {"modules", read_modules}, {"kmsg", read_kmsg},
-    {"blockdev", read_blockdev}, {"sessions", read_sessions},
-    {"mounts", read_mounts},
+    {"version", read_version},   {"uptime", read_uptime},     {"meminfo", read_meminfo},
+    {"tasks", read_tasks},       {"modules", read_modules},   {"kmsg", read_kmsg},
+    {"blockdev", read_blockdev}, {"sessions", read_sessions}, {"mounts", read_mounts},
 };
 
 static const k_size_t s_root_file_count = K_ARRAY_SIZE(s_root_files);

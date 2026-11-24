@@ -241,8 +241,7 @@ int session_run(void)
     k_u8_t tty = task_get_tty(self);
 
     if (tty == TASK_TTY_CONSOLE) {
-        session_write_fmt("%s shell ready. Type 'help' for the list of commands.\n",
-                          kernel_name());
+        session_write_fmt("%s shell ready. Type 'help' for the list of commands.\n", kernel_name());
     }
 
     for (;;) {

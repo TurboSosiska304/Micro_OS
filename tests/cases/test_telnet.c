@@ -227,9 +227,8 @@ static void test_stream(void)
      * and the refusal of the option is answered. */
     telnet_stream_init(&stream);
     {
-        static const uint8_t mixed[] = {'a', TELNET_IAC, TELNET_DO,       3,
-                                        'b', TELNET_IAC, TELNET_IAC,      'c',
-                                        '\r', '\n'};
+        static const uint8_t mixed[] = {'a',        TELNET_IAC, TELNET_DO, 3,    'b',
+                                        TELNET_IAC, TELNET_IAC, 'c',       '\r', '\n'};
 
         feed_stream(&stream, mixed, sizeof(mixed), data, 16, &data_len, reply, &reply_len);
         KT_CHECK_INT_EQ((int)data_len, 5);
@@ -290,8 +289,7 @@ static void test_stream(void)
         /* Two calls in the middle of the option: the state survives. */
         feed_stream(&stream, bytes, 2, data, 16, &data_len, reply, &reply_len);
         KT_CHECK_INT_EQ((int)data_len, 0);
-        feed_stream(&stream, bytes + 2, sizeof(bytes) - 2, data, 16, &data_len, reply,
-                    &reply_len);
+        feed_stream(&stream, bytes + 2, sizeof(bytes) - 2, data, 16, &data_len, reply, &reply_len);
         KT_CHECK_INT_EQ((int)data_len, 2);
         KT_CHECK_INT_EQ(data[0], 'o');
         KT_CHECK_INT_EQ(data[1], 'k');

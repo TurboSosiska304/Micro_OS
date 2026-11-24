@@ -567,7 +567,6 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 #endif
 
-
 #if MICRO_OS_PKG
     /* The installer of programs (ADR 0024): the tree of /usr/bin, /var and
      * the network of the machine, which is the same socket the clients use. */

@@ -240,7 +240,6 @@ static void test_attributes(void)
     teardown();
 }
 
-
 /*
  * The property: the owner of a file or a directory that the open or the
  * mkdir made is the task that made it, and not root - the debt of 1.6 that
