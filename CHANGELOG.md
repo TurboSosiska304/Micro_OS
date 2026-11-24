@@ -10,10 +10,14 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-## [1.7.0] - 2026-11-24
+## [1.8.0] - 2026-11-24
 
 ### The release
 
+- 1.8.0: the release of the door of USB, of a disk of a person under the rule
+  that a medium this system did not format is read-only, of the library of a
+  program nobody rewrote, of a volume whose grain is its own, and of the
+  accounts of a session (`docs/releases/1.8.md`).
 - 1.8.0-rc3: the packages of the medium are asked for one at a time and a
   missing one is a sentence instead of a failed job (`limine` is not in the
   sources of the container of ESP-IDF, which is what the tag of rc2 found).
@@ -23,30 +27,8 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   prepared, and `apt-get` replaced `python3` under it: the build of the
   firmware of the same job lost the module `idf_component_manager` and the
   release of 1.7.0 - and of `1.8.0-rc1` - went out without its ISO and without
-  its stick, with a sentence of the step that said so. The tools are installed
-  with the host tools now, before the environment, and the line of 1.8 merges
-  that fix from `mainline`.
-- 1.8.0-rc1: the release of the door of USB, of a disk of a person under the
-  rule that a medium this system did not format is read-only, of the library
-  of a program nobody rewrote and of a volume whose grain is its own
-  (`docs/releases/1.8.md`).
-- 1.7.0-rc1: the release of the desktop, of the disk at the speed of the
-  medium, of a filesystem that does not walk a table of a gigabyte, and of a
-  machine that starts on a laptop from a stick (`docs/releases/1.7.md`).
-
-
-### The release
-
-- 1.6.0-rc1: the release of the memory a program maps, the account of a
-  task, the interrupts of many cores, the disk on the bus, the pipes at the
-  speed of the memory and the machine in the network (`docs/releases/1.6.md`).
-- 1.6.0-rc2: the 600-second session of the tag refused to build its image -
-  the programs of the release no longer fit the 8 MiB of that volume
-  (`mkfs: /bin/sqlite3 took -4 byte(s) of 848800`). The volume of the session
-  is 24 MiB and the filler of free space steps down by 256 KiB, because a
-  single file near the free count of the volume is refused by the chain and
-  the table and not by the count.
-
+  its stick, with a sentence of the step that said so.
+- 1.8.0-rc1: the first candidate of the release, without the medium (rc2).
 
 ### Added
 
@@ -62,6 +44,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   new file is the uid of its maker (`vfs_open(O_CREAT)` and `vfs_mkdir` ask
   the filesystem for a `chown`), so a file a guest writes is the guest's -
   `x86-smoke` reads `owner: 7` where it was `owner: 0`.
+
 - A machine of a laptop keeps its files: the write path of the two disks of
   M2, behind the rule of ADR 0041 and not in front of it. The root mount asks
   for the writes after it is in the tree (`vfs_mount_root_writes`), so its own
@@ -73,6 +56,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `make x86-disk-smoke` proves a file that survives a reset on the IDE channel,
   the SATA controller and the NVMe namespace - while a volume the list does not
   name and a volume of btrfs leave the SHA-256 of their image unchanged.
+
 - The door of a laptop, second iteration: a **hub** of the class 09 (the power
   of its ports, the reset of one, the route string of a device behind it, four
   tiers of eight ports), so a keyboard or a stick behind a dock is found; the
@@ -86,6 +70,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   classes now - a completion of a bulk transfer of the network is not thrown
   away by the pump of the console - which the wire of `usb-smoke` had been
   losing. `make usb-smoke` is 58 checks.
+
 - The door of a laptop, USB (ADR 0040): `ports/port_x86_64/src/xhci.c` finds
   the controller of the bus (class 0x0C/0x03), resets it and programs it - a
   command ring and an event ring with its ERST, the slots and the contexts of
@@ -102,6 +87,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `i8042=off` - no PS/2 at all, so the keys can only come through xHCI - and
   `make usb-stick-smoke USB_STICK=/dev/sdc` boots with the stick of a person
   attached read-only: 35 and 43 checks.
+
 - The grain of a volume (ADR 0043): the sector is a property of the volume,
   not of the medium. `struct k_blockdev_view` is a device of the block layer
   whose sector is the one of the superblock, over a device whose sector is
@@ -112,6 +98,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   table, a truncation inside a block, a truncation that gives the table back,
   a growth into a hole), and `make x86-volume-smoke` writes and reads a volume
   of 5 GiB at both grains: 32 checks.
+
 - The library of a program nobody rewrote: `popen`, `pclose` and `system` are
   a pipe, a fork, a dup2 and the execve of the first word of the line, and
   `make ports-smoke` builds **thirteen utilities of sbase with not one line
@@ -138,6 +125,7 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   machine and proves it twice by the SHA-256 of the whole image before and
   after the boot - once for the volume of this system, once for the volume of
   btrfs.
+
 - The disk of a modern laptop, on the NVMe controller of the PCI bus
   (ADR 0042): `ports/port_x86_64/src/nvme.c` enables the controller (AQA, ASQ,
   ACQ, CC.EN and CSTS.RDY), identifies the controller and the namespace 1,
@@ -149,6 +137,93 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `WRITE` command in the driver, and `make nvme-smoke` proves a mount, a
   program and the SHA-256 of the whole image before and after the boot - once
   for the volume of this system and once for a volume of btrfs.
+
+### Fixed
+
+- `telnet` asked for the password on the console of the machine and not on the
+  socket of the session: a client of the wire could not log in at all, and the
+  person in front of the board was asked for a password that came from
+  somebody else. It is the defect of 1.6 that the cleanroom wrote down. A task
+  has a terminal now, the session of a client puts the socket there, and the
+  echo of the password is agreed with the client (RFC 857) and never put in
+  the transcript - `x86-net-smoke` checks that `password: ` never appears on
+  COM1, which is the proof that the dialog went to the wire.
+
+- A child of a `fork` took its fields from the parent **after** its slot was
+  in the table and marked in use, so the child - a thread of its own on the
+  host and a task of another core in `KERNEL_SMP` - read a record that was
+  still being written: the race detector of the cloud named the read of
+  `task_exit` against the write of `task_spawn`. The inheritance happens in
+  the critical section of the slot now, and the table of the descriptors,
+  which has the lock of its own in the opposite order, is copied after it and
+  before the task can run.
+
+- The suite under valgrind, the gate of the cloud, was red for two days
+  without a single failed check: a checksum over the padding of a record
+  (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
+  `/proc` did not write (`tests/cases/test_sysfs.c`) read uninitialised
+  memory, and a child of a `fork` inherits the count of its parent, so its
+  exit code became the 42 of `--error-exitcode` and a case that read the exit
+  code of its program read 42 instead of the answer. Both reads are fixed and
+  `make test-valgrind` runs the same command here as the cloud does: 0 errors
+  from 0 contexts, 76 058 checks.
+
+- A wait of a pipe or of `poll` could sleep for as long as the machine was up:
+  `k_wait_block` registers the waiter after the caller has looked at the
+  object, so a wake that arrived in that window found no record and was lost,
+  and a wait without a deadline never looked again. A pipeline of the shell
+  never finished under a slow runner of the cloud - the test suite died on its
+  timeout with no failed check, which is what a hang looks like. A wait is
+  twenty milliseconds long now (`KFILE_WAIT_CHUNK_MS`), which is the chunk the
+  sleep already had, so a lost wake costs a turn of the loop and not the line;
+  the cause and its fix are K15 of `docs/debts.md`.
+
+- The read ahead of the block layer (ADR 0032) armed the wait of the stream
+  *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
+  36 MiB of the disk before it wrote a byte. The wait belongs to the stream and
+  not to the call: the same write reads 2.5 MiB, and the write of the same file
+  went from 129 to 184 MiB/s. Held by a case of `test_blockdev_cache.c`.
+
+- The descriptors 1 and 2 were "the console" only while nothing had opened
+  them, so the first `pipe()` or `open()` of a program took them: `tee` wrote
+  its answer into its own file instead of the console, and any program that
+  spoke after an `open` spoke to the wrong place. `open` and `pipe` move a new
+  descriptor off them now (the probe is `fstat`, not `read`: a read of the
+  write end of a pipe answers `EBADF` too), and an explicit `dup2(fd, 1)` is
+  still obeyed.
+
+- A case of `tests/cases/test_ksys_process.c` waited three seconds for a
+  program it had started as a task among the others: a host that runs a build,
+  a sanitizer suite and three copies of the case answered a failure of the
+  property instead of a slow machine. The waits of that file are ten seconds,
+  and the status of the `fork` case is under the same condition as its use
+  (the race detector refused to compile the file, so `make test-tsan` was red
+  and nobody had looked).
+
+## [1.7.0] - 2026-11-24
+
+### The release
+
+- 1.7.0-rc1: the release of the desktop, of the disk at the speed of the
+  medium, of a filesystem that does not walk a table of a gigabyte, and of a
+  machine that starts on a laptop from a stick (`docs/releases/1.7.md`).
+
+
+### The release
+
+- 1.6.0-rc1: the release of the memory a program maps, the account of a
+  task, the interrupts of many cores, the disk on the bus, the pipes at the
+  speed of the memory and the machine in the network (`docs/releases/1.6.md`).
+- 1.6.0-rc2: the 600-second session of the tag refused to build its image -
+  the programs of the release no longer fit the 8 MiB of that volume
+  (`mkfs: /bin/sqlite3 took -4 byte(s) of 848800`). The volume of the session
+  is 24 MiB and the filler of free space steps down by 256 KiB, because a
+  single file near the free count of the volume is refused by the chain and
+  the table and not by the count.
+
+
+### Added
+
 - The palette of the desktop (`components/ui/include/ui/palette.h`): the
   server of `/bin/wm` and the programs of the interface paint the roles of a
   theme - a slate desk with an azure accent, or the light theme of
@@ -396,59 +471,6 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Fixed
 
-- `telnet` asked for the password on the console of the machine and not on the
-  socket of the session: a client of the wire could not log in at all, and the
-  person in front of the board was asked for a password that came from
-  somebody else. It is the defect of 1.6 that the cleanroom wrote down. A task
-  has a terminal now, the session of a client puts the socket there, and the
-  echo of the password is agreed with the client (RFC 857) and never put in
-  the transcript - `x86-net-smoke` checks that `password: ` never appears on
-  COM1, which is the proof that the dialog went to the wire.
-- A child of a `fork` took its fields from the parent **after** its slot was
-  in the table and marked in use, so the child - a thread of its own on the
-  host and a task of another core in `KERNEL_SMP` - read a record that was
-  still being written: the race detector of the cloud named the read of
-  `task_exit` against the write of `task_spawn`. The inheritance happens in
-  the critical section of the slot now, and the table of the descriptors,
-  which has the lock of its own in the opposite order, is copied after it and
-  before the task can run.
-- The suite under valgrind, the gate of the cloud, was red for two days
-  without a single failed check: a checksum over the padding of a record
-  (`tests/cases/test_mfs_format.c`) and a `strstr` over the bytes a file of
-  `/proc` did not write (`tests/cases/test_sysfs.c`) read uninitialised
-  memory, and a child of a `fork` inherits the count of its parent, so its
-  exit code became the 42 of `--error-exitcode` and a case that read the exit
-  code of its program read 42 instead of the answer. Both reads are fixed and
-  `make test-valgrind` runs the same command here as the cloud does: 0 errors
-  from 0 contexts, 76 058 checks.
-- A wait of a pipe or of `poll` could sleep for as long as the machine was up:
-  `k_wait_block` registers the waiter after the caller has looked at the
-  object, so a wake that arrived in that window found no record and was lost,
-  and a wait without a deadline never looked again. A pipeline of the shell
-  never finished under a slow runner of the cloud - the test suite died on its
-  timeout with no failed check, which is what a hang looks like. A wait is
-  twenty milliseconds long now (`KFILE_WAIT_CHUNK_MS`), which is the chunk the
-  sleep already had, so a lost wake costs a turn of the loop and not the line;
-  the cause and its fix are K15 of `docs/debts.md`.
-- The read ahead of the block layer (ADR 0032) armed the wait of the stream
-  *inside* the call that read, so a write of 16 MiB at a grain of 4 KiB read
-  36 MiB of the disk before it wrote a byte. The wait belongs to the stream and
-  not to the call: the same write reads 2.5 MiB, and the write of the same file
-  went from 129 to 184 MiB/s. Held by a case of `test_blockdev_cache.c`.
-- The descriptors 1 and 2 were "the console" only while nothing had opened
-  them, so the first `pipe()` or `open()` of a program took them: `tee` wrote
-  its answer into its own file instead of the console, and any program that
-  spoke after an `open` spoke to the wrong place. `open` and `pipe` move a new
-  descriptor off them now (the probe is `fstat`, not `read`: a read of the
-  write end of a pipe answers `EBADF` too), and an explicit `dup2(fd, 1)` is
-  still obeyed.
-- A case of `tests/cases/test_ksys_process.c` waited three seconds for a
-  program it had started as a task among the others: a host that runs a build,
-  a sanitizer suite and three copies of the case answered a failure of the
-  property instead of a slow machine. The waits of that file are ten seconds,
-  and the status of the `fork` case is under the same condition as its use
-  (the race detector refused to compile the file, so `make test-tsan` was red
-  and nobody had looked).
 - The keyboard of a laptop whose firmware leaves the translation of the 8042
   off: it speaks the scancode set 2, and the port read every byte of it as the
   set 1 - the prompt arrived, the keys did not type their letters, and a line
