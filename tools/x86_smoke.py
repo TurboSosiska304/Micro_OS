@@ -3142,10 +3142,13 @@ def check(output: str) -> list:
     )
     # Every program of the run is audited before it starts: the report is a
     # line of the log, and the number of the pages that are both writable and
-    # executable is zero for a map of this port.
+    # executable is zero for a map of this port. The line is short because it
+    # is written before the entry of a program of the desktop, and the UART
+    # of the machine holds the entry for the length of a line.
     expect(
         "every program is reported W^X before it runs",
-        "x86-64: the map of /bin/hello has no page both writable and executable" in output,
+        output.count("x86-64: the map of a program is W^X") >= 10,
+        f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
     )
 
     # --- the first lane of 1.6: the wait for a descriptor

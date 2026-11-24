@@ -806,8 +806,15 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
         goto fail;
     }
 
-    kinfo("x86-64: the map of %s has no page both writable and executable",
-          (image->path != NULL) ? image->path : "the program");
+    /*
+     * The report of the audit at every exec (ADR 0048). It is one short
+     * line on purpose: the console of the machine is a UART and a line is
+     * written byte by byte with the interrupts off, and a program of the
+     * desktop is entered right after this one - the log must not hold the
+     * entry of a window for the milliseconds of a longer sentence.
+     */
+    kinfo("x86-64: the map of a program is W^X");
+
 
     if (!space_write(space, PORT_EXEC_RESTORER, g_restorer_code, sizeof(g_restorer_code))) {
         goto fail;
