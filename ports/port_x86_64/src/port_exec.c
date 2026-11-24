@@ -816,7 +816,6 @@ static int port_exec_place(const struct k_exec_image *image, char *const argv[],
      */
     kinfo("x86-64: the map of a program is W^X");
 
-
     if (!space_write(space, PORT_EXEC_RESTORER, g_restorer_code, sizeof(g_restorer_code))) {
         goto fail;
     }
