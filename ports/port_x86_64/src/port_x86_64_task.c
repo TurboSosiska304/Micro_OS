@@ -431,11 +431,15 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     port_x86_64_switch(&prev->rsp, next->rsp);
 
     /*
-     * This context is the one that runs now, resumed from its own call of the
-     * switch: `next` is itself, and the window it left open - if any - is
-     * the one it gets back.
+     * This context is the one that runs now, and the window it left open - if
+     * any - is the one it gets back. The context is read from the core and
+     * not from `next`: a task may be resumed from a call of the switch whose
+     * `next` was another context - `port_x86_64_yield_to_idle()` hands the
+     * CPU to the boot context and is resumed by the scheduler from the same
+     * call - and the flag belongs to the task that runs, not to the one that
+     * was asked for a moment ago.
      */
-    if (next->copying) {
+    if (this_cpu()->current != NULL && this_cpu()->current->copying) {
         port_x86_64_user_access_begin();
     } else {
         port_x86_64_user_access_end();
