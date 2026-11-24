@@ -477,11 +477,12 @@ def main(argv: list) -> int:
             if args.verbose:
                 print(answers[command])
 
-        # The echo of the line editor of the port: the command a person types is
-        # in the transcript before its answer, because the shell writes every
-        # key it takes (src/shell.c). A machine whose line is not echoed is a
-        # machine a person types blind at, which is what the laptop of the set 2
-        # looked like before the scancodes were read right.
+        # The echo of the line editor of the session: the command a person
+        # types is in the transcript before its answer, because the session
+        # writes every key it takes (components/config/src/config_session.c).
+        # A machine whose line is not echoed is a machine a person types blind
+        # at, which is what the laptop of the set 2 looked like before the
+        # scancodes were read right.
         expect("the shell echoes what is typed", answers["uname"].lstrip().startswith("uname"))
         expect("uname answers the machine", "MicroOS" in answers["uname"] and "x86_64" in answers["uname"])
         expect("ls /bin reads the tree of the disk", "hello" in answers["ls /bin"] and "ls" in answers["ls /bin"])

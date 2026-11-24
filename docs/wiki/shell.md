@@ -200,6 +200,9 @@ The files, on every machine:
 | `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
 | `login [name]` | open a session as a user of `/etc/passwd`: the name and the password, three attempts, the uid, the gid and the home of the account (ADR 0033) |
 | `su [-l] [name]` | become another user: root without a password, a user with the password of the account; `-l` enters the home |
+| `logout` | end the session of this terminal: the console starts another one as root, a client of telnet is disconnected |
+| `who` | the sessions that are in: the name of `/etc/passwd`, the terminal and the pid (`/proc/sessions`) |
+| `whoami` | the name of the account of the shell |
 | `id` | the uid, the gid and the account of the shell |
 
 The services, where the port registers them:
@@ -546,9 +549,14 @@ which one happened.
 
 ## `telnet` and `config`
 
-`telnet` puts the shell on port 23 beside the UART and the panel; the
-negotiation is answered with refusals and the client keeps its own echo. There
-is no authentication, and `telnet off` closes the door.
+`telnet` puts the shell on port 23 beside the UART and the panel, behind the
+accounts of `/etc`: the client is asked for a name and a password (three
+attempts, a wait and one sentence for a wrong password and for a name that
+does not exist), the session runs as that user, `logout` ends it, and the door
+never reads the UART of the machine. The server offers the echo (RFC 857) and
+repeats the bytes when the client accepts, so a password is silent on both
+sides; `telnet off` closes the door. The client sees the answers of its own
+session and not the console of the board (ADR 0045).
 
 `config` lists the store of `/etc` (the key-value store of the port, NVS on the
 board), and `config sync` restores the files that are missing and saves the
