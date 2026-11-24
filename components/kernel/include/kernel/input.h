@@ -132,6 +132,15 @@ enum k_input_key {
     K_INPUT_KEY_POINTER_X,
     K_INPUT_KEY_POINTER_Y,
     K_INPUT_KEY_BUTTON_LEFT,
+    /*
+     * The wheel of a mouse of the USB (1.8.0). The value is the signed number
+     * of the notches of one report, the positive away from the person, as the
+     * `value` of the two axes is the signed difference of the picture. A
+     * mouse of the PS/2 with a wheel reports it as a fourth byte of the same
+     * packet; this release reads that byte in the driver of the USB and not
+     * in the one of the PS/2 (docs/debts.md).
+     */
+    K_INPUT_KEY_POINTER_WHEEL,
     K_INPUT_KEY_COUNT
 };
 
