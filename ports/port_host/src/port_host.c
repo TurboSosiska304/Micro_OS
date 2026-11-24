@@ -334,7 +334,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 12u
+#define PORT_API_MINOR 13u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");
@@ -538,13 +538,35 @@ k_u64_t k_port_uptime_us(void)
 
 /* --- tasks (pthreads) --- */
 
-typedef struct {
+typedef struct host_task_ctl {
     struct task *task;
     k_port_task_entry_fn entry;
     pthread_mutex_t lock;
     pthread_cond_t cond;
     bool started;
+    /*
+     * A k_port_task_wake() arrived: the sleep of the task ends now. The flag
+     * is guarded by `lock` and cleared by the sleep that consumed it, so a
+     * wake that lands before the task begins to sleep still cuts that sleep
+     * (the state of the task was changed by the kernel before the door was
+     * called, and the sleep looks at the flag before it waits).
+     */
+    bool woken;
+    struct host_task_ctl *next; /* the live contexts of the port */
 } host_task_ctl;
+
+/*
+ * The contexts that a wake may reach, and the lock of the list.
+ *
+ * A wake of the kernel names a struct task, and the record of the kernel can
+ * outlive the block of this port for a moment (a task that is exiting and a
+ * wake that is in flight). The list is what makes the door safe: the wake
+ * holds this lock while it finds the context and signals its condition, and
+ * the thread that ends takes the lock before it destroys anything. A task
+ * that is not in the list has no sleep to cut and the wake is dropped.
+ */
+static pthread_mutex_t s_task_lock = PTHREAD_MUTEX_INITIALIZER;
+static host_task_ctl *s_tasks;
 
 k_size_t k_port_task_stack_size(void)
 {
@@ -561,8 +583,30 @@ static void host_task_cleanup(void *arg)
 {
     host_task_ctl *ctl = (host_task_ctl *)arg;
 
+    pthread_mutex_lock(&s_task_lock);
+
+    {
+        host_task_ctl **slot = &s_tasks;
+
+        while (*slot != NULL) {
+            if (*slot == ctl) {
+                *slot = ctl->next;
+                break;
+            }
+            slot = &(*slot)->next;
+        }
+    }
+
+    /*
+     * The condition is destroyed after the context has left the list and
+     * while the lock of the list is held: a wake that found it a moment ago
+     * has finished signalling, and a wake that comes now finds nothing.
+     */
     pthread_mutex_destroy(&ctl->lock);
     pthread_cond_destroy(&ctl->cond);
+
+    pthread_mutex_unlock(&s_task_lock);
+
     free(ctl);
 }
 
@@ -604,7 +648,28 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
     ctl->task = t;
     ctl->entry = entry;
     pthread_mutex_init(&ctl->lock, NULL);
-    pthread_cond_init(&ctl->cond, NULL);
+
+    {
+        /*
+         * The condition counts from the monotonic clock, the clock of the
+         * uptime of this port: a machine whose wall clock is set during a
+         * sleep must not make the sleep longer or shorter than it asked for.
+         */
+        pthread_condattr_t cond_attr;
+
+        pthread_condattr_init(&cond_attr);
+        pthread_condattr_setclock(&cond_attr, CLOCK_MONOTONIC);
+        pthread_cond_init(&ctl->cond, &cond_attr);
+        pthread_condattr_destroy(&cond_attr);
+    }
+
+    ctl->started = false;
+    ctl->woken = false;
+
+    pthread_mutex_lock(&s_task_lock);
+    ctl->next = s_tasks;
+    s_tasks = ctl;
+    pthread_mutex_unlock(&s_task_lock);
 
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, k_port_task_stack_size());
@@ -612,6 +677,23 @@ int k_port_task_create(struct task *t, k_port_task_entry_fn entry, void *arg)
 
     if (pthread_create(&thread, &attr, host_task_thread, ctl) != 0) {
         pthread_attr_destroy(&attr);
+
+        pthread_mutex_lock(&s_task_lock);
+
+        {
+            host_task_ctl **slot = &s_tasks;
+
+            while (*slot != NULL) {
+                if (*slot == ctl) {
+                    *slot = ctl->next;
+                    break;
+                }
+                slot = &(*slot)->next;
+            }
+        }
+
+        pthread_mutex_unlock(&s_task_lock);
+
         pthread_cond_destroy(&ctl->cond);
         pthread_mutex_destroy(&ctl->lock);
         free(ctl);
@@ -651,16 +733,98 @@ void k_port_task_yield(void)
     sched_yield();
 }
 
+/*
+ * The sleep of a task of the host is a wait on the condition of its own
+ * context, and not a nanosleep: the kernel wakes a task by name when the
+ * object it waits for changes its state, and that wake has to end the sleep
+ * at once (ADR 0046). A nanosleep runs to the end and the task would come
+ * back a millisecond later - the tick that 1.8 paid for every pipe.
+ *
+ * A thread that is not a task of the kernel (the boot, a helper of a test)
+ * has no context and keeps the plain sleep of the process.
+ */
+bool k_port_task_sleep_cuttable(void)
+{
+    return true;
+}
+
+void k_port_task_wake(struct task *t)
+{
+    host_task_ctl *ctl;
+
+    if (t == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&s_task_lock);
+
+    for (ctl = s_tasks; ctl != NULL; ctl = ctl->next) {
+        if (ctl->task == t) {
+            pthread_mutex_lock(&ctl->lock);
+            ctl->woken = true;
+            pthread_cond_signal(&ctl->cond);
+            pthread_mutex_unlock(&ctl->lock);
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&s_task_lock);
+}
+
 void k_port_task_sleep_ms(k_u32_t ms)
 {
-    struct timespec ts;
+    struct task *self = k_port_task_current();
+    host_task_ctl *ctl = (self != NULL) ? (host_task_ctl *)self->ctx : NULL;
+    struct timespec deadline;
 
-    ts.tv_sec = (time_t)(ms / 1000u);
-    ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
-
-    while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
-        /* retry */
+    if (ms == 0) {
+        return;
     }
+
+    if (ctl == NULL) {
+        struct timespec ts;
+
+        ts.tv_sec = (time_t)(ms / 1000u);
+        ts.tv_nsec = (long)(ms % 1000u) * 1000000L;
+
+        while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+            /* retry */
+        }
+
+        return;
+    }
+
+    if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) {
+        deadline.tv_sec = 0;
+        deadline.tv_nsec = 0;
+    }
+
+    deadline.tv_sec += (time_t)(ms / 1000u);
+    deadline.tv_nsec += (long)(ms % 1000u) * 1000000L;
+
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+
+    pthread_mutex_lock(&ctl->lock);
+
+    while (!ctl->woken) {
+        if (pthread_cond_timedwait(&ctl->cond, &ctl->lock, &deadline) != 0) {
+            /* The deadline, or a condition that cannot be waited on any
+             * more: either way this sleep is over. */
+            break;
+        }
+    }
+
+    /*
+     * The flag is consumed whether the wait ended by it or by its deadline:
+     * a wake that lost the race with the clock must not cut the next sleep of
+     * this task.
+     */
+    ctl->woken = false;
+
+    pthread_mutex_unlock(&ctl->lock);
 }
 
 void k_port_task_exit(int code)

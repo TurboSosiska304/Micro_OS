@@ -32,6 +32,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/panic.c"
     "src/partition.c"
     "src/power.c"
+    "src/port_task_default.c"
     "src/render.c"
     "src/root.c"
     "src/sched.c"
