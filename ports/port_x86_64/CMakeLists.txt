@@ -419,6 +419,19 @@ add_program_image(badptr badptr_main)
 add_program_image(signals signals_main)
 add_program_image(nx nx_main)
 
+# The attacks of the policy of a page (ADR 0052, `make mmu-smoke`): each one
+# breaks one rule of the map and is expected to end its own task with EFAULT,
+# except the two that ask for more than the policy allows and are answered by
+# the call - a writable and executable mapping, and a heap past the limit of
+# the task. The suite also reads the stack that grows by 128 KiB.
+add_program_image(mmu_text mmu_text_main)
+add_program_image(mmu_execstack mmu_execstack_main)
+add_program_image(mmu_kernel mmu_kernel_main)
+add_program_image(mmu_heap mmu_heap_main)
+add_program_image(mmu_wx mmu_wx_main)
+add_program_image(mmu_stray mmu_stray_main)
+add_program_image(mmu_stack mmu_stack_main)
+
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
 # the same script, and the entry is `_start` of the library - main() is a

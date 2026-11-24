@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -63,6 +63,7 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make mmu-smoke  the policy of a page: the attacks of ADR 0052"
 	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
 	@echo "                  the machine: the gate of a program nobody rewrote"
 	@echo "  make tty-smoke  kilo, a full-screen editor of somebody else, typed at the"
@@ -421,6 +422,20 @@ x86-run-serial: x86-disk
 x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
+
+# The policy of a page (ADR 0052, lane M1 of 2.0): a program that writes its
+# text, executes its stack, writes the kernel, touches a page it does not own,
+# asks for a writable and executable mapping and grows past the limit of its
+# task - each ends the program with the reason in the log - plus the stack
+# that grows by 128 KiB and the W^X audit of every program of the run. The
+# machine carries the two bits of 2014 (SMEP and SMAP) so that the kernel side
+# of the boundary is exercised too; `make mmu-smoke MMU_CPU=qemu64` runs the
+# same suite on the supervisor bit alone.
+MMU_CPU ?= qemu64,+smep,+smap
+
+mmu-smoke: x86-disk
+	python3 tools/x86_mmu_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD) \
+		--cpu $(MMU_CPU) --timeout 240
 
 # The gate of a program nobody rewrote (lane M3 of 1.8, docs/ports-table.md):
 # the console set of sbase - true, false, echo, basename, dirname, pwd,
