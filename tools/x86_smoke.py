@@ -1979,6 +1979,17 @@ def check(output: str) -> list:
                 "file",
                 "sqlite3",
                 "awk",
+                # The attacks of the policy of a page (ADR 0052): the suite of
+                # `make mmu-smoke` is files of this image and not of a build
+                # of its own.
+                "mmu_text",
+                "mmu_execstack",
+                "mmu_kernel",
+                "mmu_heap",
+                "mmu_wx",
+                "mmu_stray",
+                "mmu_stack",
+                "mmu_io",
             )
         ),
         bin_listing[-200:],

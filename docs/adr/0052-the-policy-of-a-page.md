@@ -18,9 +18,10 @@ one and did not add up to a promise:
   an image and of the boot's map, and a program that called
   `mmap(PROT_WRITE | PROT_EXEC)` was given a writable and executable page:
   the audit had nothing to say about a page made after it;
-* the stack of a program was 64 KiB and the page under it was a fault. A
-  program with a frame of two pages - a parser, a formatter, a recursive
-  descent - died on a machine that had 16 MiB of window;
+* the stack of a program was 64 KiB and the page under it was a fault: a
+  recursion deeper than 64 KiB, or one frame larger than the whole stack - a
+  parser, a formatter, a descent that keeps a context per level - died on a
+  machine that had 16 MiB of window;
 * `brk` was charged to the memory limit of the task since 1.8 and `mmap` was
   not: a program could take any number of anonymous pages past the ceiling
   its shell had set with `ulimit -m`;

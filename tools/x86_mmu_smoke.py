@@ -167,7 +167,7 @@ def main(argv: list) -> int:
             execs += 1
             report.expect("mmu_text: the program prints where its text is",
                           "the text is at 0x" in text, text)
-            check_death(report, text, "mmu_text", "7", "0000000002", "the text took the write")
+            check_death(report, text, "mmu_text", "7", "00000000020", "the text took the write")
 
             stack = machine.run("exec /bin/mmu_execstack", args.timeout)
             execs += 1
@@ -178,6 +178,8 @@ def main(argv: list) -> int:
             execs += 1
             check_death(report, kernel, "mmu_kernel", "7", "ffffffff80000000",
                         "the kernel text took the write")
+            report.expect("mmu_kernel: the page of the kernel is present and supervisor",
+                          "error 0x0000000000000006" not in kernel, kernel)
 
             stray = machine.run("exec /bin/mmu_stray", args.timeout)
             execs += 1
