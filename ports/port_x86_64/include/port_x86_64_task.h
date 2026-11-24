@@ -109,6 +109,13 @@ void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready);
  */
 void port_x86_64_idle(void) __attribute__((noreturn));
 
+/*
+ * Give the CPU to the boot context of the core (the idle loop of the core 0)
+ * and return when the scheduler resumes the caller. The boot context is not
+ * in a run queue, so a task that waits for a lock it holds has to ask.
+ */
+void port_x86_64_yield_to_idle(void);
+
 /* The interrupt flag of RFLAGS and the alignment check flag. AC is bit 18
  * (0x40000) and it is what SMAP reads to allow a supervisor access to a page
  * of ring 3 (ADR 0052, `STAC` and `CLAC` of src/paging.c); the bit is named
