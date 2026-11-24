@@ -343,6 +343,18 @@ the second (`docs/plan-1.8.md`, M2).
 | The NVMe controller is on the bus 0: the walk of the port does not follow a bridge, and a function behind a root port of a real laptop (02:00.0) is invisible. | `ports/port_x86_64/src/pci.c`, `src/nvme.c` | open | A walk of the secondary buses from the PCI-to-PCI bridges (the type-1 header, the bus numbers the firmware assigned), and the ECAM window of the MCFG; the row is the same debt as the WiFi one. |
 | A medium that appears after the boot (a namespace of a hot-plugged drive, a card) is not seen: the driver asks once, at the boot, and there is no notification of a change of `CSTS`. | `ports/port_x86_64/src/nvme.c` | open | The hot-plug of the medium (the PCIe hot-plug of the slot, or a `rescan` command that asks the controllers again and re-registers a disk), and the unmount of what used that device. |
 
+## K16 - The stream of a hundred megabytes, once
+
+`make x86-net-smoke` downloads a hundred megabytes from the serving side of
+the machine into `/dev/null` and compares the SHA-256 the client computed on
+the wire with the digest of the host. It has been green in every run but one:
+in the gate of `1.8.0-rc1` the digest differed while the count of the bytes was
+right, and the two runs after it were green again.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| A stream of a hundred megabytes arrived whole by count and not by content once. The bytes of the client are read from the socket of the port in a ring of its own, and the suspicion is a segment lost and retransmitted across a socket that the server closed, or a wrap of the ring at a boundary the run does not always cross. | `components/net/src/*` (the client of HTTP and its ring), `ports/port_x86_64/src/{netdev,virtio_net}.c`, `tools/x86_net_smoke.py` (`wget-big`) | open | A run of the gate in a loop (a hundred of them, a quiet machine) with the digest of every one, a case of the host that reads a ring of the size of the run with the boundaries named, and the counter of the retransmissions of the stack in the answer. |
+
 ## K15 - The wakeup of a wait, and the window of its registration
 
 `k_wait_block` registers the waiter **after** the caller has looked at the
