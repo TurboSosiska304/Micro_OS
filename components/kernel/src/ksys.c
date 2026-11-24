@@ -2337,7 +2337,7 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
     }
 
     if (status != 0) {
-        *(int *)(uintptr_t)status = child_exit;
+        block_to_user(status, &child_exit, sizeof(child_exit));
     }
 
     task_reap(child_pid);
@@ -2346,9 +2346,30 @@ static k_ssize_t sys_waitpid(ksys_arg_t pid, ksys_arg_t status, ksys_arg_t flags
 }
 
 /*
- * The memory of a program. The priority of the task decides where the
- * memory comes from, the same way as for the kernel itself.
+ * The heap of the kernel, as a call. It is not part of the ABI of a program:
+ * a block of `kmm_alloc` is a pointer of ring 0, which the page tables of a
+ * program map without the user bit, so a program can neither read nor write
+ * what it asks for - and `free` of an address it guessed would hand a block
+ * of the kernel back to the allocator while the kernel still holds it. A
+ * caller with an address space is refused (ADR 0052); a task of the kernel -
+ * the shell, the init of the boot - is the caller this call is for.
  */
+static bool kernel_heap_refused(void)
+{
+    static bool said;
+
+    if (k_mm_current() == 0) {
+        return false;
+    }
+
+    if (!said) {
+        said = true;
+        kwarn("x86-64: a program asked for the heap of the kernel; the call is refused (ADR 0052)");
+    }
+
+    return true;
+}
+
 static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -2360,7 +2381,7 @@ static k_ssize_t sys_malloc(ksys_arg_t size, ksys_arg_t a1, ksys_arg_t a2, ksys_
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (size == 0) {
+    if (size == 0 || kernel_heap_refused()) {
         return 0;
     }
 
@@ -2381,7 +2402,7 @@ static k_ssize_t sys_free(ksys_arg_t ptr, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
     K_UNUSED(a4);
     K_UNUSED(a5);
 
-    if (ptr == 0) {
+    if (ptr == 0 || kernel_heap_refused()) {
         return 0;
     }
 
@@ -2401,6 +2422,10 @@ static k_ssize_t sys_realloc(ksys_arg_t ptr, ksys_arg_t size, ksys_arg_t a2, ksy
     K_UNUSED(a3);
     K_UNUSED(a4);
     K_UNUSED(a5);
+
+    if (kernel_heap_refused()) {
+        return 0;
+    }
 
     if (size <= 0) {
         kmm_free(old_block);

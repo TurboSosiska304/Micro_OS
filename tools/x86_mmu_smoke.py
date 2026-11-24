@@ -197,6 +197,11 @@ def main(argv: list) -> int:
             report.expect("mmu_heap: the program is alive after both refusals",
                           "the heap stops at the limit with ENOMEM and the program is alive" in heap
                           and "the program exited with 0" in heap, heap)
+            report.expect("mmu_heap: the heap of the kernel is not memory of a program",
+                          "malloc of the kernel heap answers 0" in heap
+                          and "realloc of a kernel block answers 0" in heap
+                          and "free of a guessed kernel address answers 0" in heap
+                          and "the heap of the kernel is not memory of the program" in heap, heap)
 
             wx = machine.run("exec /bin/mmu_wx", args.timeout)
             execs += 1

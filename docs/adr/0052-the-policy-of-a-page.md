@@ -204,6 +204,15 @@ the name into the kernel's own window first, the shape `open` and `stat`
 have had since ADR 0007. A VFS that only reads memory of the kernel is the
 other half of the same promise.
 
+One hole of the old edge is closed with it, and it was not a page: the calls
+20 to 22 (`malloc`, `free`, `realloc`) hand out blocks of the heap of the
+kernel, and a program that guessed an address and freed it would give a block
+the kernel still holds back to the allocator. They are not part of the ABI of
+a program - the library of a program allocates from its own arena and from
+`brk` - so a caller with an address space is refused (a zero, the failure the
+calls already answer, and one line of the log), and a task of the kernel, the
+shell and the init of the boot, keeps them.
+
 ### 6. A bad access is EFAULT with the address
 
 Two shapes, one answer:

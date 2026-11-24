@@ -80,6 +80,22 @@ int mmu_heap_main(int argc, char *const argv[])
 
     prog_puts("PROGRAM: the heap stops at the limit with ENOMEM and the program is alive\n");
 
+    /*
+     * The heap of the *kernel* is not the memory of a program (ADR 0052 §5):
+     * the calls 20, 21 and 22 hand out and take back blocks of ring 0, and a
+     * program that guessed an address and freed it would give a block the
+     * kernel still holds back to the allocator. The three calls are refused
+     * with zero, which is the failure they have always answered for a size
+     * of none.
+     */
+    report("malloc of the kernel heap answers", prog_call(KSYS_MALLOC, 4096, 0, 0, 0, 0, 0));
+    report("realloc of a kernel block answers",
+           prog_call(KSYS_REALLOC, 0x04000000, 4096, 0, 0, 0, 0));
+    report("free of a guessed kernel address answers",
+           prog_call(KSYS_FREE, 0x04000000, 0, 0, 0, 0, 0));
+
+    prog_puts("PROGRAM: the heap of the kernel is not memory of the program\n");
+
     prog_exit(0);
 
     return 0;
