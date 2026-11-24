@@ -164,6 +164,7 @@ run "usb-smoke" m usb-smoke
 run "ports-smoke" m ports-smoke
 run "ahci-smoke" m ahci-smoke
 run "nvme-smoke" m nvme-smoke
+run "power-smoke" m power-smoke
 run "uefi-smoke" m uefi-smoke
 run "x86-iso-smoke" m x86-iso-smoke
 

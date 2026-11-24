@@ -32,6 +32,19 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ### Added
 
+- A machine that switches itself off (ADR 0050): `shutdown`, `poweroff` and
+  `reboot` are commands of the shell and `k_power_shutdown` is the order of a
+  clean end - the sessions are closed to new ones, the volumes are synced and
+  the disks flushed (`FLUSH CACHE EXT`, the NVMe `Flush`) **before** any task
+  is signalled, then `SIGTERM`, a second sync for what the tasks wrote, the
+  unmount of every volume and the power. A flush that fails refuses the
+  shutdown and the machine keeps working (ADR 0041: the data first). The port
+  grew `k_port_power()` (contract 1.13): ACPI `S5` through the FADT on x86-64,
+  with the ports of QEMU and Bochs and the reset register behind it; deep sleep
+  on the board, with `HOLD` kept and the button of the board as the wake; a
+  documented exit code on the host. `make power-smoke` proves it: the process
+  of QEMU **ends by itself** on `shutdown`, the same image boots again and its
+  volume is clean, and `reboot` boots the same process a second time.
 - The accounts of a person, second half (ADR 0044): a **session** is a task
   with a terminal of its own (`kernel/console.h`), `init` of the console is a
   getty that starts one and starts another after a `logout`, `who` and
