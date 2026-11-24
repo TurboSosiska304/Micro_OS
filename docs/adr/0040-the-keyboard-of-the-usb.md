@@ -434,10 +434,11 @@ cannot be given a level entry from the firmware table.
 
 The gate of the second iteration is `make usb-smoke` with four more machines
 besides the three classes of the first half: a keyboard behind a hub (the
-route string, the port power and the status), a keyboard added and taken away
-on a live machine (`device_add` and `device_del` of the monitor), a mouse
-behind the hub whose movements and button `/bin/keys` reads, and the boot line
-of the controller with the first event it raised. QEMU names a port of a USB
+route string, the port power and the status, and the keyboard taken out of
+the port of the hub), a keyboard added and taken away on a live machine
+(`device_add` and `device_del` of the monitor in a root port), a mouse behind
+the hub whose movements and button `/bin/keys` reads, and the boot line of
+the controller with the first event it raised. QEMU names a port of a USB
 bus by the path above it (`bus=xhci.0,port=1.1` is the port 1 of the hub that
 is on the root port 1), not by the identifier of the hub (`hub.0` of older
 documentation), and the tool uses the name the machine of the release has.

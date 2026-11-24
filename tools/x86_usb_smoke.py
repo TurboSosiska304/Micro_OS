@@ -581,7 +581,7 @@ def run_hub(loader: str, kernel: str, image: str, workdir: str, timeout: float) 
 
     devices = [
         "-device", "usb-hub,bus=xhci.0,id=hub",
-        "-device", "usb-kbd,bus=xhci.0,port=1.1",
+        "-device", "usb-kbd,bus=xhci.0,port=1.1,id=hubkbd",
     ]
 
     try:
@@ -629,6 +629,19 @@ def run_hub(loader: str, kernel: str, image: str, workdir: str, timeout: float) 
             "a line typed on the keyboard behind the hub reaches the shell",
             "echo Usb" in answered and "Usb" in answered,
             echo[-300:],
+        )
+
+        machine.monitor_command("device_del hubkbd")
+        expect(
+            "a keyboard taken out of a port of the hub is gone",
+            machine.wait_serial("usb: the keyboard on the port", 8.0),
+            "the connect change of the hub port did not take the device away",
+        )
+        expect(
+            "the shell lives after the keyboard of the hub left",
+            re.search(r"MicroOS \d+\.\d+\.\d+", machine.answer_serial("uname", timeout))
+            is not None,
+            "",
         )
     finally:
         machine.close()
