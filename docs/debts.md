@@ -590,3 +590,27 @@ Both media were built from the tag on this machine and uploaded by hand, after
 boot. The workflow has to fail on a missing medium, or the medium has to be
 built from a `limine` that the workflow installs itself; until then a release
 is not done when the run is green, and the assets are read one by one.
+
+## K24 - The MAC that the filter made up
+
+On the test laptop the NVM of the I219 did not answer a single word
+(`EERD 0x00000001`) - the management engine holds the flash - and the driver
+took the station out of the receive filter, which named
+`0e:0e:0e:0e:0e:0e`. That is a locally administered address: the card is
+usable, the network of a person is not (two machines can collide, and a DHCP
+server of a house may refuse it). The next step is the alternative path of the
+family - the EEPROM read through the ME, or the `E1000_RAH0` the firmware
+programmed - and a MAC derived from the machine when neither answers, with a
+line that says it is derived.
+
+## K25 - Five ports of the laptop that do not enumerate
+
+The xHCI of the test laptop reports five ports with a device and refuses all
+of them after the reset: `PORTSC 0x000286e1` does not become `0x000806e1` in
+five attempts, `port 14 and 15 lose their device during its reset`, and the
+machine finishes with "the controller answered, no keyboard of the boot
+protocol on it". The keyboard of the laptop is the PS/2 one, so the machine is
+usable; the USB of a modern laptop is not. What is needed is a read of the
+port's link state and of the protocol speed before a reset (`PORTSC.CCS` and
+`PLS`), the reset only of a port that is in the `RxDetect` state, and a
+second look after a delay of the root port, not five attempts in a row.

@@ -12,6 +12,48 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-11-25
+
+### The release
+
+- 2.0.1: the machine that starts on a laptop of a real person. 2.0.0 met a
+  card of the family 82574/I219 for the first time and stopped before the
+  shell; the reset of a card that was still the master of the bus is the
+  cause, and the driver no longer does it.
+
+### Fixed
+
+- The wire of the boot on a laptop: `port_x86_64_e1000e_init()` reset the MAC
+  just after enabling bus master and without stopping the card. The datasheet
+  of the family says what that is - "prevent the PCI-E bus from sticking if
+  there is no TLP connection on the last TLP read/write transaction when MAC is
+  reset" - and the symptom was exactly a stuck root port: no panic, no
+  `kerror`, the machine on. The driver takes the bus-master bit away and waits
+  for `STATUS.GIO_MASTER_ENABLE` to clear before `CTRL.RST`, puts the card in
+  D0 through its PMCSR, and gives the reset ten milliseconds before the first
+  read. Linux does the same call (`e1000e_disable_pcie_master()`).
+- The waits of the wire are measured, not counted: `100000` loops of `pause`
+  are four microseconds, and a reset of a card of a person is milliseconds.
+  Every step has a deadline of the TSC (calibrated against the PIT before the
+  init) - 200 ms, 100 ms for the master - and a step that runs out says
+  `kerror` and returns (ADR 0055).
+- The rings of the card are static arrays of the kernel, not blocks of the
+  heap: the init of the wire no longer asks the allocator at all.
+- The MAC falls back to the filter register when the NVM does not answer (the
+  management engine of a laptop can hold the flash busy), and a card that
+  names no station leaves the wire off with a line in the log.
+- Every step of the init prints a line, so a boot that stops says where - the
+  image of this release was found by reading one screen.
+
+### Known
+
+- The MAC of a card whose NVM is held by the management engine comes out of
+  the filter as `0e:0e:0e:0e:0e:0e`, which is a locally administered address
+  and not the station of the card (K24 of `docs/debts.md`).
+- The xHCI of the test laptop answers five ports with a device and enumerates
+  none of them after the reset (`PORTSC 0x000286e1 -> 0x000806e1`): the
+  keyboard of the boot is the PS/2 one, and the USB stays a debt (K25).
+
 ## [2.0.0] - 2026-11-25
 
 ### The release
