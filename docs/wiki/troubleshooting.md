@@ -76,8 +76,11 @@ the tools. A row names the sentence you see, the cause and the move.
   shows the search list.
 * `this machine cannot run a program` — `execve` is `ENOSYS` on this port.
   Expected in the simulator and the null port; the board runs Xtensa `.mox`.
-* `not permitted: the file has no execute bit` — the mode has no `x` for
-  the caller. `chmod 0755 <path>`.
+* `not permitted: the x bit is not for this caller, or a setuid image the
+  caller may write` — the mode has no `x` for the caller (`chmod 0755
+  <path>`), or the image asks for the identity of its owner and its caller may
+  write it ([ADR 0053](../adr/0053-the-setuid-bit-of-an-image.md)); the line
+  of the kernel before the sentence says which of the two it was.
 * `not a MOX1 image of this system` — not an image, a version 1 image, or
   another machine. Rebuild with `mkprog.sh` (version 2, the right `--arch`).
 * `not enough memory for the image` — the image does not fit the window.

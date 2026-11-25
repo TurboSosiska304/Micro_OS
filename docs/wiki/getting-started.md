@@ -85,6 +85,13 @@ fsck: the volume is consistent
 `make smoke` drives the same simulator with a scripted list of commands and
 checks the transcript; it is the end-to-end test of the host build.
 
+## On a laptop, from a stick
+
+The page for a machine of your own is [install.md](install.md): one USB stick
+of 90 MB, a firmware of UEFI with Secure Boot off, and ten minutes from the
+`dd` to a file that survives the power. The short version of the two machines
+below is what the port is built of; the stick is what you carry.
+
 ## The other two machines
 
 The x86-64 port is the one that proves the kernel is portable, and the only
