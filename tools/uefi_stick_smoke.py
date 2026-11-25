@@ -197,6 +197,7 @@ def boot_positive(stick: str, code: str, variables: str, timeout: float, verbose
 
         mounts = machine.run("cat /proc/mounts", timeout=60.0)
         wrote = machine.run(f"write {PERSIST_PATH} {PERSIST_TEXT}", timeout=60.0)
+        ports = machine.run("ls /bin/ports", timeout=60.0)
     finally:
         machine.kill()
         transcript = machine.boot_text()
@@ -216,6 +217,12 @@ def boot_positive(stick: str, code: str, variables: str, timeout: float, verbose
           "bytes written to" in wrote or "written to" in wrote, short(wrote))
     check("the machine was alive while it wrote",
           "microos> " in transcript, short(transcript))
+
+    # The programs of the SDK are on the stick and not only in the disk image
+    # of `make x86-disk`: the volume of the stick is written by its own tool,
+    # and a release whose notes promise `kilo` is a stick that answers it.
+    check("the volume of the stick carries the programs of the SDK",
+          "kilo" in ports and "cksum" in ports, short(ports))
 
     return booted, wrote, transcript
 
