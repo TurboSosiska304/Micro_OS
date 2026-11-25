@@ -84,11 +84,16 @@ card never sets - the first version of this file did, and the boot said
 written into the filter `RA0` with `AV`, so unicast frames of the machine are
 taken, and the counters of the driver are the ones `netinfo` prints.
 
-The waits of the init are **counted**, not measured: the init of a device runs
-before the timer of the machine (`port_x86_64_net_init()` is called before
+The waits of the init are **measured**, and by the TSC: the init of a device
+runs before the timer of the machine (`port_x86_64_net_init()` is called before
 `port_x86_64_interrupts_init()`), where `k_port_uptime_ms()` is a zero that
-never moves. A deadline of the clock there is a boot that hangs on a card that
-is not there; a budget of reads is a line in the log and no card.
+never moves. A budget of reads was the first answer and it was wrong in the
+other direction: a hundred thousand `pause` loops are four microseconds, and a
+card of a person needs milliseconds for a reset. The processor counter is
+calibrated against the PIT before either init, so a step has a deadline - 200
+ms, 100 ms for the bus master - and a step that runs out says `kerror` and
+returns: the machine reaches its shell with no network, which is the promise
+(ADR 0004) and what the hang of 2.0.0 broke.
 
 ### 3. DHCP is portable, and the port lends it the wire
 
