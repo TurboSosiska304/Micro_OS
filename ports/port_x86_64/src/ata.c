@@ -1151,6 +1151,17 @@ const char *port_x86_64_root_device(void)
     const char *nvme = port_x86_64_nvme_root();
     const char *usb = port_x86_64_usb_storage_root();
 
+    /*
+     * A stick that carries a volume of this system is the root when the boot
+     * also brought an image of the memory: the stick is a medium that keeps
+     * what is written to it, and the module is not (ADR 0056). A machine
+     * whose USB controller did not come up keeps the module, which is the
+     * read-only root it always was.
+     */
+    if (boot != NULL && usb != NULL) {
+        return usb;
+    }
+
     if (boot != NULL) {
         return boot;
     }

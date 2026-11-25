@@ -31,7 +31,7 @@ somebody made, which is what a release is.
 | 2.3.0 | Pompeii | Bryullov, *The Last Day of Pompeii*, 1833 | the storms: fault injection, a night of fuzzing, the errors a disk and an allocator make, and a machine that keeps its files |
 | 2.4.0 | Peaches | Serov, *Girl with Peaches*, 1887 | the light of the last minor: the polish of the desktop, the applications of a person, the guide that a stranger reads |
 | **3.0.0** | **Ninth Wave** | Aivazovsky, *The Ninth Wave*, 1850 | the morning after the storm: survivors on a mast at dawn - the major of the stranger, where an upgrade keeps the data, a rollback exists, and the packages arrive |
-| 4.0.0 (reserved) | Black Square | Malevich, *Black Square*, 1915 | the release that begins from a clean slate: a reserved name for the version that resets a foundation, and nobody's to take before it |
+| 4.0.0 (reserved) | Black Square | Malevich, *Black Square*, 1915 | the release that ends the oldest promise instead of adding one: the board of the ESP32, which this system has carried since it existed and which a machine of 2.0 no longer needs. A reserved name, and the decision is the owner's, not the autopilot's |
 
 The ladder is a plan and not a promise of dates: a name belongs to the release
 that takes it, and a release that moves keeps its name until it is cut (3.0

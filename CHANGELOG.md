@@ -10,6 +10,140 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [Unreleased]
+
+## [2.0.0] - 2026-11-25
+
+### The release
+
+- 2.0.0 "Composition": the machine of its user (`docs/plan-2.0.md`) - the policy
+  of the MMU, a `fork` that is a copy of the pages, the group of a record and
+  the `setuid` bit, a desktop that starts with the machine, the wire of a
+  laptop with DHCP, and a guide a stranger can follow.
+
+### Fixed
+
+- The tables of a firmware above the gigabyte: `k_port_power()` asked the ACPI
+  tables for the name of the power block and the walk dereferenced physical
+  addresses directly - before 1.9 it worked because the map of the loader
+  names the memory of the machine, and after `paging_init()` the identity map
+  of the port is the first gigabyte. On a laptop whose FADT lives higher the
+  shutdown ended in a page fault, printed "the machine stops here" and left the
+  machine on (the clean end itself had done its work: the volumes synced, the
+  disks flushed, the mounts gone). The walk goes through a window of two
+  megabytes now, the FADT is copied out of it, the S5 port is checked to be a
+  plausible ACPI port, and a machine without a FADT says "press the power
+  button" and halts - `make power-smoke` is 22 checks with a machine of
+  `acpi=off`.
+- The Ethernet of a laptop with its window above 4 GiB: a 64-bit BAR is read
+  from both halves, a window that answers all ones is not a card, a window the
+  port could not map is not registered (the frame path asks whether the map is
+  there and drops the frame instead of faulting), and every register access is
+  clamped to the 128 KiB of the window. The panic prints CR2 now.
+- The reset of a port of xHCI: the power of the port, twenty milliseconds, the
+  reset, `PRC` and `PED`, and the change bits cleared after the enable - the
+  order Linux uses and the reason "the port 7 is not enabled after its reset"
+  was on the screen of a laptop. `make usb-smoke` is 66 checks, with a USB 3
+  port among them.
+
+- A guide a stranger can follow: `docs/install.md` - from a stick to a machine
+  that keeps a file, with the exact lines the boot prints, a table of
+  "symptom -> the line of the log -> what to send", and the recipe of the image
+  that has the network. The lane walked its own guide in QEMU and found what a
+  guide written by the author cannot: **the stick did not carry `/bin/ports`** -
+  the volume of the stick was built by a tool that was never given the SDK
+  programs, so `kilo` and the set of sbase were on the disk image of `make
+  x86-disk` and on none of the sticks a person writes. `make uefi-stick-smoke`
+  is 21 checks with `ls /bin/ports` among them.
+### Added
+
+- The accounts of a person, second half (ADR 0044, ADR 0053): `chgrp` is the
+  call **51** of the ABI (the count is 52) with an adapter in every filesystem
+  (MicroFS, ext2, and `ENOTSUP` on FAT32 which has no group), the group of a
+  record is in `struct vfs_stat` with `struct statx` still at 40 bytes, one
+  rule of the triads (`vfs_access_bits()`) answers for the VFS and for the edge
+  of the calls, `/etc/group` has its parser and `getgrgid`/`getgrnam`, a new
+  object takes the gid of its maker, and the image carries the **setuid bit of
+  MOX1**: a flag of the header, the real/effective/saved uid of the task, the
+  act in `execve` that refuses an image its caller can write, and `pkg` that
+  installs such a package only as root. `make x86-smoke` is 429 checks:
+  `/bin/suidcat` reads a file of its owner, the same program without the bit is
+  refused, a writable setuid image is refused, and the shell keeps its own
+  identity after the run.
+- `date` is a command of the shell (not a program: the clock is set by a
+  privileged act of the kernel and a program could only read it) that prints
+  `YYYY-MM-DD HH:MM:SS` and refuses a day that does not exist; the port of
+  x86-64 read the year of the CMOS **through BCD twice** - 2026 was printed as
+  2020 and 2043 as 2031 - and the date is a gate now.
+- The programs we promise are in the image, and a gate says so:
+  `tools/x86_image.py --ports` puts the SDK build into `/bin/ports` (kilo and
+  the set of sbase, 231 072 bytes), `PATH` of the shell is
+  `/bin:/bin/ports:/usr/bin`, and `tests/ports/promised.txt` - one list of
+  fifty-seven names, each with the version that promised it - is read by
+  `x86-smoke` (four checks: `/bin`, `/bin/ports`, the table of `help` and the
+  list of `help`) and by `ports-smoke` (everything in `/bin/ports` is really
+  built by the SDK). The owner of a laptop asked for `date` and the machine
+  answered "command not found": a promise that nothing checked.
+- The stick of a person is a disk, and the memory is not (ADR 0056): the image
+  of `make uefi-stick` is a **table of two partitions** - the ESP of 64 MiB with
+  the loader, the kernel and a copy of the volume as a spare root, and a second
+  partition of **MicroFS** of 24 MiB. The kernel finds that second partition
+  over xHCI and its class of mass storage (`usb0p2`), the root mount prefers it
+  to the module the loader carries, and the door of the writes opens because
+  the medium is ours and `/etc/volumes` names it. The module is read-only and
+  **says so** now: the volume the boot carries is memory, and a write to it
+  answered `EIO` from the RAM before - the owner of a laptop saw exactly that
+  with `write /x.txt hi` and a boot that had said "read-write" of a copy in the
+  memory. `make uefi-stick-smoke` is 20 checks: OVMF boots the stick as a USB
+  disk, `usb0p2` mounts read-write, a file is written, the power is cut off by
+  killing QEMU, and the second boot finds the file with `fsck` clean; a second
+  partition of FAT32 is refused and the SHA-256 of the stick does not move.
+- The policy of the MMU (ADR 0052): the page tables of a program have rules
+  now, and the hardware enforces them. `mmap` of `PROT_WRITE|PROT_EXEC` is
+  refused with `EINVAL` **before** a page exists, and the audit of `exec` stays
+  as the second lock; the stack grows on the fault of its guard page up to the
+  ceiling of the task (`ulimit -m`), with the base read from the tables; `brk`
+  and the anonymous mappings are charged against the same ceiling, and the
+  heap of the kernel (calls 20-22) is not a program's to take; the kernel is
+  unreachable from ring 3 by the supervisor bit on every machine and by
+  **SMEP and SMAP** where the processor has them, with a window around each
+  copy (`k_port_exec_user_access_begin/end`, the contract of the port **1.14**);
+  and a bad access answers `EFAULT` with its address in the log.
+  `make mmu-smoke` is 52 checks on a processor with SMEP and SMAP and 51 on one
+  without: a program that writes its text, executes its stack, writes a kernel
+  address, grows past its heap ceiling or touches a page it does not own ends
+  with `EFAULT` and the shell answers the next line.
+- The desk of a person (ADR 0054): the machine boots into the desktop - `init`
+  starts the session, `/etc/session` runs `/bin/wm` - and the window of the
+  **terminal** runs a command of `/bin` on two pipes: the keys go to it, `Ctrl+C`
+  is a signal, `Ctrl+T` is the second size of the font (16x32), `Ctrl+Q` leaves.
+  The clock of the panel is the time of the machine in the format of
+  `/etc/console`, and a second of it repaints **only the rectangle of the
+  hour**. `make x86-vga-smoke` is 266 checks, and the lane found a defect of
+  1.7 on the way: the damage of a window was compared with the edges of the
+  frame instead of the rectangle, so one key repainted 1280x765 - it is 640x16
+  now, and two screenshots around a key hold it.
+- The wire of a person, first half (ADR 0055): **DHCP** as a client of the
+  library (`components/net/src/dhcp.c`): DISCOVER/OFFER/REQUEST/ACK, T1 and T2,
+  a NAK that starts again, the lease in `/etc/network` (read before the request,
+  written after the answer, `dhcp 0` for the fixed address of 1.8), and a
+  fallback that keeps the machine usable when no server answers. And the
+  **Ethernet of a laptop**: `e1000e` (the I219 of a ThinkPad and the 82574L of
+  QEMU), legacy descriptors, the MAC from the NVM, the window of BAR0 above the
+  identity map. `make x86-net-smoke` is 130 checks over three machines: virtio
+  with DHCP, `-device e1000e` with DHCP and a download of the host, and a wire
+  with no server at all.
+- The four defects the owner of a laptop found in the first minute of 1.9.0 on
+  a real machine, and the fixes: the **scratchpad buffers** of xHCI (a
+  controller of QEMU asks for none, the controller of a laptop for 65, and the
+  driver kept 8: no USB at all); the **volume of the boot medium** is
+  `boot0p1` and the image did not name it, so the rule of ADR 0041 made the
+  stick read-only; a **serial port that is not there** answers 0xFF and the
+  console read it as a key, which filled the line of the shell - the keyboard
+  of the machine was never asked; and the board of the port called itself
+  "QEMU x86-64 machine" on a laptop. The first bytes of the keyboard are in the
+  log now.
+
 ## [1.9.0] - 2026-11-24
 
 ### The release

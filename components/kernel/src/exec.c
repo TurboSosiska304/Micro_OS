@@ -164,6 +164,7 @@ int k_exec_parse(const void *data, k_size_t size, struct k_exec_image *out)
     out->size = size;
     out->path = NULL;
     out->arch = arch;
+    out->setuid = (flags & K_EXEC_FLAG_SETUID) != 0u;
     out->entry = (k_size_t)entry;
     out->text_size = (k_size_t)text_size;
     out->data_size = (k_size_t)data_size;

@@ -65,7 +65,7 @@ and the port, asked later.
 `tools/mkprog.sh` turns a linked object into an image:
 
 ```bash
-tools/mkprog.sh [--base 0x02000000] [--data-base 0x3FFCE000] \
+tools/mkprog.sh [--base 0x10000000] [--data-base 0x3FFCE000] \
                 [--arch x86-64|xtensa] hello.elf hello.mox hello_main
 ```
 
@@ -79,7 +79,7 @@ against that number instead of the contiguous rule and also checks where the
 bss will be cleared. The x86-64 port builds its thirty-one images this way:
 the
 object is compiled for the window, linked with `programs/program.ld`, turned
-into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
+into a `.mox` by the script (`--base 0x10000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
 carries no copy of a program. The board builds `hello` and `cat` with
 `--arch xtensa --base 0x4009E000 --data-base 0x3FFCE000` and the toolchain of
@@ -174,7 +174,8 @@ the mode of a program (`0755`), and no boot creates one:
 | `/bin/ui` | the skeleton of ADR 0028: `/dev/fb0` and `/dev/input0`, a panel, a list of windows and the log; Tab moves the focus and `q` gives the screen back |
 | `/bin/edit` | a text editor (ADR 0030): a file, the arrows and the characters of `/dev/input0`, `Ctrl+S`, `Ctrl+Q`, a title bar and a status line; a modal window asks about an unsaved file |
 | `/bin/fm` | a file manager (ADR 0030): the directory through `readdir`, Enter to open a directory or `/bin/edit`, `d`/Delete with a modal question and `unlink`, `q` |
-| `/bin/wm` | the desktop of 1.7: the wallpaper, the panel, the pointer and the compositor; it starts `/bin/edit` and `/bin/fm` as its windows, a click raises a window, a drag of the title bar moves it, `Alt+F4` closes it ([desktop.md](../desktop.md)) |
+| `/bin/wm` | the desktop of 1.7: the wallpaper, the panel with the clock of the machine, the pointer and the compositor; it starts `/bin/edit` and `/bin/fm` as its windows, a click raises a window, a drag of the title bar moves it, `Alt+F4` closes it, `Alt+T` opens a terminal and `F12` is the meter of its frames ([desktop.md](../desktop.md), ADR 0054) |
+| `/bin/term` | the terminal window of 2.0 (ADR 0054): a line typed in the window is a command of `/bin` on two pipes, the output is the grid of the window, `Ctrl+C` stops the command, `Ctrl+T` is the large text and `Ctrl+Q` leaves |
 
 
 The first six talk to the kernel through `programs/prog.h`, because what they
@@ -543,12 +544,14 @@ so the engine on the machine and the engine in the test are one.
 
 A program is a task of the scheduler with page tables of its own:
 
-* the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`), mapped onto a
-  physical arena at 64 MiB; the kernel reaches the bytes through its identity
+* the window is 96 MiB at 256 MiB (`0x10000000`-`0x16000000`), mapped onto a
+  physical arena of 96 MiB at 64 MiB (ADR 0057); the kernel reaches the bytes through its identity
   map, the program through its own pages;
-* the stack is 64 KiB at the top of the window, with an unmapped guard page
-  below it; the null page is not mapped, so a write to address zero is a fault
-  and not a silent success;
+* the stack starts as 64 KiB at the top of the window and grows into a room
+  of 1 MiB below it, one page per fault and up to the memory limit of the task
+  (ADR 0052); the page under the room is the guard, a page that is never
+  mapped. The null page is not mapped either, so a write to address zero is a
+  fault and not a silent success;
 * the kernel is supervisor-only and out of the reach of ring 3; the program
   runs with `cpl 3` and calls the kernel only through the gate. The kernel
   image itself is in the higher half (`0xFFFFFFFF80000000`), and a program's
@@ -627,16 +630,22 @@ not told about a resize (`docs/debts.md`).
   machine and the descriptors 1 and 2 are its output (ADR 0051 §2) - so
   `cat` with no name reads the keyboard and a full-screen editor works, but
   `fstat(0)` still says `EBADF`: 0 is a fallback and not an open file.
-* **No `mmap` and no `brk`.** A program cannot ask for a range of its own, so
-  the allocator is the arena of its bss and a library that allocates more
-  than `ULIBC_HEAP_SIZE` needs a larger program or the ranges the kernel does
-  not have yet.
+* **The memory of a program is bounded.** `mmap` and `brk` exist (calls 44
+  and 47): a mapping is a record of the address space and the page comes on
+  the fault, and the heap grows from the end of the image. Both stop at the
+  memory limit of the task (`ulimit -m`), an anonymous mapping is counted
+  when it is made, and a page that is writable and executable at once is
+  refused with `EINVAL` (ADR 0052). The stack of a program starts at 64 KiB
+  and grows into a room of 1 MiB, or to the limit of the task when that is
+  smaller.
 * **No shell `export`.** The environment of every program is the four words of
   the kernel; a program that wants its own passes one to `execve`.
-* **No protection by SMAP yet.** The edge checks the page tables of the caller
-  and then reads the same pages in ring 0; the hardware half of the rule waits
-  for the flags of the processor (SMEP) and the `STAC`/`CLAC` window of the
-  copy (SMAP). The higher half is there.
+* **The boundary is the user bit, and SMEP/SMAP when the processor has them.**
+  The edge checks the page tables of the caller and then copies; a processor
+  with SMEP and SMAP (CPUID leaf 7) gets both bits in CR4 and the kernel opens
+  the `STAC`/`CLAC` window only around the copy it asked for, while an older
+  processor keeps the supervisor bit of every kernel page as the boundary -
+  and the boot says which one it is (ADR 0052). The higher half is there.
 
 The open rows are in [`docs/debts.md`](../debts.md); the plan is
 [`docs/roadmap.md`](../roadmap.md), K4 and K5.

@@ -66,19 +66,23 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-run-serial` | the machine on the serial console and no window |
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
+| `make fork-smoke` | the fork of a real process (ADR 0057): a program of 64 MiB maps and touches its memory, forks, writes four pages in the child and reads the same four in the parent. The pages are shared by the call and copied on the first write, the port's line names the pages shared and the time of the call (under a millisecond), and the child's exit names the pages it copied (13 checks) |
+| `make mmu-smoke` | the policy of a page (ADR 0052): a program that writes its text, executes its stack, writes the kernel, touches a page it does not own, maps a writable and executable page or grows past the limit of its task - each ends the program or is refused - plus the stack that grows by 128 KiB, a copy that sleeps, and the W^X audit of every program of the run. The machine is `-cpu qemu64,+smep,+smap`; `MMU_CPU=qemu64` runs the same suite on the supervisor bit alone (52 checks) |
 | `make ports-smoke` | the gate of a program nobody rewrote: thirteen utilities of sbase built by **the SDK** and not by the CMake of the tree, byte for byte the release (`tests/ports/upstream.txt`), run on the machine out of `/bin/ports`, plus `popen`/`pclose`/`system` (1.8, `docs/ports-table.md`) |
-| `make ahci-smoke` | the image on the SATA controller of a chipset (q35): the volume of `ahci0p1` is mounted read-only, a write is refused by the rule of ADR 0041, a volume of btrfs is refused at the mount, and the SHA-256 of each image is the same before and after its boot (21 checks) |
+| `make ahci-smoke` | the image on the SATA controller of a chipset (q35): the volume of `ahci0p1` is mounted read-only, a write is refused by the rule of ADR 0041, a volume of btrfs is refused at the mount, and the SHA-256 of each image is the same before and after its boot (33 checks) |
 | `make power-smoke` | `shutdown` makes the process of QEMU end by itself (ACPI S5), the same image boots again with a clean volume and its file, and `reboot` boots the same process a second time (1.9, ADR 0050) |
-| `make nvme-smoke` | the image on the NVMe controller of a modern laptop: the admin queue and one I/O pair, the volume of `nvme0p1` read-only, a write refused by the rule of ADR 0041, a volume of btrfs refused at the mount, and the SHA-256 of each image the same before and after its boot (23 checks) |
+| `make nvme-smoke` | the image on the NVMe controller of a modern laptop: the admin queue and one I/O pair, the volume of `nvme0p1` read-only, a write refused by the rule of ADR 0041, a volume of btrfs refused at the mount, and the SHA-256 of each image the same before and after its boot (35 checks) |
 | `make ... X86_DISK_BUS=virtio` | the disk of any target above on the virtio-blk device of ADR 0037 instead of the primary IDE channel: the same image, the other device (`X86_DISK_BUS=virtio make x86-smoke`, `x86-disk-smoke`, `x86-root-smoke`, `x86-volume-smoke`, `x86-run`, `x86-run-disk`, `x86-run-serial`) |
-| `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (47 checks) |
+| `make x86-root-smoke` | two roots of one machine: the MicroFS and the ext2 image answer the same commands, and FAT32 mounts at `/data` (52 checks) |
 | `make x86-volume-smoke` | a volume of 5 GiB of ext2 and of MicroFS: written, read back, `e2fsck -fn` and `debugfs` of the host and the `fsck` of the machine (about four minutes, not a part of `make ci`) |
 | `make x86-mfs-smoke` | a write interrupted by the power: the machine dies in the middle of 16 MiB, boots again on the same volume, and `fsck`/`fsck -y` find the volume it left (10 checks, ADR 0038) |
-| `make cut-smoke` (`x86-cut-smoke`) | the gate of ADR 0047: twenty cuts of one write. The image is copied, the copy is killed in the middle of a write at a different point each time, and the same blocks are booted again: the mount replays the journal or discards the draft, `fsck` finds nothing, the file written before the cut is whole, and the interrupted one is whole or absent (106 checks, about a minute) |
+| `make cut-smoke` (`x86-cut-smoke`) | the gate of ADR 0047: twenty cuts of one write. The image is copied, the copy is killed in the middle of a write at a different point each time, and the same blocks are booted again: the mount replays the journal or discards the draft, `fsck` finds nothing, the file written before the cut is whole, and the interrupted one is whole or absent (105 checks, about a minute) |
 | `make bench` | the numbers of the x86-64 port: `getpid`, fork and exec, a pipe, a file of 16 MiB and the console, one boot of fixed sizes; `make bench BENCH_ARGS="--json bench.json"` keeps the table (about a minute, not a part of `make ci`, `docs/bench.md`) |
 | `make uefi` | the volume a firmware boots: a FAT32 ESP with `EFI/BOOT/BOOTX64.EFI`, the kernel and `disk.img` (needs `clang` and `lld-link`, ADR 0037) |
 | `make uefi-run` | that volume in a window under OVMF |
-| `make uefi-smoke` | boot it under OVMF and check the loader, the kernel, the shell and the picture of the GOP frame (26 checks, needs OVMF) |
+| `make uefi-smoke` | boot it under OVMF and check the loader, the kernel, the shell and the picture of the GOP frame (29 checks, needs OVMF) |
+| `make uefi-stick` | the stick of a person: one GPT with the ESP of the firmware and, in the partition after it, the MicroFS volume the kernel writes through the USB port (ADR 0056; 90 MB, `dd` it to a stick) |
+| `make uefi-stick-smoke` | boot the stick as a USB disk under OVMF, write a file, take the power away and find the file in the second boot; a foreign second partition stays read-only and the SHA-256 of the image is the same (21 checks, needs OVMF and QEMU's xHCI) |
 | `make x86-iso` | the BIOS ISO (El Torito) with the loader, the kernel and the root image (K13) |
 | `make x86-iso-run` | boot the ISO in a terminal (`-nographic`) |
 | `make x86-iso-smoke` | boot the ISO with `-cdrom` and nothing else, and check the shell and `/bin` |
@@ -87,7 +91,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `mmu-smoke`, `fork-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
 
 The same build by hand:
 

@@ -185,6 +185,8 @@ run "simulator" m smoke
 
 # --- the machine of x86-64 --------------------------------------------------
 run "x86-smoke" m x86-smoke
+run "mmu-smoke" m mmu-smoke
+run "fork-smoke" m fork-smoke
 run "x86-vga-smoke" m x86-vga-smoke
 run "x86-disk-smoke" m x86-disk-smoke
 run "x86-root-smoke" m x86-root-smoke
@@ -199,6 +201,7 @@ run "ahci-smoke" m ahci-smoke
 run "nvme-smoke" m nvme-smoke
 run "power-smoke" m power-smoke
 run "uefi-smoke" m uefi-smoke
+run "uefi-stick-smoke" m uefi-stick-smoke
 run "x86-iso-smoke" m x86-iso-smoke
 
 # --- the firmware -----------------------------------------------------------

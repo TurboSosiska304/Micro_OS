@@ -255,7 +255,7 @@ const char *k_port_arch(void)
  * wrong meaning, the way vermagic does for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 13u
+#define PORT_API_MINOR 15u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_esp32 does not speak the contract of this kernel");
@@ -342,6 +342,16 @@ k_size_t k_port_heap_free(void)
 k_size_t k_port_heap_total(void)
 {
     return (k_size_t)heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+}
+
+/*
+ * One task on the board may own the PSRAM: the internal SRAM stays for the
+ * kernel and the drivers, and a task that asked for more than the external
+ * pool promised memory the machine does not have (ADR 0057).
+ */
+k_u64_t k_port_memory_limit(void)
+{
+    return (k_u64_t)TASK_LIMIT_MEMORY_MAX;
 }
 
 k_size_t k_port_psram_free(void)

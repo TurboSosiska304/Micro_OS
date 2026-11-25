@@ -59,6 +59,14 @@ void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
 bool port_x86_64_task_is_user(void);
 
 /*
+ * A page of the running task was copied on write (ADR 0057): the count of the
+ * context grows, and `k_port_task_exit()` puts it in the log. The port of the
+ * page is the one that copies it (src/paging.c); this call is the other half
+ * of the line.
+ */
+void port_x86_64_task_cow_copy(void);
+
+/*
  * The C side of the first instruction of a task. The arguments arrive in the
  * registers the frame carries, not from a caller; the RFLAGS are applied
  * here, because the interrupts of a new task were never saved on its stack.
@@ -116,8 +124,12 @@ void port_x86_64_idle(void) __attribute__((noreturn));
  */
 void port_x86_64_yield_to_idle(void);
 
-/* The interrupt flag of RFLAGS. */
+/* The interrupt flag of RFLAGS and the alignment check flag. AC is bit 18
+ * (0x40000) and it is what SMAP reads to allow a supervisor access to a page
+ * of ring 3 (ADR 0052, `STAC` and `CLAC` of src/paging.c); the bit is named
+ * here because the port saves it with the context that opened the window. */
 #define PORT_X86_64_RFLAGS_IF 0x200u
+#define PORT_X86_64_RFLAGS_AC 0x40000u
 
 /*
  * The frame that an entry from ring 3 leaves on the kernel stack of a

@@ -71,7 +71,7 @@
  * the kernel: which directories hold the commands is a matter of the person
  * at the console, and a program of this system does not inherit it yet.
  */
-#define SHELL_PATH_DEFAULT "/bin:/usr/bin"
+#define SHELL_PATH_DEFAULT "/bin:/bin/ports:/usr/bin"
 #define SHELL_PATH_SIZE 96
 
 static char g_shell_path[SHELL_PATH_SIZE] = SHELL_PATH_DEFAULT;
@@ -1623,8 +1623,20 @@ static int cmd_mount(int argc, char **argv)
             return KSHELL_OK;
         }
 
+        /*
+         * The list is the one a person reads and not the one of a directory:
+         * the device, the point, the type and the mode, as /proc/mounts says
+         * it (and as `mount` says it on Linux). A point alone cannot answer
+         * "is the stick written or read-only?", which is the first question
+         * after a boot (docs/install.md, ADR 0041).
+         */
         for (i = 0; i < count; i++) {
-            kshell_printf("%s\n", vfs_mount_name(i));
+            const char *device = vfs_mount_device(i);
+            const char *type = vfs_mount_type_name(i);
+
+            kshell_printf("%s on %s type %s (%s)\n", device != NULL ? device : "none",
+                          vfs_mount_name(i), type != NULL ? type : "none",
+                          vfs_mount_is_read_only(i) ? "ro" : "rw");
         }
 
         return KSHELL_OK;
@@ -1650,6 +1662,51 @@ static int cmd_mount(int argc, char **argv)
     }
 
     kshell_printf("mount: %s is mounted at %s\n", args.argv[0], args.argv[1]);
+
+    return KSHELL_OK;
+}
+
+/*
+ * `lsblk` — the block devices the kernel has: the name, the size and the
+ * sector, which is what a person asks before `mount`. The list is short by
+ * design: the table of the block layer is the machine (eight slots), and a
+ * device that is not in it is not there (docs/debts.md, the rule of ADR 0041).
+ */
+static int cmd_lsblk(int argc, char **argv)
+{
+    struct kshell_args args;
+    k_size_t count;
+    k_size_t i;
+    int rc;
+
+    rc = kshell_options(argc, argv, NULL, 0, "lsblk", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    count = k_blockdev_count();
+
+    if (count == 0) {
+        kshell_printf("lsblk: there is no block device\n");
+        return KSHELL_OK;
+    }
+
+    kshell_printf("%-10s %-10s %-8s %s\n", "NAME", "SIZE", "SECTOR", "SECTORS");
+
+    for (i = 0; i < count; i++) {
+        const struct k_blockdev *dev = k_blockdev_at(i);
+
+        if (dev == NULL) {
+            continue;
+        }
+
+        kshell_printf("%-10s %-10u %-8u %u\n", dev->name,
+                      (unsigned)(((k_u64_t)dev->sectors * dev->sector_size) / 1024u),
+                      (unsigned)dev->sector_size, (unsigned)dev->sectors);
+    }
 
     return KSHELL_OK;
 }
@@ -1774,7 +1831,15 @@ static const char *exec_error_text(int code)
     }
 
     if (code == -KERR_PERM) {
-        return "not permitted: the file has no execute bit";
+        /*
+         * The two reasons of the call and no third: the x bit of the mode is
+         * not one for this caller, or the image asks for the identity of its
+         * owner and the caller may write the file, which would let the caller
+         * write the program that runs as the owner (ADR 0053). The line of the
+         * kernel before this one says which of the two it was.
+         */
+        return "not permitted: the x bit is not for this caller, or a setuid image the "
+               "caller may write";
     }
 
     if (code == -KERR_NOMEM) {
@@ -1839,6 +1904,41 @@ static int cmd_chown(int argc, char **argv)
     if (rc != 0) {
         kshell_printf("chown: %s: %s\n", path,
                       attr_error_text(microos_errno(), "a uid is 0..32767"));
+        return KSHELL_ERROR;
+    }
+
+    return KSHELL_OK;
+}
+
+/*
+ * The group of an object (ADR 0044). Root gives a file to any group, the
+ * owner of the file gives it to the group of its own task, and a volume of
+ * FAT32 has no groups at all and says so with the sentence of ENOTSUP.
+ */
+static int cmd_chgrp(int argc, char **argv)
+{
+    char path[SHELL_PATH_MAX];
+    unsigned long group = 0;
+    int rc;
+
+    if (argc != 3) {
+        kshell_printf("usage: chgrp <gid> <path>\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!shell_number(argv[1], 10, KSYS_GID_MAX, &group)) {
+        kshell_printf("chgrp: %s: a gid is 0..%u\n", argv[1], (unsigned)KSYS_GID_MAX);
+        return KSHELL_ERROR;
+    }
+
+    if (!shell_resolve(argv[2], path, sizeof(path))) {
+        return path_too_long("chgrp");
+    }
+
+    rc = microos_chgrp(path, (unsigned)group);
+    if (rc != 0) {
+        kshell_printf("chgrp: %s: %s\n", path,
+                      attr_error_text(microos_errno(), "a gid is 0..32767"));
         return KSHELL_ERROR;
     }
 
@@ -1917,6 +2017,7 @@ static int cmd_stat(int argc, char **argv)
     }
 
     kshell_printf("owner: %u\n", (unsigned)info.owner);
+    kshell_printf("group: %u\n", (unsigned)info.group);
     kshell_printf("size: %llu\n", (unsigned long long)info.size);
 
     return KSHELL_OK;
@@ -2651,10 +2752,17 @@ static const struct file_command {
                 "Here -h is the sizes, as in df of Linux: --help prints this.\n",
       .owns_short_h = true},
      cmd_df},
+    {"lsblk",
+     {.summary = "list the block devices: name, size, sector",
+      .usage = "lsblk",
+      .detail = "The devices the block layer has, as `mount` needs them: the name\n"
+                "is what `mount <device> <point> <type>` takes.\n"},
+     cmd_lsblk},
     {"mount",
      {.summary = "list, mount or unmount the filesystems",
       .usage = "mount [-a] [<device> <point> <type>]",
-      .detail = "Without a word the mounted filesystems are listed, one point per line.\n"
+      .detail = "Without a word the mounted filesystems are listed: device, point,\n"
+                "type and rw or ro, as /proc/mounts says it.\n"
                 "  -a  mount every volume of " VFS_FSTAB_PATH "\n"
                 "The words are `device point type`, as in the table and in Linux.\n"},
      cmd_mount},
@@ -2682,18 +2790,25 @@ static const struct file_command {
       .usage = "chown <uid> <path>",
       .detail = "The uid is a decimal number, 0..32767.\n"},
      cmd_chown},
+    {"chgrp",
+     {.summary = "change the group of a file",
+      .usage = "chgrp <gid> <path>",
+      .detail = "The gid is a decimal number, 0..32767. Root gives a file to any group;\n"
+                "the owner of a file gives it to the group of its own task. A volume of\n"
+                "FAT32 keeps no group and refuses the call.\n"},
+     cmd_chgrp},
     {"stat",
-     {.summary = "the type, the mode, the owner and the size",
+     {.summary = "the type, the mode, the owner, the group and the size",
       .usage = "stat <path>",
       .detail = "Prints the line of `ls -l` first and then the same numbers as fields, so\n"
-                "that a chmod or a chown is checked without a calculator.\n"},
+                "that a chmod, a chown or a chgrp is checked without a calculator.\n"},
      cmd_stat},
     {"path",
      {.summary = "show or set PATH",
       .usage = "path [directories]",
       .detail = "Without a word the value is printed. With one it is set, the directories\n"
                 "separated by ':'. An empty value is not a list of directories and is\n"
-                "refused; the default is /bin:/usr/bin.\n"},
+                "refused; the default is /bin:/bin/ports:/usr/bin.\n"},
      cmd_path},
 #if KERNEL_EXEC
     {"exec",

@@ -359,6 +359,271 @@ static void test_directory_bits(void)
     teardown();
 }
 
+/* A task of a uid and a gid, for a row of the matrix. The runner is the only
+ * task of a test and it starts as root, so this is the fixture that is not
+ * the call under test (setuid does not move the gid and cannot come back). */
+static void as_user(struct task *self, k_u32_t uid, k_u32_t gid)
+{
+    task_set_uid(self, uid);
+    task_set_gid(self, gid);
+}
+
+/*
+ * The matrix of the access, row by row: the owner triad for the owner, the
+ * triad of the group for a task whose gid is the group of the object, the
+ * triad of the others for everybody else, and root above the three. A row
+ * that is not in this test is a row nobody has thought about (ADR 0044 §3).
+ *
+ * The file is 0640 of uid 7 and gid 7, so the three rows answer: read and
+ * write (owner), read alone (group), nothing (others).
+ */
+static void test_group_permissions(void)
+{
+    struct task *self = task_self();
+    struct vfs_stat info;
+    struct vfs_statx info_x;
+    char byte = 'g';
+    int fd;
+
+    ktest_begin("users: the gid of the caller decides the triad of the group");
+
+    setup();
+
+    fd = ksys_open("/g.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    KT_CHECK_INT_EQ(ksys_chown("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/g.txt", 0640), 0);
+
+    /* The record keeps the three numbers, and stat and statx agree. */
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+    KT_CHECK_INT_EQ(info.mode, 0640);
+    KT_CHECK_INT_EQ(ksys_statx("/g.txt", &info_x), 0);
+    KT_CHECK_INT_EQ(info_x.owner, 7);
+    KT_CHECK_INT_EQ(info_x.group, 7);
+
+    /* Root: the two triads are passed. */
+    as_user(self, 0, 0);
+    fd = ksys_open("/g.txt", KSYS_O_RDWR);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The owner reads its own triad even when another group would be wider:
+     * uid 7 with gid 8 is still the owner of the file of gid 7. */
+    as_user(self, 7, 8);
+    fd = ksys_open("/g.txt", KSYS_O_RDWR);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The row of the group: uid 8 is not the owner, gid 7 is the group of
+     * the object, so the r of 0640 reads and the w of it is not there. */
+    as_user(self, 8, 7);
+    fd = ksys_open("/g.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_WRONLY), KERR_PERM);
+
+    /* The row of the others: uid 8 with gid 8 is neither the owner nor the
+     * group, and the others of 0640 are zero. */
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_RDONLY), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_open("/g.txt", KSYS_O_WRONLY), KERR_PERM);
+
+    /* The group of the object is what decides, not the gid of the task that
+     * made it: the same uid 8 reads the file after a chown, and a file of
+     * another group is not read by the gid it used to have. */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/g.txt", 0604), 0);
+    as_user(self, 8, 8);
+    fd = ksys_open("/g.txt", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /*
+     * The act of chgrp: root gives the object to any group; the owner gives
+     * it to the group of its own task and to no other; a third task does not
+     * touch it at all. A group wider than the fifteen bits of a record is
+     * refused at the door.
+     */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.group, 7);
+
+    as_user(self, 7, 7);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), KERR_PERM);
+
+    as_user(self, 7, 9);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 7), KERR_PERM); /* not the group of the task */
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), 0);         /* the group of the task */
+    KT_CHECK_INT_EQ(ksys_stat("/g.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.group, 9);
+
+    as_user(self, 8, 9);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", 9), KERR_PERM);
+
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/g.txt", KSYS_GID_MAX + 1u), KERR_INVAL);
+    KT_CHECK_INT_EQ(ksys_chgrp("/no/such/file", 7), KERR_NOENT);
+
+    /*
+     * The group of a new object is the gid of its maker, with the owner in
+     * the same act, and a directory with the two triads of the group is a
+     * place the group may write in.
+     */
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/people"), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/people", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/people", 0755), 0);
+
+    as_user(self, 7, 7);
+    fd = ksys_open("/people/made.txt", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_mkdir("/people/made-dir"), 0);
+
+    KT_CHECK_INT_EQ(ksys_stat("/people/made.txt", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+    KT_CHECK_INT_EQ(ksys_stat("/people/made-dir", &info), 0);
+    KT_CHECK_INT_EQ(info.owner, 7);
+    KT_CHECK_INT_EQ(info.group, 7);
+
+    as_user(self, 0, 0);
+    KT_CHECK_INT_EQ(ksys_mkdir("/gd"), 0);
+    KT_CHECK_INT_EQ(ksys_chgrp("/gd", 7), 0);
+    KT_CHECK_INT_EQ(ksys_chmod("/gd", 0770), 0);
+
+    /* A member of the group writes in the directory of the group. */
+    as_user(self, 8, 7);
+    fd = ksys_open("/gd/a", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* A task of another group has no such right even with the same uid. */
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_open("/gd/b", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_chgrp("/gd", 8), KERR_PERM);
+
+    /* The walk of a path reads the triad of the group of the directory: the
+     * x of 0770 is there for gid 7 and not for gid 8. */
+    as_user(self, 8, 7);
+    KT_CHECK_INT_EQ(ksys_stat("/gd/a", &info), 0);
+    as_user(self, 8, 8);
+    KT_CHECK_INT_EQ(ksys_stat("/gd/a", &info), KERR_PERM);
+
+    as_user(self, 0, 0);
+
+    teardown();
+}
+
+/*
+ * The property: a task has the three uids of POSIX (ADR 0053). The effective
+ * uid is the one every check reads, the real one is the person and the saved
+ * one is what `setuid` may return to; a setuid image moves the effective and
+ * the saved uid and leaves the real one, and `setuid` of a task that is not
+ * root names its real or its saved uid and nothing else.
+ */
+static void test_three_uids(void)
+{
+    struct task *self = task_self();
+    char byte = 'u';
+    int fd;
+
+    ktest_begin("users: the real, the effective and the saved uid of a task");
+
+    setup();
+
+    /* A task of the shell has the three the same, and the two calls agree. */
+    KT_CHECK_INT_EQ(task_get_ruid(self), 0);
+    KT_CHECK_INT_EQ(task_get_uid(self), 0);
+    KT_CHECK_INT_EQ(task_get_suid(self), 0);
+    KT_CHECK_INT_EQ(ksys_getuid(), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 0);
+
+    fd = ksys_open("/secret", KSYS_O_WRONLY | KSYS_O_CREAT | KSYS_O_TRUNC);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_write(fd, &byte, 1), 1);
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+    KT_CHECK_INT_EQ(ksys_chmod("/secret", 0600), 0);
+    KT_CHECK_INT_EQ(ksys_chown("/secret", 0), 0);
+
+    /*
+     * The act of a setuid image: the effective and the saved uid become the
+     * owner of the file and the real uid is the person. The file of root is
+     * then out of reach although the real uid of the task is zero - the
+     * checks read the effective uid and nothing else.
+     */
+    task_set_euid(self, 7);
+    KT_CHECK_INT_EQ(ksys_getuid(), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(task_get_suid(self), 7);
+    KT_CHECK_INT_EQ(ksys_open("/secret", KSYS_O_RDONLY), KERR_PERM);
+
+    /* The real uid is a way back, as POSIX has it, and it is the only one
+     * that is: 9 is neither the real nor the saved uid. */
+    KT_CHECK_INT_EQ(ksys_setuid(9), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 0);
+
+    fd = ksys_open("/secret", KSYS_O_RDONLY);
+    KT_CHECK(fd >= 0);
+    if (fd >= 0) {
+        KT_CHECK_INT_EQ(ksys_close(fd), 0);
+    }
+
+    /* The saved uid is the other way: the task of the image returns to the
+     * identity it was given, and that identity is the one the checks read. */
+    task_set_euid(self, 7);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_open("/secret", KSYS_O_RDONLY), KERR_PERM);
+
+    /* A task whose three uids are 7 has no way back to root with a call:
+     * `logout` on the console and the init that makes the next session are
+     * the door (ADR 0044). */
+    task_set_uid(self, 7);
+    KT_CHECK_INT_EQ(ksys_getuid(), 7);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), KERR_PERM);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+
+    /* Root moves the three together, which is what a login does. */
+    task_set_uid(self, 0);
+    KT_CHECK_INT_EQ(ksys_setuid(7), 0);
+    KT_CHECK_INT_EQ(ksys_getuid(), 7);
+    KT_CHECK_INT_EQ(ksys_geteuid(), 7);
+    KT_CHECK_INT_EQ(task_get_suid(self), 7);
+    KT_CHECK_INT_EQ(ksys_setuid(0), KERR_PERM);
+
+    task_set_uid(self, 0);
+
+    teardown();
+}
+
 static void test_cwd_fit(void)
 {
     struct task *self = task_self();
@@ -642,6 +907,94 @@ static void test_accounts_file(void)
 }
 
 /*
+ * The property: /etc/group is a file of records `name:gid:member,member`, a
+ * line that is not one stops the read, and a group is found by its name and
+ * by its gid and nowhere else (ADR 0044 §4).
+ */
+static void test_accounts_group(void)
+{
+    struct user_group group;
+    struct user_group parsed;
+
+    ktest_begin("users: the groups are the file of /etc/group");
+
+    setup();
+    KT_CHECK_INT_EQ(ksys_mkdir("/etc"), 0);
+
+    /* No file at all is no group at all. */
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_ENOENT);
+
+    /* The record of the format, with and without a member list. */
+    KT_CHECK(users_parse_group("root:0:\n", &parsed));
+    KT_CHECK_STR_EQ(parsed.name, "root");
+    KT_CHECK_INT_EQ(parsed.gid, 0);
+    KT_CHECK_STR_EQ(parsed.members, "");
+
+    KT_CHECK(users_parse_group("staff:12:alice,bob", &parsed));
+    KT_CHECK_STR_EQ(parsed.name, "staff");
+    KT_CHECK_INT_EQ(parsed.gid, 12);
+    KT_CHECK_STR_EQ(parsed.members, "alice,bob");
+
+    /* A line that is not a record of this file: a comment, an empty line, a
+     * missing field, a fourth field, a gid that is not a number of fifteen
+     * bits, a name with a slash in it, an empty member, a name too long. */
+    KT_CHECK(!users_parse_group("# a comment", &parsed));
+    KT_CHECK(!users_parse_group("", &parsed));
+    KT_CHECK(!users_parse_group("staff:12", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:a:b", &parsed));
+    KT_CHECK(!users_parse_group("staff:x:", &parsed));
+    KT_CHECK(!users_parse_group("staff:40000:", &parsed));
+    KT_CHECK(!users_parse_group("st/aff:12:", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:alice,,bob", &parsed));
+    KT_CHECK(!users_parse_group("staff:12:,alice", &parsed));
+    KT_CHECK(!users_parse_group("a-name-of-sixteen:12:", &parsed));
+
+    write_text(USERS_GROUP_PATH, "# the groups of the test\n"
+                                 "root:0:\n"
+                                 "guest:7:guest\n"
+                                 "staff:12:alice,bob\n");
+
+    KT_CHECK_INT_EQ(users_find_group("guest", &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "guest");
+    KT_CHECK_INT_EQ(group.gid, 7);
+    KT_CHECK_STR_EQ(group.members, "guest");
+
+    KT_CHECK_INT_EQ(users_find_gid(12, &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "staff");
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_OK);
+    KT_CHECK_STR_EQ(group.name, "root");
+
+    KT_CHECK_INT_EQ(users_find_group("nobody", &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_gid(8, &group), USERS_ENOENT);
+    KT_CHECK_INT_EQ(users_find_group(NULL, &group), USERS_ENOENT);
+
+    /* Half a file of groups is a different set of groups: a broken line stops
+     * the read with the error of the file and not with the next record. */
+    write_text(USERS_GROUP_PATH, "garbage\nroot:0:\n");
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_EFORMAT);
+    KT_CHECK_INT_EQ(users_find_gid(0, &group), USERS_EFORMAT);
+
+    write_text(USERS_GROUP_PATH, "root:0:\ngarbage\n");
+    KT_CHECK_INT_EQ(users_find_group("root", &group), USERS_OK);
+    KT_CHECK_INT_EQ(users_find_gid(7, &group), USERS_EFORMAT);
+
+    /* The primary group of an account is the gid of its line of /etc/passwd,
+     * and the default file of the groups names the two accounts of the tree. */
+    write_text(USERS_PASSWD_PATH, USERS_DEFAULT_PASSWD);
+    write_text(USERS_GROUP_PATH, USERS_DEFAULT_GROUP);
+    {
+        struct user_account account;
+
+        KT_CHECK_INT_EQ(users_find_name("guest", &account), USERS_OK);
+        KT_CHECK_INT_EQ(users_find_gid(account.gid, &group), USERS_OK);
+        KT_CHECK_STR_EQ(group.name, "guest");
+    }
+
+    teardown();
+}
+
+/*
  * The property: a name and a password are checked against the two files, and
  * the act of `login` moves the uid, the gid and the directory of the task.
  */
@@ -723,11 +1076,13 @@ static void test_accounts_defaults(void)
 
     setup();
 
-    KT_CHECK_INT_EQ(users_defaults("/etc"), 2);
+    KT_CHECK_INT_EQ(users_defaults("/etc"), 3);
     KT_CHECK_INT_EQ(ksys_stat(USERS_PASSWD_PATH, &info), 0);
     KT_CHECK_INT_EQ(info.mode, 0644);
     KT_CHECK_INT_EQ(ksys_stat(USERS_SHADOW_PATH, &info), 0);
     KT_CHECK_INT_EQ(info.mode, 0600);
+    KT_CHECK_INT_EQ(ksys_stat(USERS_GROUP_PATH, &info), 0);
+    KT_CHECK_INT_EQ(info.mode, 0644);
     KT_CHECK_INT_EQ(ksys_stat("/home/guest", &info), 0);
     KT_CHECK_INT_EQ(info.type, 2);
 
@@ -755,10 +1110,13 @@ void test_users(void)
     test_creds_inherit();
     test_uid_permissions();
     test_directory_bits();
+    test_group_permissions();
+    test_three_uids();
     test_cwd_fit();
     test_privileged_acts();
     test_accounts_records();
     test_accounts_file();
+    test_accounts_group();
     test_accounts_act();
     test_accounts_defaults();
 }

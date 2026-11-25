@@ -29,6 +29,35 @@ static bool canvas_ready(const struct ui_canvas *canvas)
     return canvas != NULL && canvas->pixels != NULL && canvas->width > 0 && canvas->height > 0;
 }
 
+/* The scale of a font as a number of pixels a glyph pixel covers: a font with
+ * no scale (the shape of the libraries of 1.7) is the font at its own size. */
+static int font_scale(const struct ui_font *font)
+{
+    if (font == NULL || font->scale < 1) {
+        return 1;
+    }
+
+    return font->scale;
+}
+
+int ui_font_cell_width(const struct ui_font *font)
+{
+    if (font == NULL || font->width <= 0) {
+        return 0;
+    }
+
+    return font->width * font_scale(font);
+}
+
+int ui_font_cell_height(const struct ui_font *font)
+{
+    if (font == NULL || font->height <= 0) {
+        return 0;
+    }
+
+    return font->height * font_scale(font);
+}
+
 void ui_canvas_fill(struct ui_canvas *canvas, k_u16_t color)
 {
     int index;
@@ -120,13 +149,20 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
     size_t length;
     bool ended = false;
     int index;
+    int scale;
+    int cell_w;
+    int cell_h;
     int row;
     int column;
 
     if (!canvas_ready(canvas) || font == NULL || font->glyph == NULL || font->width <= 0 ||
-        font->width > 8 || font->height <= 0 || cells < 0) {
+        font->width > 8 || font->height <= 0 || font->scale < 0 || font->scale > 8 || cells < 0) {
         return -1;
     }
+
+    scale = font->scale > 0 ? font->scale : 1;
+    cell_w = ui_font_cell_width(font);
+    cell_h = ui_font_cell_height(font);
 
     /* The text is read up to its terminator and not up to `cells`: a buffer
      * of a program holds a line and its NUL, and the bytes after the NUL are
@@ -136,7 +172,7 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
     for (index = 0; index < cells; index++) {
         const k_u8_t *glyph;
         char character = ' ';
-        int cell_x = x + index * font->width;
+        int cell_x = x + index * cell_w;
 
         if (!ended) {
             if (text == NULL || (size_t)index >= length) {
@@ -155,18 +191,21 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
 
         /* A cell outside the width paints nothing; a cell partly inside is
          * clipped by the loop of the rows and the columns. */
-        if (cell_x + font->width <= 0 || cell_x >= canvas->width) {
+        if (cell_x + cell_w <= 0 || cell_x >= canvas->width) {
             continue;
         }
 
-        for (row = 0; row < font->height; row++) {
+        /* One pixel of the glyph is a square of `scale` pixels of the cell, so
+         * the block of a set bit is painted in one pass of the loop and the
+         * ink of a small glyph is not a dotted line of a big cell. */
+        for (row = 0; row < cell_h; row++) {
             int py = y + row;
 
             if (py < 0 || py >= canvas->height) {
                 continue;
             }
 
-            for (column = 0; column < font->width; column++) {
+            for (column = 0; column < cell_w; column++) {
                 int px = cell_x + column;
 
                 if (px < 0 || px >= canvas->width) {
@@ -174,7 +213,7 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
                 }
 
                 canvas->pixels[py * canvas->width + px] =
-                    (glyph[row] & (k_u8_t)(0x80u >> column)) != 0u ? ink : paper;
+                    (glyph[row / scale] & (k_u8_t)(0x80u >> (column / scale))) != 0u ? ink : paper;
             }
         }
     }
@@ -200,7 +239,7 @@ int ui_draw_frame(const struct ui_target *target, const struct ui_window *window
 
     if (!target_ready(target) || window == NULL || style == NULL || font == NULL ||
         window->rect.w <= 2 * UI_FRAME_MARGIN || window->rect.h < UI_FRAME_TITLE_HEIGHT(font) ||
-        font->width <= 0 || font->height <= 0) {
+        font->width <= 0 || font->height <= 0 || font->scale < 0) {
         return -1;
     }
 
@@ -256,10 +295,10 @@ int ui_draw_frame(const struct ui_target *target, const struct ui_window *window
     memcpy(title, window->title, length);
     title[length] = '\0';
 
-    ui_canvas_init(&canvas, window->rect.w, font->height, scratch);
+    ui_canvas_init(&canvas, window->rect.w, ui_font_cell_height(font), scratch);
     ui_canvas_fill(&canvas, style->title_paper);
 
-    rc = ui_canvas_text(&canvas, UI_FRAME_PAD, 0, title, window->rect.w / font->width,
+    rc = ui_canvas_text(&canvas, UI_FRAME_PAD, 0, title, window->rect.w / ui_font_cell_width(font),
                         style->title_ink, style->title_paper, font);
     if (rc < 0) {
         return rc;
@@ -268,7 +307,7 @@ int ui_draw_frame(const struct ui_target *target, const struct ui_window *window
     body.x = window->rect.x;
     body.y = window->rect.y + UI_FRAME_MARGIN;
     body.w = window->rect.w;
-    body.h = font->height;
+    body.h = ui_font_cell_height(font);
     rc = target->blit(target->context, &body, scratch);
     if (rc < 0) {
         return rc;
@@ -278,7 +317,7 @@ int ui_draw_frame(const struct ui_target *target, const struct ui_window *window
      * so the bar reads as a bar and the frame keeps the accent of the focus
      * for itself. */
     line.x = window->rect.x + 1;
-    line.y = window->rect.y + UI_FRAME_MARGIN + font->height;
+    line.y = window->rect.y + UI_FRAME_MARGIN + ui_font_cell_height(font);
     line.w = window->rect.w - 2;
     line.h = 1;
     rc = target->fill(target->context, &line, style->separator);

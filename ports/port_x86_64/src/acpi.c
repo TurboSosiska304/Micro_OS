@@ -76,8 +76,20 @@
 #define ACPI_DELAY_PORT 0x80u
 #define ACPI_DELAY_LOOPS 100000u
 
-/* The table of the machine and its length, read once: the FADT does not
- * change and the walk of the root pointer is a scan of the firmware area. */
+/*
+ * The table of the machine and its length, read once: the FADT does not
+ * change and the walk of the root pointer is a scan of the firmware area.
+ *
+ * The copy is the point. The walk of the firmware tables may hand a table of
+ * a machine of UEFI back through the window of the port (src/cpu.c), and the
+ * window is one page at a time: a pointer into it is true until the next
+ * table is looked at. The FADT is read at the boot and read again at the
+ * shutdown ("the port of S5" one line before the power goes off), so it is
+ * copied here and every reader below reads the copy.
+ */
+#define ACPI_FADT_MAX 512u
+
+static k_u8_t g_fadt_copy[ACPI_FADT_MAX];
 static const k_u8_t *g_fadt;
 static k_u32_t g_fadt_length;
 static bool g_fadt_read;
@@ -104,15 +116,19 @@ static const k_u8_t *fadt(void)
         k_u32_t length = 0;
         const void *table = port_x86_64_acpi_table("FACP", &length);
 
-        g_fadt = (const k_u8_t *)table;
-        g_fadt_length = length;
         g_fadt_read = true;
+        g_fadt = NULL;
 
-        if (g_fadt == NULL) {
+        if (table == NULL) {
             kinfo("acpi: the firmware has no FADT, the power of the machine is a fallback");
-        } else {
-            kinfo("acpi: the FADT of the machine is %u bytes", (unsigned)length);
+            return NULL;
         }
+
+        g_fadt_length = length > ACPI_FADT_MAX ? ACPI_FADT_MAX : length;
+        memcpy(g_fadt_copy, table, g_fadt_length);
+        g_fadt = g_fadt_copy;
+
+        kinfo("acpi: the FADT of the machine is %u bytes", (unsigned)length);
     }
 
     return g_fadt;
@@ -175,11 +191,27 @@ int port_x86_64_acpi_off(void)
     }
 
     pm1a = pm1_control_block(FADT_PM1A_CNT_BLK, FADT_X_PM1A_CNT_BLK);
-    if (pm1a == 0u) {
+
+    /*
+     * The block of PM1a of a PC is a port of the ACPI I/O space (0x400 and
+     * up, an even address of a word). A table that names something else - a
+     * firmware of a machine this port does not know, or a walk of a table
+     * that was never read - is not a reason to write 16 bits into the port of
+     * an interrupt controller: the machine stays on and the person is told.
+     */
+    if (pm1a < 0x400u || pm1a > 0xFFFCu || (pm1a & 1u) != 0u) {
+        kwarn("acpi: the control block of PM1a is not a port of this machine (0x%x)",
+              (unsigned)pm1a);
         return -1;
     }
 
     pm1b = pm1_control_block(FADT_PM1B_CNT_BLK, FADT_X_PM1B_CNT_BLK);
+
+    if (pm1b != 0u && (pm1b < 0x400u || pm1b > 0xFFFCu || (pm1b & 1u) != 0u)) {
+        kwarn("acpi: the control block of PM1b is not a port of this machine (0x%x)",
+              (unsigned)pm1b);
+        pm1b = 0u;
+    }
 
     kinfo("acpi: S5 on the port 0x%x", (unsigned)pm1a);
     if (pm1b != 0u) {

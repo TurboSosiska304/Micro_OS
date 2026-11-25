@@ -145,7 +145,7 @@ int task_limit_set(struct task *t, k_u32_t which, k_u64_t value)
 
     switch (which) {
     case KSYS_RLIMIT_MEMORY:
-        if (value > t->limit_memory || value > (k_u64_t)TASK_LIMIT_MEMORY_MAX) {
+        if (value > t->limit_memory || value > k_port_memory_limit()) {
             rc = KERR_PERM;
         } else {
             t->limit_memory = value;
@@ -203,7 +203,37 @@ k_u32_t task_get_uid(const struct task *t)
     }
 
     k_port_enter_critical();
+    uid = t->euid;
+    k_port_exit_critical();
+
+    return uid;
+}
+
+k_u32_t task_get_ruid(const struct task *t)
+{
+    k_u32_t uid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
     uid = t->uid;
+    k_port_exit_critical();
+
+    return uid;
+}
+
+k_u32_t task_get_suid(const struct task *t)
+{
+    k_u32_t uid;
+
+    if (t == NULL) {
+        return 0u;
+    }
+
+    k_port_enter_critical();
+    uid = t->suid;
     k_port_exit_critical();
 
     return uid;
@@ -232,6 +262,33 @@ void task_set_uid(struct task *t, k_u32_t uid)
 
     k_port_enter_critical();
     t->uid = uid;
+    t->euid = uid;
+    t->suid = uid;
+    k_port_exit_critical();
+}
+
+void task_set_euid(struct task *t, k_u32_t uid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->euid = uid;
+    t->suid = uid;
+    k_port_exit_critical();
+}
+
+void task_set_uids(struct task *t, k_u32_t uid, k_u32_t euid, k_u32_t suid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->uid = uid;
+    t->euid = euid;
+    t->suid = suid;
     k_port_exit_critical();
 }
 
@@ -255,6 +312,8 @@ void task_set_creds(struct task *t, k_u32_t uid, k_u32_t gid)
     k_port_enter_critical();
     t->gid = gid;
     t->uid = uid;
+    t->euid = uid;
+    t->suid = uid;
     k_port_exit_critical();
 }
 
@@ -304,6 +363,8 @@ const char *task_tty_name(k_u8_t tty)
 void task_creds_inherit(struct task *child, const struct task *parent)
 {
     k_u32_t uid;
+    k_u32_t euid;
+    k_u32_t suid;
     k_u32_t gid;
 
     if (child == NULL || parent == NULL) {
@@ -312,8 +373,12 @@ void task_creds_inherit(struct task *child, const struct task *parent)
 
     k_port_enter_critical();
     uid = parent->uid;
+    euid = parent->euid;
+    suid = parent->suid;
     gid = parent->gid;
     child->uid = uid;
+    child->euid = euid;
+    child->suid = suid;
     child->gid = gid;
     k_port_exit_critical();
 }
@@ -329,6 +394,11 @@ void task_limits_inherit(struct task *child, const struct task *parent)
     child->limit_cpu_ms = parent->limit_cpu_ms;
     child->limit_fds = parent->limit_fds;
     k_port_exit_critical();
+}
+
+k_u64_t task_memory_limit(void)
+{
+    return k_port_memory_limit();
 }
 
 bool task_memory_fits(const struct task *t, k_size_t size)
@@ -537,9 +607,11 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->stack_size = k_port_task_stack_size();
         t->parent = creator;
         t->uid = (creator != NULL) ? creator->uid : 0u;
+        t->euid = (creator != NULL) ? creator->euid : 0u;
+        t->suid = (creator != NULL) ? creator->suid : 0u;
         t->gid = (creator != NULL) ? creator->gid : 0u;
         t->mem_priority = KMM_PRIORITY_USER;
-        t->limit_memory = TASK_LIMIT_MEMORY_MAX;
+        t->limit_memory = k_port_memory_limit();
         t->limit_cpu_ms = TASK_LIMIT_CPU_MAX;
         t->limit_fds = TASK_LIMIT_FDS_MAX;
         t->cpu_stamp_ms = k_sched_uptime_ms();

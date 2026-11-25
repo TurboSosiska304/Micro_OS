@@ -192,9 +192,9 @@ add_libc_program(<command>
 and `microos_add_userland_program` compiles the runtime of
 `components/libc/user`, the file of the program and the archives for the
 window, and hands them to `tools/link_program.sh`, which links them with
-`-nostdlib -static -no-pie` and `programs/program.ld` at `0x02000000 + 32`,
+`-nostdlib -static -no-pie` and `programs/program.ld` at `0x10000000 + 32`,
 reads the address of the text back and links again if the linker moved it,
-and then runs `tools/mkprog.sh --base 0x02000000 --arch x86-64`. The resulting
+and then runs `tools/mkprog.sh --base 0x10000000 --arch x86-64`. The resulting
 `.mox` is a file of `/bin` in the image; the program
 is added to `tools/x86_image.py` (the `PROGRAMS` list) and to the checks of
 the smoke tests.
@@ -448,7 +448,7 @@ The limits are the ones of every image of the port and not of the SDK:
 | the bss | 1 MiB (`K_EXEC_BSS_MAX`) | the arena of `malloc` is a block of the bss |
 | the arena | 256 KiB (`make sdk SDK_HEAP=`) | the default of `src/malloc.c`; a bigger one is `share/build-libc.sh --heap` |
 | one read or write | 64 KiB (`KSYS_MAX_IO`) | the block of one system call |
-| the window | 16 MiB | `0x02000000`-`0x03000000`, with a 64 KiB stack at the top |
+| the window | 96 MiB | `0x10000000`-`0x16000000`, with a stack of 64 KiB and a room of 1 MiB for it at the top, and the heap and the mappings below the room (ADR 0052, ADR 0057) |
 
 A program that needs another arena, or no float path at all, rebuilds the
 archive from the sources the SDK carries and links that instead:

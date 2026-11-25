@@ -83,12 +83,24 @@ fi
 # would name a second SDK that is not there.
 sdk=$(cd "$sdk" && pwd)
 
+# The base of the window is the port's, and it is read here from the one place
+# that names it (PROGRAM_BASE of the port's CMake) and handed to the project:
+# a cache of the build directory from an older SDK must not link a program of
+# the release at a base the machine no longer maps (ADR 0057 moved it).
+window=$(sed -n 's/^set(PROGRAM_BASE \(0x[0-9a-fA-F]*\))$/\1/p' \
+    ports/port_x86_64/CMakeLists.txt | head -1)
+if [ -z "$window" ]; then
+    echo "$0: the port does not name its window (PROGRAM_BASE)" >&2
+    exit 1
+fi
+
 # A warning of a source of the release is not a failure of this gate: the
 # programs are somebody else's and answer the warnings of their release
 # (MICROOS_WARNINGS=OFF); the warnings of the library of the tree are an
 # error, because `make sdk` builds it with -Werror.
 cmake -B "$build/programs" -S tests/ports -G Ninja \
     -DCMAKE_TOOLCHAIN_FILE="$sdk/share/microos-toolchain.cmake" \
+    -DMICROOS_PROGRAM_BASE="$window" \
     -DMICROOS_WARNINGS=OFF
 if [ "$verbose" -eq 1 ]; then
     cmake --build "$build/programs" --verbose

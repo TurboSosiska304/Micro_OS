@@ -85,6 +85,13 @@ fsck: the volume is consistent
 `make smoke` drives the same simulator with a scripted list of commands and
 checks the transcript; it is the end-to-end test of the host build.
 
+## On a laptop, from a stick
+
+The page for a machine of your own is [install.md](install.md): one USB stick
+of 90 MB, a firmware of UEFI with Secure Boot off, and ten minutes from the
+`dd` to a file that survives the power. The short version of the two machines
+below is what the port is built of; the stick is what you carry.
+
 ## The other two machines
 
 The x86-64 port is the one that proves the kernel is portable, and the only
@@ -144,13 +151,13 @@ A short list, so that nothing here reads as a promise:
   and page tables; the board runs an Xtensa `.mox` without protection; the
   simulator and the null port answer `ENOSYS`, because jumping into an
   arbitrary image inside the test process is not a promise the host can keep.
-* **A uid and a gid, and a login that asks nothing of the wire.** A file has a
-  mode and an owner, the mode is checked against the uid of the task and root
-  passes it, a task inherits its credentials from the one that started it, and
-  `login`/`su`/`id` of ADR 0033 change them at the console (the board and the
-  simulator keep the account model in `/etc/passwd` and `/etc/shadow`). There
-  is no `setuid` and no `setgid`: a program cannot become another user, and no
-  filesystem stores a group.
+* **A uid, a gid and a login of the wire.** A file has a mode, an owner and a
+  group, the mode is checked against the effective uid and the gid of the task
+  and root passes it, a task inherits its credentials from the one that
+  started it, and `login`/`su`/`id`/`groups` change and name them
+  (the accounts are `/etc/passwd`, `/etc/shadow` and `/etc/group`, ADR 0033
+  and ADR 0044). An image may ask for the identity of the owner of its file
+  with the setuid flag of `MOX1` (ADR 0053); there is no setgid bit.
 * **No TLS, and the network is the LAN.** HTTP, MQTT and telnet are plain
   text; there is no HTTPS, no certificate store, no IPv6 and no raw sockets,
   and `httpd` and `telnet` take no password. Keep the machine on the network

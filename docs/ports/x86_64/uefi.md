@@ -10,12 +10,12 @@ laptop.
 | | |
 |---|---|
 | application | `ports/port_x86_64/loader/uefi/`, a PE/COFF image of the 64-bit machine, subsystem `EFI_APPLICATION`, about 16 KiB, no libc and no library |
-| command | `make uefi` (clang and lld-link), `make uefi-run` (a window), `make uefi-smoke` (26 checks) |
+| command | `make uefi` (clang and lld-link), `make uefi-run` (a window), `make uefi-smoke` (29 checks) |
 | volume | one FAT32 volume: `EFI/BOOT/BOOTX64.EFI`, `microos64.bin`, `disk.img` (`tools/uefi_esp.py`) |
 | kernel | the same `microos64.bin` as `make x86-build`: one kernel for the BIOS path and the firmware path |
 | screen | `EFI_GRAPHICS_OUTPUT_PROTOCOL`, the biggest mode within 8 MiB of frame; a shadow in RGB565 and a conversion of the cells that change (`src/gop.c`) |
-| disk | none: `disk.img` is read by the loader and mounted from the memory (`boot0p1`) |
-| keyboard | PS/2 (the port's own `src/ps2.c`), which a laptop of UEFI does not have |
+| disk | the ESP carries `disk.img` as the read-only root of a machine whose USB did not come up (`boot0p1`); the medium of a person is the stick of [ADR 0056](../../adr/0056-the-stick-of-a-person-is-a-disk.md), whose second partition is mounted `rw` as `usb0p2`; the disk of the machine is a volume of `ahci0p1` or `nvme0p1`, listed in `/etc/volumes` (ADR 0041, ADR 0042) |
+| keyboard | PS/2 (the port's own `src/ps2.c`, including the embedded controller of a laptop) and USB HID of the xHCI (`src/xhci.c`); the page of a person is [`docs/install.md`](../../install.md) |
 | serial | COM1, 115200 8N1, from the first line of the loader |
 
 ## What the loader does
@@ -122,15 +122,24 @@ parser finds `boot0p1` and the boot mounts it (`src/blockdev_module.c`, ADR
 
 Two consequences worth naming:
 
-* the volume of the boot is **read-only**: `touch`, `write` and `config set`
-  that keep a file fail with the error of the medium. The boot says so
-  (`settings: cannot write /etc/display`), and it is the honest state of a
-  machine with no driver for its disk;
-* there is no driver for the controller the volume is on (AHCI, NVMe, USB):
-  the firmware read the file and the kernel has no business with the disk. A
-  writable root is the next lane (§ "What is not done").
+* the volume of the boot is **read-only** while it is the module of the ESP:
+  `touch`, `write` and `config set` that keep a file fail with the error of the
+  medium, and the boot says so (`settings: cannot write /etc/display`). A
+  machine whose USB controller answered boots the second partition of the stick
+  instead (`usb0p2`, ADR 0056), and that root is written;
+* the module is the fallback, not the only disk: the port drives the SATA
+  controller (ADR 0041, `make ahci-smoke`), the NVMe controller (ADR 0042,
+  `make nvme-smoke`) and the stick of the Bulk-Only Transport (ADR 0040), and
+  `/etc/volumes` is what opens the writes of a volume the system made
+  (ADR 0041 §1).
 
 ## Writing the volume to a USB stick
+
+> The medium a person installs now is the **stick of two partitions**:
+> `make uefi-stick` writes `build-uefi/stick.img` and the second partition is
+> the writable root ([ADR 0056](../../adr/0056-the-stick-of-a-person-is-a-disk.md),
+> [`docs/install.md`](../../install.md)). The section below is the first
+> medium, the ESP alone, and it stays for a machine that only reads.
 
 The image `make uefi` writes is a FAT32 filesystem in a file
 (`build-uefi/esp.img`, 48 MB). Two ways to a stick:
@@ -192,50 +201,50 @@ and checks 26 things about that boot:
   and the part of the frame outside the grid of cells is the paper. The
   conversion of `src/gop.c` is read pixel by pixel, not assumed.
 
-The BIOS path stays green on the same kernel: `make x86-smoke` (378 checks and
+The BIOS path stays green on the same kernel: `make x86-smoke` (429 checks and
 `x86-disk-smoke`, `x86-root-smoke`, `x86-smp-smoke`, `make smoke`) boot
 `loader32.elf` with `-kernel` exactly as before, and the port chooses the VBE
 frame because the boot handed it no picture.
 
 ## What is not done: the live laptop
 
-**Nothing of this lane has run on a physical machine.** Every number of this
-page is QEMU with OVMF: the firmware of a laptop is another implementation of
-the same specification (Insyde, AMI, Phoenix, Apple), and the parts that a
-firmware does differently are exactly the ones that cost a day - the mode list
-it offers, the memory map it describes, the console it has, and whether it
-keeps its own memory below 4 GiB.
+**The numbers of this page are QEMU with OVMF.** The stick has booted on the
+laptop of the owner since 1.9.0, and the defects it found there are the list of
+`docs/releases/2.0.md`; a firmware of another make (Insyde, AMI, Phoenix,
+Apple) is another implementation of the same specification, and the parts that
+it does differently are exactly the ones that cost a day - the mode list it
+offers, the memory map it describes, the console it has, and whether it keeps
+its own memory below 4 GiB.
 
-This lane ends at "the machine boots a kernel it read out of a USB stick".
-What a laptop of a person still needs, in the order it is worth doing:
+This lane ends at a machine that boots from a stick and keeps a file on the
+second partition of it (`make uefi-stick-smoke`, 21 checks, ADR 0056). What is
+left of a laptop of a person, in the order it is worth doing:
 
-1. **A keyboard.** A laptop's built-in keyboard arrives through its embedded
-   controller as PS/2 on IRQ1, and that is the path that works: the keyboard
-   of the ThinkPad X1 of 1.8 speaks the scancode set 2 (its firmware leaves
-   the translation of the 8042 off), and the port asks which set it speaks at
-   the boot and translates all three (`kernel/input_scancode.c`,
-   `docs/ports/x86_64/README.md` "input"). What is still missing is the
-   **external** keyboard of a machine without the controller: xHCI (USB 3) and
-   a HID boot-protocol keyboard, which is one more device of `/dev/input0` and
-   not a rewrite of the interface.
-2. **A disk.** The root is a file of the ESP, read-only, and rewritten to the
-   memory at every boot: no file survives a reset. AHCI (SATA) first, because
-   the firmware of a laptop keeps the disk there, and NVMe after it; the
-   kernel already has the block device layer, the partition parser and
-   `ext2`/`MicroFS`, so what is missing is one driver per controller and a
-   writable root.
-3. **The clock and the shutdown.** The port has a software clock that only
-   NTP moves; a laptop's CMOS clock and an RTC of its own are not read, and
-   `poweroff` does not return the machine to the firmware (ACPI S5 through
-   the FADT of the ACPI tables the loader now hands over - the tables are
-   already there, and `src/cpu.c` already walks them for the MADT).
-4. **The interrupt controller of a real chipset.** The port is the 8259 and
-   the local APIC of QEMU; a chipset of 2017 is the I/O APIC with the
-   overrides of the MADT, which `src/ioapic.c` reads but the path of the
-   boot does not use yet.
-5. **The firmware's time and randomness.** No `GetTime`/`RNG` service is kept
-   past `ExitBootServices`; a machine of a person wants a real clock before
-   NTP answers, and a seed for the TLS of the network lane.
+1. **A pointer.** The keyboard is read on both of its paths: the built-in one
+   arrives through the embedded controller as PS/2 on IRQ1 (the ThinkPad X1 of
+   the owner speaks the scancode set 2, and the port asks which set it speaks
+   at the boot and translates all three, `kernel/input_scancode.c`), and the
+   external one is a HID boot-protocol keyboard on the xHCI (`make usb-smoke`,
+   66 checks, ADR 0040). The touchpad and the mouse of a laptop are not read
+   (`docs/install.md` §9).
+2. **A root that is the disk of the machine.** The port drives the SATA
+   controller (ADR 0041, `make ahci-smoke`, 33 checks) and the NVMe controller
+   (ADR 0042, `make nvme-smoke`, 35), and a volume is written when
+   `/etc/volumes` names it; what is not there is an installer: the system lives
+   on the stick it was written to, and no partition is added beside it
+   (`docs/install.md` §9, K12).
+3. **The clock and the shutdown.** The port reads the CMOS chip at the boot and
+   writes a moment back into it (`ntp`), and `shutdown`/`reboot` return the
+   machine to the firmware through ACPI S5 (ADR 0050, `make power-smoke`,
+   22 checks). There is no suspend and no lid switch.
+4. **The interrupts of the devices.** The I/O APIC carries the timer and the
+   keyboard, with the overrides of the MADT and the 8259 masked (`src/ioapic.c`),
+   but a device of the port cannot own a line of its own: there is no call that
+   installs a handler and no MSI/MSI-X, so the card and the disk poll
+   (`docs/debts.md`).
+5. **Wi-Fi.** The wire is the network of this release: the radio of a laptop is
+   a port of `iwm(4)` and `net80211`, fifteen to twenty thousand lines and its
+   own plan (`docs/plan-wifi.md`, ADR 0039).
 
 Other limits of this lane, honestly:
 
@@ -245,8 +254,8 @@ Other limits of this lane, honestly:
   keeps its memory above 4 GiB, or a machine whose ACPI tables are out of the
   map, is a case of a later lane (`docs/debts.md` is the place to write it
   down);
-* the volume of the boot is read-only and there is no `fork` of a file of it
-  that a person can keep;
+* the module of the ESP is read-only, so a machine whose USB did not come up
+  forgets a file at the power (the second partition of the stick does not);
 * the screen is a conversion of a shadow, not a 2D engine: a program of the
   UI draws at the speed of the conversion of the cells it touches, and a
   full repaint of 1920x1080 is a copy of 8 MB;

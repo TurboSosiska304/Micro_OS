@@ -34,10 +34,12 @@
 /* The two names of the files inside the directory of the configuration. */
 #define USERS_PASSWD_NAME "passwd"
 #define USERS_SHADOW_NAME "shadow"
+#define USERS_GROUP_NAME "group"
 
 /* The fields of a record of each file. */
 #define USERS_PASSWD_FIELDS 5u
 #define USERS_SHADOW_FIELDS 2u
+#define USERS_GROUP_FIELDS 3u
 
 /* The longest salt of a hash, and the length of a digest in hex digits. */
 #define USERS_SALT_MAX 16u
@@ -361,8 +363,100 @@ bool users_parse_shadow(const char *line, char *name, k_size_t name_size, char *
     return true;
 }
 
-/* --- the hash ------------------------------------------------------------ */
+/*
+ * A comma separated list of names: false when a member is not a name. An
+ * empty field is a group with no member of its own, and a trailing comma is
+ * an empty member, which is not a name.
+ */
+static bool members_are_valid(const struct field *field)
+{
+    k_size_t start = 0;
+    k_size_t at;
 
+    if (field->len == 0) {
+        return true;
+    }
+
+    for (at = 0; at <= field->len; at++) {
+        if (at < field->len && field->at[at] != ',') {
+            continue;
+        }
+
+        if (at == start) {
+            return false;
+        }
+
+        {
+            struct field member;
+
+            member.at = field->at + start;
+            member.len = at - start;
+
+            if (!name_is_valid(&member)) {
+                return false;
+            }
+        }
+
+        start = at + 1;
+    }
+
+    return true;
+}
+
+bool users_parse_group(const char *line, struct user_group *out)
+{
+    struct field record;
+    struct field fields[USERS_GROUP_FIELDS];
+    k_size_t found = 0;
+    struct user_group group;
+
+    if (line == NULL || out == NULL) {
+        return false;
+    }
+
+    record.at = line;
+    record.len = strlen(line);
+
+    while (record.len > 0 &&
+           (record.at[record.len - 1] == '\r' || record.at[record.len - 1] == '\n')) {
+        record.len--;
+    }
+
+    if (line_is_noise(&record)) {
+        return false;
+    }
+
+    if (!split_fields(&record, fields, USERS_GROUP_FIELDS, &found)) {
+        return false;
+    }
+    if (found != USERS_GROUP_FIELDS) {
+        return false;
+    }
+
+    memset(&group, 0, sizeof(group));
+
+    if (!name_is_valid(&fields[0])) {
+        return false;
+    }
+    if (!field_text(&fields[0], group.name, sizeof(group.name))) {
+        return false;
+    }
+    if (!field_number(&fields[1], &group.gid)) {
+        return false;
+    }
+    if (!members_are_valid(&fields[2])) {
+        return false;
+    }
+    if (!field_text(&fields[2], group.members, sizeof(group.members))) {
+        return false;
+    }
+
+    *out = group;
+
+    return true;
+}
+
+/* --- the hash ------------------------------------------------------------ */
 /* The digest of the salt and the password, in the sixty-four digits of the
  * file. `out` is not terminated. */
 static void digest_hex(const char *salt, const char *password, char out[USERS_DIGEST_HEX])
@@ -519,6 +613,60 @@ int users_find_uid(k_u32_t uid, struct user_account *out)
     }
 
     return find_passwd(NULL, uid, true, out);
+}
+
+/* The record of the line of /etc/group that matches, by name or by gid. */
+static int find_group(const char *name, k_u32_t gid, bool by_gid, struct user_group *out)
+{
+    char text[USERS_FILE_MAX];
+    char record[USERS_LINE_MAX];
+    const char *at;
+    struct field line;
+    int rc;
+
+    rc = read_file(USERS_GROUP_PATH, text, sizeof(text));
+    if (rc != 0) {
+        return rc;
+    }
+
+    at = text;
+
+    while (next_line(&at, &line)) {
+        struct user_group group;
+
+        if (line_is_noise(&line)) {
+            continue;
+        }
+
+        if (!line_text(&line, record, sizeof(record)) || !users_parse_group(record, &group)) {
+            return USERS_EFORMAT;
+        }
+
+        if (by_gid ? (group.gid == gid) : (strcmp(group.name, name) == 0)) {
+            *out = group;
+            return USERS_OK;
+        }
+    }
+
+    return USERS_ENOENT;
+}
+
+int users_find_group(const char *name, struct user_group *out)
+{
+    if (name == NULL || out == NULL) {
+        return USERS_ENOENT;
+    }
+
+    return find_group(name, 0, false, out);
+}
+
+int users_find_gid(k_u32_t gid, struct user_group *out)
+{
+    if (out == NULL) {
+        return USERS_ENOENT;
+    }
+
+    return find_group(NULL, gid, true, out);
 }
 
 int users_find_hash(const char *name, char *hash, k_size_t size)
@@ -740,6 +888,16 @@ int users_defaults(const char *dir)
             }
         }
     }
+
+    if (!join_path(dir, USERS_GROUP_NAME, path, sizeof(path))) {
+        return USERS_EIO;
+    }
+
+    rc = write_default(path, USERS_DEFAULT_GROUP, 0644u);
+    if (rc < 0) {
+        return USERS_EIO;
+    }
+    written += rc;
 
     if (!join_path(dir, USERS_SHADOW_NAME, path, sizeof(path))) {
         return USERS_EIO;

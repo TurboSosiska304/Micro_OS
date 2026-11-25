@@ -76,9 +76,9 @@ const char *port_x86_64_root_device(void);
 #define PORT_IDLE_MS 1000u
 
 static const struct kernel_board g_board = {
-    .name = "qemu_x86_64",
-    .desc = "QEMU x86-64 machine",
-    .soc = "QEMU virtio",
+    .name = "x86_64",
+    .desc = "the x86-64 machine of this port",
+    .soc = "x86-64 with a 8259 or an I/O APIC",
     .flash_mb = 0,
     .psram_kb = 0,
     .lcd = "none (the console is COM1)",
@@ -487,6 +487,25 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
         kinfo("x86-64: the map is W^X, the text is read-only and the data is NX");
     } else {
         kerror("x86-64: the map is not W^X, a page is writable and executable");
+    }
+
+    /*
+     * The two bits of CR4 that keep the kernel out of the memory of a program
+     * (ADR 0052). SMEP refuses a fetch of a page of ring 3 from ring 0 and
+     * SMAP a read or a write of one; both are turned on when the processor
+     * advertises them and named here either way, because a machine that has
+     * neither is protected by the supervisor bit of every kernel page and
+     * that is the line a person reads when an attack does not work.
+     */
+    if (port_x86_64_smep_on() && port_x86_64_smap_on()) {
+        kinfo("x86-64: SMEP and SMAP are on, the kernel cannot run or read a page of a program");
+    } else if (port_x86_64_smep_on()) {
+        kinfo("x86-64: SMEP is on, SMAP is not on this processor");
+    } else if (port_x86_64_smap_on()) {
+        kinfo("x86-64: SMAP is on, SMEP is not on this processor");
+    } else {
+        kinfo("x86-64: this processor has no SMEP or SMAP, the supervisor bit of every kernel "
+              "page is the boundary");
     }
 
     /*

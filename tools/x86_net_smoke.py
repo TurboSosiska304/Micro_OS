@@ -72,8 +72,29 @@ PROMPT = "microos> "
 
 # What the kernel has to say before the shell exists, and the one line that
 # proves the driver found the card.
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "ports/port_x86_64/src/kmain.c",
+        )
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 EXPECTED = [
-    "board: qemu_x86_64",
+    board_line(),
     "virtio0:",
     "link up",
     "net: 10.0.2.15/24, gateway 10.0.2.2, dns 10.0.2.3",
@@ -740,7 +761,8 @@ class Telnet:
 
 
 def run_machine(loader: str, kernel: str, steps: list, forwards: list, timeout: float,
-                image: str | None = None) -> str:
+                image: str | None = None, device: str | None = None,
+                netdev: str | None = None) -> str:
     """Boot the machine, run the steps and return the transcript.
 
     A step is ("cmd", text) - a line for the shell - or ("host", callable) -
@@ -771,19 +793,26 @@ def run_machine(loader: str, kernel: str, steps: list, forwards: list, timeout: 
         # A raw volume on the primary channel of the IDE controller, the
         # cache of the host as in tools/x86_disk_smoke.py.
         command += ["-drive", f"file={image},format=raw,if=ide,index=0,cache=writeback"]
-    command += [
-        "-netdev",
+    # The wire of the machine, and the card on it. The default is the user
+    # network of QEMU under the legacy virtio card of K6; the wire of the
+    # laptop (ADR 0055) is `-device e1000e`, and a machine of no server is the
+    # socket transport of QEMU with a sink this file binds and never answers.
+    if netdev is None:
         # The ports of the host that reach the doors of the guest: the page
         # of the state, the server of the files of the volume and its TLS
         # door. A person or a monitor of the host, as in a real machine.
-        "user,id=n0,"
-        + ",".join(f"hostfwd=tcp:127.0.0.1:{host}-:{guest}" for host, guest in forwards),
+        netdev = "user,id=n0"
+        if forwards:
+            netdev += "," + ",".join(
+                f"hostfwd=tcp:127.0.0.1:{host}-:{guest}" for host, guest in forwards
+            )
+    if device is None:
         # The legacy interface of virtio: the driver programs the I/O BAR and
         # the split virtqueue, and a modern-only device would leave it with no
         # registers to write.
-        "-device",
-        "virtio-net-pci,netdev=n0,disable-modern=on",
-    ]
+        device = "virtio-net-pci,netdev=n0,disable-modern=on"
+
+    command += ["-netdev", netdev, "-device", device]
 
     process = subprocess.Popen(
         command,
@@ -887,6 +916,27 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
     expect("netinfo knows the device", "netinfo: virtio0" in info)
     expect("netinfo prints the address of the guest", "ip 10.0.2.15/24" in info)
     expect("netinfo prints the gateway and the resolver", "gateway 10.0.2.2" in info)
+
+    # --- the address nobody typed: the client of DHCP (net/dhcp.h).
+    #
+    # QEMU's user network runs a DHCP server whose answer is the address the
+    # machine of K6 had written in its constants: 10.0.2.15, the gateway
+    # 10.0.2.2 and the resolver 10.0.2.3. The proof is the line of the boot,
+    # which names the server and the life of the lease, and the file of the
+    # machine, which keeps it.
+    lease = answers.get("network-file", "")
+    expect(
+        "dhcp: the DISCOVER and the REQUEST were answered",
+        re.search(r"dhcp: leased 10\.0\.2\.15 for \d+ s from 10\.0\.2\.2", output) is not None,
+        output[output.find("dhcp:"):][:120],
+    )
+    expect("dhcp: netinfo reports the lease and its rest", "dhcp: leased for" in info
+           and " s left" in info, info)
+    expect("dhcp: the lease names its server", "server 10.0.2.2" in info, info)
+    expect("dhcp: T1 and T2 are in the report", "t1 " in info and "t2 " in info, info)
+    expect("dhcp: the lease is in /etc/network", "address 10.0.2.15" in lease, lease)
+    expect("dhcp: the file says where the address came from", "source dhcp" in lease, lease)
+    expect("dhcp: the file names the server of the lease", "server 10.0.2.2" in lease, lease)
 
     # --- ARP and ICMP
     ping = answers.get("ping", "")
@@ -1340,6 +1390,101 @@ def check(output: str, answers: dict, host: dict, dns_name: str | None, commands
     return checks, notes
 
 
+# The shell of a machine that is not the one of the whole test: the steps, the
+# answers block by block, and the checks of the story the machine tells.
+def run_steps(loader: str, kernel: str, steps: list, device: str, netdev: str,
+              timeout: float) -> tuple:
+    qemu_steps = [("cmd", text) for _, text in steps]
+    output = run_machine(loader, kernel, qemu_steps, [], timeout, device=device, netdev=netdev)
+    blocks = output.split(PROMPT)[1:]
+    answers = {}
+
+    for index, (label, _) in enumerate(steps):
+        if index < len(blocks):
+            answers[label] = blocks[index]
+
+    return output, answers
+
+
+def check_wire(output: str, answers: dict, body: str) -> list:
+    """The wire of the laptop: e1000e, DHCP, the gateway and a file of the host.
+
+    The same machine as the test above, with `-device e1000e` instead of the
+    card of virtio (ADR 0055). What it proves beyond the run of the main
+    machine is that the driver of the laptop's card carries the whole stack:
+    the exchange of DHCP, a ping and a file read through the card of Intel.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    info = answers.get("netinfo", "")
+    network = answers.get("network-file", "")
+
+    expect(
+        "e1000e: the card of the laptop is found",
+        re.search(r"e1000e0: 52:54:00:[0-9a-f]{2}:[0-9a-f]{2}:[0-9a-f]{2}, link up", output)
+        is not None,
+        output[output.find("e1000e0:"):][:80],
+    )
+    expect("e1000e: netinfo names the device", "netinfo: e1000e0" in info, info)
+    expect("e1000e: the link of the card is up", "link up" in info, info)
+    expect("e1000e: the address was taken over the card", "ip 10.0.2.15/24" in info, info)
+    expect(
+        "e1000e: the lease came from the server of user-net",
+        re.search(r"dhcp: leased 10\.0\.2\.15 for \d+ s from 10\.0\.2\.2", output)
+        is not None,
+        output[output.find("dhcp:"):][:120],
+    )
+    expect("e1000e: the gateway answers the ping", "ping: 40 bytes from 10.0.2.2"
+           in answers.get("ping", ""), answers.get("ping", "").strip())
+    expect("e1000e: wget reads a file of the host", "wget: HTTP 200"
+           in answers.get("wget", ""), answers.get("wget", "").strip())
+    expect("e1000e: the bytes of the file are the bytes of the host",
+           body in answers.get("read", ""), answers.get("read", "").strip()[:80])
+    expect("e1000e: the lease is in /etc/network", "address 10.0.2.15" in network, network)
+    expect("e1000e: the file says the source is dhcp", "source dhcp" in network, network)
+    expect("e1000e: the counters of the card moved",
+           re.search(r"\d+ frame\(s\) in, [1-9]\d* out", info) is not None, info.strip())
+
+    return checks
+
+
+def check_fallback(output: str, answers: dict) -> list:
+    """A network without a DHCP server: the fixed address of 1.8 and a line.
+
+    The card is there and the link is up, and the wire goes to a socket of
+    this process that never answers (the `socket` transport of QEMU). The
+    client must give up in its budget, keep the address of the release and
+    say in one line that nobody answered.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((name, bool(condition), detail))
+
+    info = answers.get("netinfo", "")
+    network = answers.get("network-file", "")
+
+    expect(
+        "no server: the client gives up in its budget and says so",
+        re.search(r"dhcp: no answer from a server in \d+ ms", output) is not None,
+        output[output.find("dhcp:"):][:120],
+    )
+    expect("no server: netinfo reports the fallback",
+           "dhcp: no server, the fixed address of 1.8" in info, info)
+    expect("no server: the address is the fixed address of 1.8", "ip 10.0.2.15/24" in info, info)
+    expect("no server: the gateway is the one of 1.8", "gateway 10.0.2.2" in info, info)
+    expect("no server: /etc/network keeps the address", "address 10.0.2.15" in network, network)
+    expect("no server: the file says the address is fixed", "source fixed" in network, network)
+    expect("no server: the client asks again at the next boot", "dhcp 1" in network, network)
+    expect("no server: the machine still answers the shell",
+           "MicroOS shell ready" in output, output[-200:])
+
+    return checks
+
+
 def resolvable_name() -> str | None:
     """The name the guest will ask for, when this host can resolve it too.
 
@@ -1684,6 +1829,7 @@ def main(argv: list) -> int:
         labels.append(None)
 
     command("netinfo", "netinfo")
+    command("cat /etc/network", "network-file")
     command("ping 10.0.2.2", "ping")
     command(f"netudp 10.0.2.2 {udp.port} hello", "udp")
     command(f"http get http://10.0.2.2:{http.port}/", "http")
@@ -1808,12 +1954,39 @@ def main(argv: list) -> int:
     action(telnet_refused)
     action(telnet_unknown)
 
+    # The two short machines of the wire of the laptop (ADR 0055) come before
+    # the servers of this process are closed: the file of the host that they
+    # read is served by the same `http` of the main machine.
+    wire_steps = [
+        ("netinfo", "netinfo"),
+        ("ping", "ping 10.0.2.2"),
+        ("wget", f"wget http://10.0.2.2:{http.port}/ /wire.txt"),
+        ("read", "cat /wire.txt"),
+        ("network-file", "cat /etc/network"),
+    ]
+    fallback_steps = [("netinfo", "netinfo"), ("network-file", "cat /etc/network")]
+    wire_output, wire_answers = "", {}
+    fallback_output, fallback_answers = "", {}
+
+    # A wire with nothing on the other end: QEMU's socket transport sends the
+    # frames to a UDP port that this process holds and never answers.
+    sink = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sink.bind(("127.0.0.1", 0))
+    sink_port = sink.getsockname()[1]
+
     try:
         output = run_machine(loader, kernel, steps, forwards, args.timeout, image=disk)
+        wire_output, wire_answers = run_steps(loader, kernel, wire_steps, "e1000e,netdev=n0",
+                                              "user,id=n0", args.timeout)
+        fallback_output, fallback_answers = run_steps(
+            loader, kernel, fallback_steps, "e1000e,netdev=n0",
+            f"socket,id=n0,udp=127.0.0.1:{sink_port},localaddr=127.0.0.1:0", 60.0,
+        )
     except FileNotFoundError:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
     finally:
+        sink.close()
         udp.close()
         http.close()
         for server in tls_servers:
@@ -1846,6 +2019,34 @@ def main(argv: list) -> int:
     if disk is None:
         notes.append("the store of the release is not asked: build-host/tools/microos_mkfs is "
                      "missing (run `make build`)")
+
+    # --- the wire of the laptop and a network without a server (ADR 0055)
+    #
+    # Two short machines of the same image: the card of Intel on the user
+    # network, and the card of Intel on a wire that goes to a socket of this
+    # process and stops. The first proves that the driver of the laptop
+    # carries DHCP, the gateway and a file of the host; the second proves the
+    # fallback and the line a person reads when nobody answers.
+    if args.verbose:
+        print("--- the machine of e1000e ---")
+        print(wire_output)
+        print("--- the machine without a server ---")
+        print(fallback_output)
+
+    checks += check_wire(wire_output, wire_answers, BODY)
+    checks += check_fallback(fallback_output, fallback_answers)
+
+    # The address of the commands of the run and the address of the lease are
+    # the same network: the server of QEMU user-net is the host of the files,
+    # so a `wget` of the run reached the gateway the client of DHCP was given.
+    lease_line = re.search(r"dhcp: leased (\d+\.\d+\.\d+\.\d+) for \d+ s from "
+                           r"(\d+\.\d+\.\d+\.\d+)", output)
+    checks.append((
+        "dhcp: the host of the run is the server of the lease",
+        lease_line is not None and lease_line.group(2) == "10.0.2.2"
+        and f"http://10.0.2.2:{http.port}/" in output,
+        lease_line.group(0) if lease_line is not None else "no lease line",
+    ))
     failed = [item for item in checks if not item[1]]
 
     print("Micro OS — the network smoke test of the x86-64 port")

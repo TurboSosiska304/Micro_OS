@@ -13,6 +13,7 @@
  */
 #include "kernel/port.h"
 #include "kernel/port_task.h"
+#include "kernel/task.h"
 
 /* --- console --- */
 
@@ -145,6 +146,11 @@ k_size_t k_port_heap_free(void)
     return 0;
 }
 
+k_u64_t k_port_memory_limit(void)
+{
+    return (k_u64_t)TASK_LIMIT_MEMORY_MAX;
+}
+
 k_size_t k_port_heap_total(void)
 {
     return 0;
@@ -242,7 +248,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 13u
+#define PORT_API_MINOR 15u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");

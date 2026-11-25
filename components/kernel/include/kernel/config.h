@@ -13,13 +13,13 @@
 #define KERNEL_NAME "MicroOS"
 #endif
 
-#define KERNEL_VERSION_MAJOR 1
-#define KERNEL_VERSION_MINOR 9
+#define KERNEL_VERSION_MAJOR 2
+#define KERNEL_VERSION_MINOR 0
 #define KERNEL_VERSION_PATCH 0
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
  * the tag is vX.Y.Z or vX.Y.Z-suffix, and the integrity check of a release
- * compares the three numbers with the tag. */
+ * compares the three numbers with the tag. 2.0.0 has dropped it. */
 #define KERNEL_VERSION_SUFFIX ""
 
 /* Size of the in-kernel log ring buffer (number of retained messages). */

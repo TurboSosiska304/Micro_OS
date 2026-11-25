@@ -310,6 +310,39 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
  */
 void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip);
 
+/*
+ * The stack of the program that runs grew (ADR 0052): `address` is the page
+ * the program touched, it lies in the room under the stack, and every page
+ * from it up to the lowest page the stack owns becomes a writable, NX page of
+ * the task. The answer is true when the instruction that faulted may be run
+ * again: false when the address is not in the room, when the stack has
+ * reached the limit of the task (KSYS_RLIMIT_MEMORY, `ulimit -m`), or when
+ * the machine has no frame to give - and the caller then treats the fault as
+ * the end of the program (EFAULT with the address in the log).
+ *
+ * A fetch does not grow a stack: an instruction that jumps under the stack
+ * pointer is a fault of the program and not a frame of a call.
+ */
+bool port_x86_64_stack_grow(k_u64_t address);
+
+/*
+ * The window around a copy the kernel makes through a pointer of a program.
+ * A processor with SMAP (CR4 bit 21, ADR 0052) refuses a supervisor read or
+ * write of a page of ring 3 unless AC in RFLAGS is set; the portable kernel
+ * opens the window around its copy and closes it after. A machine without
+ * SMAP - the board, the host, the null port, and an x86-64 without the bit -
+ * does nothing.
+ */
+void port_x86_64_user_access_begin(void);
+void port_x86_64_user_access_end(void);
+
+/* Does this processor have the two bits of SMEP and SMAP, and are they on?
+ * The boot prints the answer, and the attack suite of `make mmu-smoke` reads
+ * the line: a machine without them keeps the supervisor bit of every kernel
+ * page as the boundary, which is the one that matters for ring 3. */
+bool port_x86_64_smep_on(void);
+bool port_x86_64_smap_on(void);
+
 /* --- the descriptors, the page tables and the thread pointer -------------- */
 
 /*
@@ -373,10 +406,12 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
  * handle is its physical address, which is also the value that goes into CR3.
  * Create builds the kernel map with the user window; clone copies the tables
  * of a parent and turns the pages of the window into copy-on-write pages of
- * both; destroy gives the tables and the frames back. Zero means failure.
+ * both, and answers in `out_shared` the number of frames the two spaces now
+ * share (ADR 0057); destroy gives the tables and the frames back. Zero means
+ * failure.
  */
 k_u64_t port_x86_64_paging_space_create(void);
-k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3);
+k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3, k_u32_t *out_shared);
 void port_x86_64_paging_space_destroy(k_u64_t cr3);
 
 /*
@@ -402,6 +437,21 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
 
 /* The physical address behind a virtual address of the window of programs. */
 void *port_x86_64_paging_phys(k_u64_t cr3, k_u64_t vaddr);
+
+/*
+ * True when the address is in the kernel's half of the map and the table of
+ * its page is there. The top 2 GiB are shared by every space of the port, so
+ * the answer is one entry: a driver that polls a window of a device asks this
+ * before it reads a register (src/e1000e.c).
+ */
+bool port_x86_64_paging_kernel_present(k_u64_t vaddr);
+
+/*
+ * True once the tables of the loader are the tables of the port. Before that
+ * the map of the machine is the one the loader made and it names the whole
+ * memory - the ACPI tables of a laptop included (src/cpu.c).
+ */
+bool port_x86_64_paging_ready(void);
 
 /*
  * The pages of a program that the kernel makes on demand (kernel/port/mm.h):
@@ -774,9 +824,22 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
  * The arena is outside the heap (which stops at 32 MiB) and inside the
  * identity map of the kernel, which is how the kernel writes an image the
  * program will read.
+ *
+ * 2.0 makes the window 96 MiB: a program of 64 MiB is the one the fork of
+ * `make fork-smoke` copies on write (ADR 0057), and the image, the heap, the
+ * mappings and the room of the stack have to fit beside it. The arena below
+ * it is the same size, and it sits at 64 MiB where the kernel heap (which
+ * stops at 32 MiB) never reaches; a machine needs 160 MiB of RAM for the
+ * window to be whole, and the boot says so when the memory map of the machine
+ * does not have it.
+ *
+ * The window is also a hole in the identity map of every program's space: the
+ * kernel reaches physical 256 MiB - 352 MiB only through the tables of the
+ * kernel, so a module of the boot (the root image of an ISO) may not live
+ * there, and src/blockdev_module.c refuses one that does.
  */
-#define PORT_X86_64_USER_BASE 0x02000000u  /* 32 MiB */
-#define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
+#define PORT_X86_64_USER_BASE 0x10000000u  /* 256 MiB */
+#define PORT_X86_64_USER_LIMIT 0x16000000u /* 352 MiB */
 #define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
 
 /* The bytes of the arena: the window, which is the same size, is mapped onto
@@ -792,16 +855,30 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
 #define PORT_X86_64_IDENTITY_LIMIT 0x40000000ull
 
 /*
- * The top of the window, from the last page down: the stack of the program is
- * 64 KiB, the page below it is not mapped (the guard of an overflow), and the
- * page below that holds the restorer of a signal handler. Everything below
- * the restorer belongs to the heap and to `mmap` (kernel/mm.h), and the
- * kernel may not place a mapping above it.
+ * The top of the window, from the last page down. The stack of a program
+ * starts as 64 KiB at the top and grows downwards on demand into the room
+ * below it (ADR 0052): the page under the lowest stack page of the moment is
+ * the point the fault handler grows, and the room ends on a page that is
+ * never mapped - the guard of an overflow. Below the guard is the page of the
+ * restorer of a signal handler, and everything below the restorer belongs to
+ * the image, the heap and `mmap` (kernel/mm.h): the kernel may not place a
+ * mapping above it.
+ *
+ *   USER_LIMIT                 the top of the window
+ *   stack                      STACK_SIZE bytes, the first mapping
+ *   ...                        the room, made page by page on the fault
+ *   STACK_FLOOR_OFFSET         the lowest page a grown stack may own
+ *   GUARD_OFFSET               one page, never mapped: the guard
+ *   RESTORER_OFFSET            one page, code of ring 3
+ *   USER_TOP                   the ceiling of the heap and of `mmap`
  */
 #define PORT_X86_64_USER_STACK_SIZE (64u * 1024u)
 #define PORT_X86_64_USER_STACK_OFFSET                                                              \
     ((PORT_X86_64_USER_LIMIT - PORT_X86_64_USER_BASE) - PORT_X86_64_USER_STACK_SIZE)
-#define PORT_X86_64_USER_GUARD_OFFSET (PORT_X86_64_USER_STACK_OFFSET - 4096u)
+#define PORT_X86_64_USER_STACK_ROOM (1024u * 1024u)
+#define PORT_X86_64_USER_STACK_FLOOR_OFFSET                                                        \
+    (PORT_X86_64_USER_STACK_OFFSET - PORT_X86_64_USER_STACK_ROOM)
+#define PORT_X86_64_USER_GUARD_OFFSET (PORT_X86_64_USER_STACK_FLOOR_OFFSET - 4096u)
 #define PORT_X86_64_USER_RESTORER_OFFSET (PORT_X86_64_USER_GUARD_OFFSET - 4096u)
 #define PORT_X86_64_USER_TOP (PORT_X86_64_USER_BASE + PORT_X86_64_USER_RESTORER_OFFSET)
 

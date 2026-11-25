@@ -110,7 +110,7 @@ written when the project was an operating system for one board; the numbers
 
 * [x] Page tables per program on x86-64: the kernel identity map is
       supervisor-only, the window at 32 MiB is user pages over a physical
-      arena at 64 MiB, the null page is not mapped and the stack has a guard
+      arena at 64 MiB (96 MiB at 256 MiB since 2.0, ADR 0057), the null page is not mapped and the stack has a guard
       page (ADR 0007)
 * [x] Ring 3: a GDT with user code and data, a TSS with `RSP0` and `IST1`, an
       `int $0x80` gate with `DPL 3` and an `iretq` entry; the program prints
@@ -145,7 +145,20 @@ written when the project was an operating system for one board; the numbers
 * [x] SMAP/SMEP: a decision, not a feature of 1.0 - the default QEMU
       processor does not advertise either, and SMAP needs `STAC`/`CLAC` in
       the portable copy edge. The reasons are in ADR 0007 section 10 and the
-      debt in `docs/debts.md`
+      debt in `docs/debts.md`. Closed in 2.0 (ADR 0052): the port probes
+      CPUID leaf 7, turns on the bits the processor has and says which case
+      the boot is, and the portable kernel opens the window of
+      `k_port_exec_user_access_begin/end` (contract 1.14) around every copy
+      through a pointer of a program. `make mmu-smoke` runs on
+      `-cpu qemu64,+smep,+smap`
+* [x] The policy of a page (2.0, ADR 0052): `mmap(PROT_WRITE | PROT_EXEC)` is
+      `EINVAL` at the edge and not only an audit of the image, the stack of a
+      program grows into a room of 1 MiB page by page on the fault with the
+      memory limit of the task as its ceiling, an anonymous mapping is
+      counted against the same limit as the heap, the kernel is
+      supervisor-only in every space (a case with error `0x7`, not `0x6`),
+      and a bad access is `EFAULT` with the address in the log. The gate is
+      `make mmu-smoke`
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by
@@ -161,6 +174,15 @@ written when the project was an operating system for one board; the numbers
       supervisor-only. The W^X audit walks both halves and `make x86-smoke`
       checks the link address against the ELF (ADR 0007, "The higher half:
       taken")
+* [x] The copy of a process (2.0, ADR 0057): the window of the programs is
+      96 MiB at 256 MiB over a 96 MiB arena, the ceiling of the memory of a
+      task is the port's (`k_port_memory_limit()`, contract 1.15), a fork
+      copies the tables of the parent and shares its frames - one critical
+      section, one CR3 flush, no byte of a page copied - and the child's files
+      are names that the first fault opens. A program of 64 MiB forks in
+      about half a millisecond; the gate is `make fork-smoke` and the counts
+      are the port's lines. What is left is the 2 MiB page of the window (a
+      32-entry walk) and the shared open file description of POSIX.
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
       (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
       and the work is not started)

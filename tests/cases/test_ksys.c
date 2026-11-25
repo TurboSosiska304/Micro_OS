@@ -315,7 +315,7 @@ static void test_abi_is_stable(void)
         {KSYS_MMAP, "mmap"},           {KSYS_MUNMAP, "munmap"},
         {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
         {KSYS_CHDIR, "chdir"},         {KSYS_CLOCK_GETTIME, "clock_gettime"},
-        {KSYS_GETRUSAGE, "getrusage"},
+        {KSYS_GETRUSAGE, "getrusage"}, {KSYS_CHGRP, "chgrp"},
     };
     size_t i;
 
@@ -411,7 +411,7 @@ struct abi_object {
 static const struct abi_field g_vfs_stat_fields[] = {
     {"inode", offsetof(struct vfs_stat, inode)}, {"type", offsetof(struct vfs_stat, type)},
     {"size", offsetof(struct vfs_stat, size)},   {"mode", offsetof(struct vfs_stat, mode)},
-    {"owner", offsetof(struct vfs_stat, owner)},
+    {"owner", offsetof(struct vfs_stat, owner)}, {"group", offsetof(struct vfs_stat, group)},
 };
 
 static const struct abi_field g_vfs_statx_fields[] = {
@@ -432,6 +432,7 @@ static const struct abi_field g_k_exec_image_fields[] = {
     {"data", offsetof(struct k_exec_image, data)},
     {"size", offsetof(struct k_exec_image, size)},
     {"arch", offsetof(struct k_exec_image, arch)},
+    {"setuid", offsetof(struct k_exec_image, setuid)},
     {"entry", offsetof(struct k_exec_image, entry)},
     {"text_size", offsetof(struct k_exec_image, text_size)},
     {"data_size", offsetof(struct k_exec_image, data_size)},
@@ -2557,7 +2558,7 @@ static void limits_defaults_task(void *arg)
     g_limit_rc[4] = ksys_getlimit(KSYS_RLIMIT_FDS + 1, &g_limit_value[0]);
     g_limit_rc[5] = ksys_getlimit(KSYS_RLIMIT_FDS, NULL);
     g_limit_rc[6] = ksys_setlimit(0, 0);
-    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)KSYS_RLIMIT_MEMORY_MAX + 1u);
+    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)task_memory_limit() + 1u);
 }
 
 static void test_limits_defaults(void)
@@ -2577,7 +2578,7 @@ static void test_limits_defaults(void)
         KT_CHECK_INT_EQ(g_limit_rc[0], 0);
         KT_CHECK_INT_EQ(g_limit_rc[1], 0);
         KT_CHECK_INT_EQ(g_limit_rc[2], 0);
-        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)task_memory_limit());
         KT_CHECK_INT_EQ((int)g_limit_value[1], (int)KSYS_RLIMIT_CPU_MAX);
         KT_CHECK_INT_EQ((int)g_limit_value[2], (int)KSYS_RLIMIT_FDS_MAX);
         KT_CHECK_INT_EQ((int)g_limit_value[3], 0);

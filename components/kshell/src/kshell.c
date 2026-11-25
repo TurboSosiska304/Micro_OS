@@ -610,8 +610,14 @@ static int cmd_uname(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    kshell_printf("%s %s %s (%s)\n", kernel_name(), kernel_version(), k_sysinfo_arch(),
-                  kernel_build_id());
+    /* A reproducible build has no date: the parenthesis is a stamp and not a
+     * fact about the machine (kernel/version.c). */
+    if (kernel_build_id()[0] != '\0') {
+        kshell_printf("%s %s %s (%s)\n", kernel_name(), kernel_version(), k_sysinfo_arch(),
+                      kernel_build_id());
+    } else {
+        kshell_printf("%s %s %s\n", kernel_name(), kernel_version(), k_sysinfo_arch());
+    }
 
     return KSHELL_OK;
 }
@@ -1220,6 +1226,7 @@ int kshell_init(void)
     rc |= kshell_register_memtest();
     rc |= kshell_register_files();
     rc |= kshell_register_mfetch();
+    rc |= kshell_register_time();
 
     return rc;
 }

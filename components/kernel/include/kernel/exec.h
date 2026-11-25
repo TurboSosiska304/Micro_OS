@@ -11,9 +11,12 @@
  *
  *    0  magic      the bytes 'M', 'O', 'X', '1'
  *    4  version    2
- *    8  flags      0, a flag this kernel does not know is a refusal
- *                  (K_EXEC_FLAG_WX names the one flag the format knows and
- *                  still refuses: a page both writable and executable)
+ *    8  flags      the flags of the image, 0 for an ordinary program: a flag
+ *                  this kernel does not know is a refusal.
+ *                  K_EXEC_FLAG_SETUID asks for the identity of the owner of
+ *                  the file (ADR 0053), and K_EXEC_FLAG_WX names the one flag
+ *                  the format knows and still refuses: a page both writable
+ *                  and executable.
  *   12  entry      offset of the first instruction from the start of the image
  *   16  text_size  bytes of code
  *   20  data_size  bytes of initialised data
@@ -52,7 +55,22 @@
  * costs no compatibility.
  */
 #define K_EXEC_FLAG_WX 0x1u
-#define K_EXEC_FLAGS_KNOWN K_EXEC_FLAG_WX
+
+/*
+ * The image asks for the identity of the owner of its file: the real uid of
+ * the caller stays what it is, and the effective uid and the saved uid become
+ * the owner of the file for the run of the program (ADR 0053). The bit is a
+ * flag of the header and not a mode of the file, because the nine bits of
+ * `chmod` cannot hold it: only the program that was linked with it carries
+ * it, and the write of an image is the act of the builder and of `pkg`.
+ *
+ * The flag was unknown before this decision, which means an image that set it
+ * was refused then too: naming it costs no compatibility, and the version of
+ * the format does not move because the field it lives in does not.
+ */
+#define K_EXEC_FLAG_SETUID 0x2u
+
+#define K_EXEC_FLAGS_KNOWN (K_EXEC_FLAG_WX | K_EXEC_FLAG_SETUID)
 
 /*
  * The machine of an image, the number of the field `arch`. The list is the
@@ -112,6 +130,13 @@ struct k_exec_image {
     k_size_t size;
     /* The machine of the header: K_EXEC_ARCH_X86_64 or K_EXEC_ARCH_XTENSA. */
     k_u32_t arch;
+    /*
+     * The image asks for the identity of the owner of its file (ADR 0053).
+     * The parser copies the flag and the call of execve decides whether the
+     * file may carry it; a port that runs the program sees the credentials of
+     * the task it runs in and never this flag.
+     */
+    bool setuid;
     k_size_t entry;
     k_size_t text_size;
     k_size_t data_size;

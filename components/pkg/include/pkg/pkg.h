@@ -82,6 +82,16 @@
 #define PKG_PACKAGE_MAX (8u * 1024u * 1024u)
 #endif
 
+/*
+ * Whether the file is a MOX1 image that asks for the identity of the owner of
+ * its file (ADR 0053). A file that is not an image, and one whose header is
+ * shorter than the flags word, answer false: the installer does not decide the
+ * format - the kernel does, and a package that is not an image is refused by
+ * the call that runs it - but this one flag of it is a rule of the installer,
+ * and a file of four bytes is not a program that asks for anything.
+ */
+bool pkg_image_asks_owner(const void *data, k_size_t size);
+
 /* The answers of the calls of this component. */
 #define PKG_OK 0
 #define PKG_EPARSE (-1)     /* the index is not the JSON of a repository */
@@ -97,6 +107,7 @@
 #define PKG_ENOMEM (-11)    /* the buffer of the package cannot be made */
 #define PKG_EEXIST (-12)    /* the name is already there and is not replaced */
 #define PKG_ELICENSE (-13)  /* a copyleft package without the source of it */
+#define PKG_EPERM (-14)     /* the caller may not install what the package is */
 
 /*
  * One package of an index. `license` is the SPDX string of the package

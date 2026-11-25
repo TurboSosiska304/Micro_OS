@@ -69,13 +69,18 @@ the tools. A row names the sentence you see, the cause and the move.
 
 ## Programs
 
-* `exec: hello: not found in /bin:/usr/bin` — there is no `/bin` here.
+* `exec: hello: not found in /bin:/bin/ports:/usr/bin` — the name is not a
+  file of any directory of `PATH`; `/bin/ports` is where the programs of the
+  SDK live (kilo and the console set of sbase).
   x86-64 has `/bin` in the disk image (`make x86-disk` builds it); `path`
   shows the search list.
 * `this machine cannot run a program` — `execve` is `ENOSYS` on this port.
   Expected in the simulator and the null port; the board runs Xtensa `.mox`.
-* `not permitted: the file has no execute bit` — the mode has no `x` for
-  the caller. `chmod 0755 <path>`.
+* `not permitted: the x bit is not for this caller, or a setuid image the
+  caller may write` — the mode has no `x` for the caller (`chmod 0755
+  <path>`), or the image asks for the identity of its owner and its caller may
+  write it ([ADR 0053](../adr/0053-the-setuid-bit-of-an-image.md)); the line
+  of the kernel before the sentence says which of the two it was.
 * `not a MOX1 image of this system` — not an image, a version 1 image, or
   another machine. Rebuild with `mkprog.sh` (version 2, the right `--arch`).
 * `not enough memory for the image` — the image does not fit the window.
@@ -87,33 +92,39 @@ the tools. A row names the sentence you see, the cause and the move.
 
 ## Network commands
 
-The network of 1.0 is the **LAN**: HTTP, MQTT and telnet are plain text, there
-is no TLS/HTTPS, no certificate store, no IPv6 and no raw sockets, and
-`httpd` and `telnet` take no password. Keep the machine on the network of its
-owner; [SECURITY.md](../../SECURITY.md) says what that means.
+The network is the **LAN**: HTTP, MQTT and telnet are plain text, and the TLS
+of x86-64 protects a download and not the machine (`https://` in `wget`, `http`
+and `pkg` since 1.2.0, ADR 0024 §3, a store of the Mozilla roots in
+`/etc/ssl/certs.pem`). There is no revocation, no IPv6 and no raw sockets;
+`httpd` takes no password, and `telnet` asks for the account of `/etc/passwd`
+on the socket. Keep the machine on the network of its owner;
+[SECURITY.md](../../SECURITY.md) says what that means.
 
 * `httpd: the port 80 is not ours` — the port is held, or the stack
   refused. Try `httpd 8080` and check `wifi status`.
 * `httpd: already on port 80` — the server is on. `httpd off`, then
   `httpd <port>`.
 * `http: <url>: the connection failed` — no route, no DNS, or the server is
-  down. Check `wifi status`, try an address; there is no TLS.
+  down. Check `wifi status`, try an address, and run `ntp` first for a
+  download over `https://`: the clock of 1970 cannot check a certificate.
 * `the URL is not one we speak` — the scheme is not plain HTTP, or there is
-  no host. Only `http://` with a host is understood; there is no `https://`.
+  no host. `http get` understands `http://` with a host; a download of
+  `https://` into a file is `wget`, and the board's build has no TLS.
 * `ntp: no answer from ...` — UDP 123 is blocked, or the server is silent.
   Try `ntp time.google.com`.
 * `mqtt: no session with the broker` — the broker is unreachable on that
-  port. Check host and port; there is no TLS.
+  port. Check host and port; the MQTT client has no TLS.
 * `mqtt: the broker refused the client` — the broker said no. The client id
   is `microos`; check its rules.
 * `mqtt: the message is longer than 256 byte(s)` — the payload limit.
   Shorten it; a topic is 128 bytes at most.
-* `mqtt` cannot reach a broker on 8883 — that is the TLS port, and 1.0 has
-  no TLS. Use 1883 on the LAN, or terminate TLS on another machine.
+* `mqtt` cannot reach a broker on 8883 — that is the TLS port, and the client
+  has no TLS. Use 1883 on the LAN, or terminate TLS on another machine.
 * `telnet` connects but nothing happens — the door is off. `telnet on`; the
-  port is 23, no authentication.
-* `telnet` answers anyone who connects — there is no password and no TLS.
-  Keep it on the LAN and run `telnet off` when it is not needed.
+  port is 23 and the session asks for the account of the machine.
+* `telnet` answers a person who knows an account — the session is plain text
+  and the password crosses the LAN as it is. Keep it on the LAN and run
+  `telnet off` when it is not needed.
 
 ## The checks and the tools
 

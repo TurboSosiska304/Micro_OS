@@ -10,10 +10,14 @@ the board live in `hardware/`.
 | If you want to... | Read |
 |---|---|
 | know what the system is | [../README.md](../README.md) |
+| put the system on a laptop, from a USB stick | [install.md](install.md) |
 | use the system, not read about it | [wiki/](wiki/README.md) (build, shell, files, programs, ports, troubleshooting) |
 | contribute, build, run the checks | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | understand the design | [architecture.md](architecture.md) |
 | know what is done and what is next | [roadmap.md](roadmap.md) (the kernel) and [ports/esp32/roadmap.md](ports/esp32/roadmap.md) (the board) |
+| know the plan of a release of the line to 2.0 | [plan-1.8.md](plan-1.8.md), [plan-1.9.md](plan-1.9.md), [plan-2.0.md](plan-2.0.md) |
+| know what the gate of 3.0 asks | [roadmap-to-3.0.md](roadmap-to-3.0.md) |
+| know the name a version carries | [release-names.md](release-names.md) |
 | know whether WiFi on a laptop is possible, and what it costs | [plan-wifi.md](plan-wifi.md) |
 | bring the kernel to another machine | [porting.md](porting.md) |
 | port a program (zlib, PCRE2, Lua, sbase) to the userland, or build one with the SDK | [porting-programs.md](porting-programs.md) |

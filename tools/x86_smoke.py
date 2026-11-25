@@ -58,6 +58,15 @@ from qemu_session import DISKS, drive_args, root_name
 # transcript name the device of the run and nothing else changes.
 DISK = "ide"
 
+# The processor of the run, set by `--cpu`. Empty is the machine of every
+# release: QEMU's own default, which has neither SMEP nor SMAP, and the
+# supervisor bit of every kernel page is the boundary (ADR 0052). A run with
+# `--cpu qemu64,+smep,+smap` boots the same image on the processor of a
+# machine of 2014 and puts every copy of a program's memory through the
+# window of the port; it is the other half of `make mmu-smoke`, over the whole
+# suite and not only over the attacks.
+CPU = ""
+
 # The commands that are typed into the shell. The answers are read by their
 # place in the list, the way the smoke test of the simulator does it. The last
 # one looks at the tree the boot left behind: a program that ran out of a file
@@ -71,8 +80,12 @@ COMMANDS = [
     "kill -TERM 3",
     "uname",
     "uptime",
+    "date",
     "ulimit",
     "ls /bin",
+    # The same directory with the mode of every entry: the programs are the
+    # lines of a regular file, and a directory of /bin (`ports`) is not one.
+    "ls -l /bin",
     # The one file of /etc is on the disk as well, and reading it is the
     # proof that the tree of the image is the tree of the machine.
     "cat /etc/setting",
@@ -522,6 +535,7 @@ COMMANDS = [
 # that follow (the run works on a copy of the image, but a clean tree is
 # easier to read in a failure).
 MANY_FILES = 70
+COMMANDS += ["ls /bin/ports"]
 COMMANDS += ["mkdir /many"]
 COMMANDS += [f"write /many/f{index:02d} x" for index in range(MANY_FILES)]
 COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
@@ -533,12 +547,31 @@ PROMPT = "microos> "
 # What the kernel has to say before the shell exists. The banner is the proof
 # that the whole chain works: the loader, the switch to long mode, the
 # console of COM1, the contract of the port and the boot of the kernel.
+def board_line() -> str:
+    """The line of the board of the port, read from the source of the machine.
+
+    The x86-64 port is not QEMU's board - the name says what the machine of the
+    port is - and a rename there is one edit of `kmain.c` and not one edit of
+    every smoke of the port (`board: x86_64` since the wire of 2.0).
+    """
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        path = os.path.join(root, "ports/port_x86_64/src/kmain.c")
+        with open(path, encoding="utf-8") as handle:
+            found = re.search(r'\.name\s*=\s*"([^"]+)"', handle.read())
+        if found is not None:
+            return "board: " + found.group(1)
+    except OSError:
+        pass
+    return "board: x86_64"
+
+
 EXPECTED = [
     # The loader checked the trailer of the kernel before it copied a byte of
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
-    "board: qemu_x86_64",
-    "port: x86_64, contract 1.13",
+    board_line(),
+    "port: x86_64, contract 1.15",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -555,6 +588,45 @@ BUILD = os.path.join(ROOT, "build-x86")
 # firmware describes two and the kernel knows how many it has started.
 MACHINE_SMP = "2"
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
+
+# The names an image of the release promises: the one list of the tree
+# (`tests/ports/promised.txt`), read by the gate of the machine here and by
+# `tools/ports_smoke.py` for the half that the SDK builds. A name here that the
+# image does not carry is the defect the owner's laptop found in 1.9: `kilo`
+# in the notes and not in the image, `date` a command of the board only.
+PROMISED_FILE = os.path.join(ROOT, "tests", "ports", "promised.txt")
+
+
+def read_promised(path: str = PROMISED_FILE) -> list:
+    """The lines of the file of promises, as (name, where) pairs.
+
+    A line is `name where`, a `#` begins a comment, and `where` is `/bin`,
+    `/bin/ports` or `shell`. A line that is not one of those is an error of
+    the file: a promise the gate cannot read is a promise nobody keeps.
+    """
+    promises = []
+
+    if not os.path.isfile(path):
+        raise RuntimeError(f"missing {path}: the list of the names of a release")
+
+    with open(path, "r", encoding="utf-8") as handle:
+        for number, line in enumerate(handle, 1):
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+
+            fields = line.split()
+            if len(fields) != 2 or fields[1] not in ("/bin", "/bin/ports", "shell"):
+                raise RuntimeError(f"{path}:{number}: {line!r} is not `name /bin`, `name /bin/ports` or `name shell`")
+
+            promises.append((fields[0], fields[1]))
+
+    if not promises:
+        raise RuntimeError(f"{path} is empty")
+
+    return promises
+
+
 RUN_IMAGE = os.path.join(BUILD, "programs-smoke.img")
 
 # The base of the higher half (ADR 0007): the kernel is linked there and the
@@ -790,7 +862,7 @@ def open_policy_checks(open_build: str) -> list:
     )
     expect(
         "an unsigned image boots under the open policy",
-        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        board_line() in transcript and "the kernel is up" in transcript,
         transcript[-300:],
     )
     expect(
@@ -818,7 +890,7 @@ def open_policy_checks(open_build: str) -> list:
     )
     expect(
         "a damaged image boots under the open policy",
-        "board: qemu_x86_64" in transcript and "the kernel is up" in transcript,
+        board_line() in transcript and "the kernel is up" in transcript,
         transcript[-300:],
     )
 
@@ -880,7 +952,7 @@ def signature_checks(loader: str, kernel: str) -> list:
     )
     expect(
         "the damaged kernel never reached the kernel",
-        "the kernel is up" not in refused and "board: qemu_x86_64" not in refused,
+        "the kernel is up" not in refused and board_line() not in refused,
         refused[-200:],
     )
 
@@ -960,6 +1032,7 @@ def machine_argv(loader: str, kernel: str, image: str, disk: str = None) -> list
 
     return [
         "qemu-system-x86_64",
+        *(["-cpu", CPU] if CPU else []),
         "-kernel",
         loader,
         "-initrd",
@@ -1410,11 +1483,13 @@ def check(output: str) -> list:
     # The names of the listing are the lines without a space and without a
     # colon: the echo of the line and the lines of the log of the kernel are
     # not names of a program.
-    programs = [
-        line.strip()
-        for line in answer("ls /bin").splitlines()
-        if line.strip() and " " not in line.strip() and ":" not in line
-    ]
+    programs = []
+    for line in answer("ls -l /bin").splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and fields[0].startswith("-") and len(fields[0]) == 10:
+            name = fields[-1].split("/")[-1].strip()
+            if name and ":" not in name and name not in programs:
+                programs.append(name)
     listing = answer("help")
     absent = [name for name in programs if name not in listing]
     expect(
@@ -1422,6 +1497,73 @@ def check(output: str) -> list:
         bool(programs) and not absent,
         f"{len(programs)} program(s), not in help: {absent[:6]}",
     )
+    # The promises of the notes and of the docs, asked of the machine. The list
+    # is one file and not a second table here: a name of it is a line of the
+    # directory that the list names, and a command of the shell is a line of
+    # the table of `help` (a name of PATH is in the list of the programs).
+    def lines_of(text: str) -> list:
+        return [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and " " not in line.strip() and ":" not in line
+        ]
+
+    ports_programs = lines_of(answer("ls /bin/ports"))
+    bin_programs = lines_of(answer("ls /bin"))
+    help_text = answer("help")
+    # The table of the commands ends where the list of the programs of PATH
+    # begins: a line of the table is a name and a summary, and the programs
+    # are named packed in the lines below the heading.
+    table, _, programs_text = help_text.partition("programs in PATH:")
+    help_commands = {
+        line.split()[0]
+        for line in table.splitlines()
+        if line.strip() and line.split()[0] != "command"
+    }
+
+    missing_ports = []
+    missing_bin = []
+    missing_commands = []
+    unnamed = []
+    for name, where in read_promised():
+        if where == "/bin/ports":
+            if name not in ports_programs:
+                missing_ports.append(name)
+        elif where == "/bin":
+            if name not in bin_programs:
+                missing_bin.append(name)
+        else:
+            if name not in help_commands:
+                missing_commands.append(name)
+
+        # Every file of PATH is a name of the list of the programs of `help`,
+        # which is how a person learns it is there at all.
+        if where != "shell" and re.search(
+            rf"(?<![A-Za-z0-9._-]){re.escape(name)}(?![A-Za-z0-9._-])", programs_text
+        ) is None:
+            unnamed.append(name)
+
+    expect(
+        "the programs of the SDK are in /bin/ports of the image",
+        bool(ports_programs) and not missing_ports,
+        f"{len(ports_programs)} program(s) of the SDK, missing: {missing_ports[:8]}",
+    )
+    expect(
+        "every program the notes promise is a file of /bin",
+        not missing_bin,
+        f"missing from /bin: {missing_bin[:8]}",
+    )
+    expect(
+        "every command the notes promise is a command of the shell",
+        not missing_commands,
+        f"missing: {missing_commands[:8]}",
+    )
+    expect(
+        "help names every promised program of PATH",
+        not unnamed,
+        f"not in the list of help: {unnamed[:8]}",
+    )
+
     help_ls = answer("help ls")
     expect(
         "help names the two sides of a name",
@@ -1454,6 +1596,23 @@ def check(output: str) -> list:
     expect(
         "uptime prints the time",
         re.search(r"up \d+ s", answer("uptime")) is not None,
+    )
+    # The wall clock of the machine: the CMOS of QEMU read by the port at the
+    # boot, printed as UTC. It was a command of the board's driver only, so
+    # the laptop of the owner answered `command not found` for it, and when
+    # the command came the port's read of the year was one pass of BCD too
+    # many - 2026 printed as 2020 - so the check compares the day with the
+    # host and not only the shape of the line.
+    moment = answer("date")
+    expect(
+        "date prints the moment of the machine",
+        re.search(r"(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\r?$", moment) is not None,
+        repr(moment),
+    )
+    expect(
+        "date names the day of the machine and not another year",
+        time.strftime("%Y-%m-%d") in moment,
+        f"{repr(moment)}, the host is {time.strftime('%Y-%m-%d')}",
     )
     # The limits of the shell come from the kernel: the memory, the CPU time
     # and the descriptors, at the ceiling of the system after the boot.
@@ -1801,7 +1960,11 @@ def check(output: str) -> list:
     limited = answer("exec /bin/limit")
     expect(
         "a program reads the memory limit of its task",
-        "limit: the memory limit is 2097152 bytes" in limited,
+        # The ceiling is a fact of the machine (ADR 0057): the window of the
+        # programs on x86-64 and not the 2 MiB of a machine without one.
+        re.search(r"limit: the memory limit is (\d+) bytes", limited) is not None
+        and int(re.search(r"limit: the memory limit is (\d+) bytes", limited).group(1))
+        >= 64 * 1024 * 1024,
         limited,
     )
     expect(
@@ -1969,6 +2132,17 @@ def check(output: str) -> list:
                 "file",
                 "sqlite3",
                 "awk",
+                # The attacks of the policy of a page (ADR 0052): the suite of
+                # `make mmu-smoke` is files of this image and not of a build
+                # of its own.
+                "mmu_text",
+                "mmu_execstack",
+                "mmu_kernel",
+                "mmu_heap",
+                "mmu_wx",
+                "mmu_stray",
+                "mmu_stack",
+                "mmu_io",
             )
         ),
         bin_listing[-200:],
@@ -2769,7 +2943,7 @@ def check(output: str) -> list:
     # machine without a thread pointer would fault before it answered.
     expect(
         "a file without the x bit is not a program",
-        "has no execute bit" in answer("exec /bin/hello", 0),
+        "the x bit is not for this caller" in answer("exec /bin/hello", 0),
     )
     expect(
         "the owner is a number of the shell",
@@ -3108,17 +3282,19 @@ def check(output: str) -> list:
         re.search(r"MicroOS \d+\.\d+\.\d+", answer("uname", 1)) is not None,
     )
 
-    # --- the guard page under the stack (ADR 0048)
-    # The stack of a program is 64 KiB and the page under it is not mapped,
-    # so a recursion that runs past the bottom meets the page and not the
-    # data of the program. The fault is a store into a page that is not
-    # present (error 0x6: not present, write, ring 3) at an address in the
-    # guard, and the program never prints the line after the recursion.
+    # --- the guard page under the stack (ADR 0048, ADR 0052)
+    # The stack of a program starts as 64 KiB and grows into a room of 1 MiB
+    # (ADR 0052); the page under the room is the guard and it is never
+    # mapped, so a recursion that runs past the limit of the task meets that
+    # page and not the data of the program. The fault is a store into a page
+    # that is not present (error 0x6: not present, write, ring 3) in the
+    # guard page at 0x15eef000 - and the program never prints the line after
+    # the recursion.
     stack = answer("exec /bin/crash stack")
     expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
     expect(
         "the guard page under the stack takes the program down",
-        "the program faulted: vector 14 at 0x0000000002fe" in stack
+        "the program faulted: vector 14 at 0x0000000015ee" in stack
         and "error 0x0000000000000006" in stack,
         stack[-400:],
     )
@@ -3150,10 +3326,23 @@ def check(output: str) -> list:
     # executable is zero for a map of this port. The line is short because it
     # is written before the entry of a program of the desktop, and the UART
     # of the machine holds the entry for the length of a line.
+    audited = output.count("x86-64: the map of a program is W^X")
+    finished = output.count("the program has finished")
     expect(
         "every program is reported W^X before it runs",
-        output.count("x86-64: the map of a program is W^X") >= 10,
-        f"{output.count('x86-64: the map of a program is W^X')} report(s) in the run",
+        audited >= 10 and audited >= finished + 1,
+        f"{audited} audit(s) for {finished} line(s) of a program that finished",
+    )
+    # The audit is a refusal and not a remark (ADR 0052): a space with a page
+    # that is writable and executable at once is not entered, and the line of
+    # the refusal in a run of the whole image is the failure of the port. The
+    # number of the audit lines is not the number of the programs here - the
+    # run does not exec every file of /bin - so `make mmu-smoke` is the check
+    # that counts them against its own execs.
+    expect(
+        "no program of the run was refused as not W^X",
+        "the map of the program is not W^X" not in output,
+        output[-600:],
     )
 
     # --- the first lane of 1.6: the wait for a descriptor
@@ -3332,6 +3521,31 @@ USERS_SCRIPT = [
     (PROMPT, "id"),
     (PROMPT, "whoami"),
     (PROMPT, "who"),
+    # --- the group and the setuid bit of the image (ADR 0044, ADR 0053)
+    #
+    # A file of the group 7 of root: the root session makes it and gives it to
+    # the group, and the guest of the next block - the account of gid 7 - reads
+    # it with the triad of the group and does not write it.
+    (PROMPT, "mkdir /tmp/g"),
+    (PROMPT, "write /tmp/g/team.txt seven"),
+    (PROMPT, "chgrp 7 /tmp/g/team.txt"),
+    (PROMPT, "chmod 640 /tmp/g/team.txt"),
+    (PROMPT, "stat /tmp/g/team.txt"),
+    # The session is a guest again: the group of the shell has a name, and the
+    # two images that ask for the identity of their owner do and do not work
+    # for a person. `/bin/suidcat` is the image of `cat` with the flag of the
+    # header and the owner root, and `/bin/badcat` is the same image of the
+    # mode 0777: a setuid program the caller may write, which execve refuses.
+    (PROMPT, "su - guest"),
+    (PROMPT, "groups"),
+    (PROMPT, "stat /bin/suidcat"),
+    (PROMPT, "exec /bin/suidcat /etc/shadow"),
+    (PROMPT, "exec /bin/cat /etc/shadow"),
+    (PROMPT, "exec /bin/badcat /etc/shadow"),
+    (PROMPT, "id"),
+    (PROMPT, "write /bin/suidcat x"),
+    (PROMPT, "cat /tmp/g/team.txt"),
+    (PROMPT, "write /tmp/g/team.txt x"),
     (PROMPT, ""),
 ]
 
@@ -3499,7 +3713,7 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
     )
     expect(
         "su gives the shell the uid and the gid of the account",
-        "uid=7(guest) gid=7 home=/home/guest" in answer("id", 2),
+        "uid=7(guest) gid=7(guest) home=/home/guest" in answer("id", 2),
         answer("id", 2),
     )
     expect(
@@ -3604,6 +3818,86 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         answer("who", 1),
     )
 
+    # --- the group and the setuid bit of the image (ADR 0044, ADR 0053)
+    #
+    # The tail of the script is the group of a file and the two images that ask
+    # for the identity of their owner. The commands are answered by their
+    # occurrence in the script, which is the rule of the helper above.
+    group_stat = answer("stat /tmp/g/team.txt")
+    expect(
+        "root gives a file to a group and the record keeps it",
+        "mode: 0640" in group_stat and "group: 7" in group_stat,
+        group_stat,
+    )
+    expect(
+        "the account of the group reads the file of the group",
+        re.search(r"(?m)^seven\r?$", answer("cat /tmp/g/team.txt")) is not None,
+        answer("cat /tmp/g/team.txt"),
+    )
+    expect(
+        "the account of the group does not write the file of the group",
+        "not permitted" in answer("write /tmp/g/team.txt x").lower(),
+        answer("write /tmp/g/team.txt x"),
+    )
+
+    expect(
+        "groups names the group of the shell from /etc/group",
+        last_line(answer("groups")) == "guest",
+        answer("groups"),
+    )
+
+    suid_stat = answer("stat /bin/suidcat")
+    expect(
+        "the image of the setuid program is root's file of 0755",
+        "mode: 0755" in suid_stat
+        and "owner: 0" in suid_stat
+        and "group: 0" in suid_stat,
+        suid_stat,
+    )
+
+    # The program asks for the identity of its owner: it reads the file that
+    # only root reads, and the same image without the bit is refused.
+    suid_cat = answer("exec /bin/suidcat /etc/shadow")
+    expect(
+        "a setuid program reads a file of its owner and not of its caller",
+        "$sha256$mox1$" in suid_cat,
+        suid_cat.strip()[-300:],
+    )
+    plain_cat = answer("exec /bin/cat /etc/shadow")
+    expect(
+        "the same program without the bit is refused to the same caller",
+        "not permitted" in plain_cat.lower() and "$sha256$" not in plain_cat,
+        plain_cat.strip()[-300:],
+    )
+
+    # A setuid image that the caller may write is not a door: the call of
+    # execve refuses it, and the line of the kernel says which file and why.
+    bad_cat = answer("exec /bin/badcat /etc/shadow")
+    expect(
+        "a setuid image the caller may write is refused",
+        "asks for the identity of its owner" in bad_cat
+        and "not permitted" in bad_cat
+        and "$sha256$" not in bad_cat,
+        bad_cat.strip()[-300:],
+    )
+
+    # The identity was the program's and not the shell's: the task that asked
+    # for the program is the guest it was. `id` is the tenth of the script -
+    # the nine before it are the sessions of `login`, `su` and the logout -
+    # and it reads the effective uid of the task.
+    expect(
+        "the shell keeps its own identity after a setuid run",
+        "uid=7(guest)" in answer("id", 9),
+        answer("id", 9),
+    )
+
+    # And the file of root is not a file of the caller.
+    expect(
+        "the setuid program cannot be written by its caller",
+        "not permitted" in answer("write /bin/suidcat x").lower(),
+        answer("write /bin/suidcat x"),
+    )
+
     return checks
 
 
@@ -3634,11 +3928,17 @@ def main(argv: list) -> int:
         default="ide",
         help="the bus of the disk of the run (default: ide)",
     )
+    parser.add_argument(
+        "--cpu",
+        default="",
+        help="the processor of the machine, e.g. qemu64,+smep,+smap (default: QEMU's own)",
+    )
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
-    global DISK
+    global DISK, CPU
     DISK = args.disk
+    CPU = args.cpu
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")

@@ -145,15 +145,23 @@ not committed; `make clean` does not remove `build-x86/`, so
 `rm -rf build-x86` is the way to start over. The details are in the port's
 README, [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
+`make uefi-stick` is the medium of a laptop of these years - a firmware of
+UEFI reads the ESP and the machine's disk is the second partition of the same
+stick, a MicroFS volume it writes (the page is [install.md](install.md),
+[ADR 0056](../adr/0056-the-stick-of-a-person-is-a-disk.md)); it needs
+`clang`, `lld`, `sfdisk` and the tools of the volume, and writes
+`build-uefi/stick.img` of 90 MB.
+
 `make x86-iso` is the medium, not the hypervisor: it stages
 `loader32.elf`, `microos64.bin` and `programs.img` into an ISO with an El
 Torito catalogue and asks `grub-mkrescue` (or `limine` when the machine has
 no GRUB) for the boot record. The image is `build-x86-iso/microos.iso`;
 the root image is the second module of the boot, the port mounts its first
 partition as a read-only `/`, and `make x86-iso-smoke` boots it with
-`-cdrom` and no `-kernel`. The tools the build needs and the gaps (UEFI, a
-USB stick, a writable root) are in
-[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md).
+`-cdrom` and no `-kernel`. The tools the build needs are in
+[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md); the root of that medium
+is read-only, and the stick of [install.md](install.md) is the one that keeps a
+file.
 
 ## The ESP32 build
 

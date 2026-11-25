@@ -64,6 +64,7 @@
 #define SCSI_READ_CAPACITY 0x25u
 #define SCSI_READ10 0x28u
 #define SCSI_WRITE10 0x2Au
+#define SCSI_SYNCHRONIZE_CACHE 0x35u
 
 #define SCSI_SENSE_SIZE 18u
 #define SCSI_INQUIRY_SIZE 36u
@@ -93,8 +94,9 @@ struct usb_storage {
     const char *refusal;
     bool refused;
     bool write_open;
-    struct k_volume_id disk_id;   /* the whole disk: the table of the writes */
-    struct k_volume_id volume_id; /* the partition the boot would mount */
+    struct k_volume_id disk_id;      /* the whole disk: the table of the writes */
+    struct k_volume_id volume_id;    /* the partition the boot would mount */
+    const struct k_blockdev *volume; /* the partition of the volume of this system */
     char vendor[9];
     char product[17];
     char revision[5];
@@ -301,6 +303,17 @@ static bool scsi_rw10(bool write, k_u32_t lba, k_u16_t blocks, void *data, k_u32
     return bot_command(cdb, sizeof(cdb), data, length, !write, NULL);
 }
 
+/* The cache of the stick on the medium: SYNCHRONIZE CACHE(10), no data. */
+static bool scsi_synchronize_cache(void)
+{
+    k_u8_t cdb[10];
+
+    memset(cdb, 0, sizeof(cdb));
+    cdb[0] = SCSI_SYNCHRONIZE_CACHE;
+
+    return bot_command(cdb, sizeof(cdb), NULL, 0u, false, NULL);
+}
+
 /* --- the block device ------------------------------------------------------ */
 
 static bool usb_range_ok(k_u32_t sector, k_size_t count)
@@ -439,11 +452,74 @@ static int usb_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
     }
 }
 
-/* There is nothing to bring to a medium that is not written: the call exists
- * because the block layer and the partition above it forward a sync. */
+/*
+ * A sync of a stick that is written is the SCSI flush of its cache: the
+ * command of the class that turns the sectors of the driver into sectors of
+ * the medium. A stick that was not opened writes nothing and needs no command.
+ */
 static int usb_sync(void *ctx)
 {
+    int rc = 0;
+
     K_UNUSED(ctx);
+
+    if (!g_storage.write_open) {
+        return 0;
+    }
+
+    if (k_mutex_lock(&g_usb_lock) != 0) {
+        return -1;
+    }
+
+    if (!scsi_synchronize_cache()) {
+        bot_clear_halt();
+        rc = -1;
+    }
+
+    k_mutex_unlock(&g_usb_lock);
+
+    return rc;
+}
+
+/*
+ * The door of the writes of the stick, the one the AHCI driver keeps: a mount
+ * that asks for them and the rule of ADR 0041, read again because
+ * `/etc/volumes` lives in the volume that is being mounted (ADR 0056). The
+ * partition the rule names is the one the kernel took for a root - `usb0p2`
+ * of a stick of this system - and not the whole disk.
+ */
+static int usb_writes(void *ctx, bool open)
+{
+    const char *why = NULL;
+
+    K_UNUSED(ctx);
+
+    if (!open) {
+        g_storage.write_open = false;
+        return 0;
+    }
+
+    if (g_storage.volume == NULL) {
+        return KERR_ROFS;
+    }
+
+    if (k_volume_identify(g_storage.volume, &g_storage.volume_id) != 0 ||
+        !k_volume_may_write(g_storage.volume, &g_storage.volume_id, &why)) {
+        if (!g_storage.refused) {
+            g_storage.refused = true;
+            kwarn("usb0: the writes of %s are refused: %s",
+                  g_storage.volume->name != NULL ? g_storage.volume->name : "the stick",
+                  why != NULL ? why : "the rule of ADR 0041");
+        }
+
+        g_storage.read_only = true;
+        return KERR_ROFS;
+    }
+
+    g_storage.read_only = false;
+    g_storage.write_open = true;
+    kinfo("usb0: the writes of %s are open: the volume is named in " K_VOLUME_LIST_PATH,
+          g_storage.volume->name != NULL ? g_storage.volume->name : "the stick");
 
     return 0;
 }
@@ -453,6 +529,7 @@ static const struct k_blockdev_ops g_usb_ops = {
     .write = usb_write,
     .erase = NULL,
     .sync = usb_sync,
+    .writes = usb_writes,
 };
 
 static struct k_blockdev g_usb_device = {
@@ -567,6 +644,8 @@ bool port_x86_64_usb_storage_attach(struct port_x86_64_usb_device *device,
 {
     const struct k_blockdev *disk;
     const struct k_blockdev *volume;
+    const struct k_blockdev *ours = NULL;
+    struct k_volume_id ours_id;
     const char *first;
     k_u8_t interface = 0;
     k_u8_t bulk_in = 0;
@@ -674,6 +753,14 @@ bool port_x86_64_usb_storage_attach(struct port_x86_64_usb_device *device,
         kerror("usb0: the partition table is not usable (%d)", partitions);
     }
 
+    /*
+     * The partitions of the stick, one at a time. The first is the one the
+     * rule of ADR 0041 has always named and the one a person mounts; the one
+     * that carries a volume of this system is the root the kernel prefers
+     * over the image of the memory (ADR 0056). The ESP of a stick of this
+     * system is FAT32 and foreign, and the volume of the machine is the
+     * MicroFS partition after it.
+     */
     first = partitions > 0 ? partition_name(disk, 0) : NULL;
     volume = first != NULL ? k_blockdev_find(first) : disk;
 
@@ -699,13 +786,66 @@ bool port_x86_64_usb_storage_attach(struct port_x86_64_usb_device *device,
               g_storage.refusal != NULL ? g_storage.refusal : "the rule of ADR 0041");
     }
 
+    g_storage.volume = volume;
+
+    memset(&ours_id, 0, sizeof(ours_id));
+
+    if (partitions > 0) {
+        k_size_t i;
+
+        for (i = 0; i < (k_size_t)partitions; i++) {
+            const char *name = partition_name(disk, i);
+            const struct k_blockdev *part = name != NULL ? k_blockdev_find(name) : NULL;
+            struct k_volume_id id;
+
+            if (part == NULL || k_volume_identify(part, &id) != 0) {
+                continue;
+            }
+
+            /*
+             * The other partitions are named one by one: the gate of the
+             * stick of ADR 0056 reads the line of the second one, and a
+             * person with a medium of three partitions sees what the kernel
+             * made of each.
+             */
+            if (i > 0u) {
+                bool ro = !k_volume_may_write(part, &id, NULL);
+
+                kinfo("usb0: %s: %s (%s), %s", part->name, volume_kind_name(&id),
+                      id.format != NULL ? id.format : "no superblock",
+                      ro ? "read-only" : "writable");
+            }
+
+            if (ours == NULL && id.kind == K_VOLUME_OURS) {
+                ours = part;
+                ours_id = id;
+            }
+        }
+    } else if (g_storage.volume_id.kind == K_VOLUME_OURS) {
+        ours = volume;
+        ours_id = g_storage.volume_id;
+    }
+
     if (partitions == KERR_NOENT) {
         kinfo("usb0: no partition table, the whole disk would be the volume");
     } else if (first == NULL) {
         kinfo("usb0: the table names no partition this kernel reads");
     } else {
-        g_root = first;
         kinfo("usb0: the first partition is %s (%d partition(s))", first, partitions);
+    }
+
+    if (ours != NULL) {
+        g_storage.volume = ours;
+        g_storage.volume_id = ours_id;
+        g_storage.read_only = !k_volume_may_write(ours, &ours_id, &g_storage.refusal);
+        g_root = ours->name;
+
+        kinfo("usb0: %s: %s (%s), %s", ours->name, volume_kind_name(&ours_id),
+              ours_id.format != NULL ? ours_id.format : "no superblock",
+              g_storage.read_only ? "read-only" : "writable");
+        kinfo("usb0: the volume of the machine is %s (%d partition(s))", ours->name, partitions);
+    } else {
+        g_root = NULL;
     }
 
     if (g_storage.read_only) {

@@ -107,6 +107,16 @@ static inline long prog_sleep(long ms)
 }
 
 /*
+ * The two ends of a pipe. The read end is written to `fds[0]` and the write
+ * end to `fds[1]`, as POSIX has it, and the call answers 0 or a negative
+ * error.
+ */
+static inline long prog_pipe(int *fds)
+{
+    return prog_call(KSYS_PIPE, (long)(unsigned long)fds, 0, 0, 0, 0, 0);
+}
+
+/*
  * The process calls. On a machine with an address space per task fork() is
  * 0 in the child and the pid of the child in the parent; waitpid() sleeps
  * until that child finishes and writes its status where the pointer says.
@@ -131,6 +141,38 @@ static inline long prog_waitpid(long pid, int *status, long flags)
 static inline long prog_exit(int code)
 {
     return prog_call(KSYS_EXIT, code, 0, 0, 0, 0, 0);
+}
+
+/*
+ * The memory a program maps (ADR 0007, kernel/mm.h): `mmap` names a range and
+ * the pages come on the fault, `brk` moves the end of the heap. `offset` is a
+ * multiple of the page and a negative answer is an error of the call.
+ */
+static inline long prog_mmap(void *address, unsigned long len, long prot, long flags, int fd,
+                             unsigned long offset)
+{
+    return prog_call(KSYS_MMAP, (long)(unsigned long)address, (long)len, prot, flags, fd,
+                     (long)offset);
+}
+
+static inline long prog_brk(unsigned long address)
+{
+    return prog_call(KSYS_BRK, (long)address, 0, 0, 0, 0, 0);
+}
+
+/*
+ * The limits of the task (ADR 0052): the heap, the stack and the mappings a
+ * program may own, the processor time and the descriptors. `KSYS_RLIMIT_*`
+ * names the one, and a limit only goes down.
+ */
+static inline long prog_getlimit(long which, unsigned long *value)
+{
+    return prog_call(KSYS_GETLIMIT, which, (long)(unsigned long)value, 0, 0, 0, 0);
+}
+
+static inline long prog_setlimit(long which, unsigned long value)
+{
+    return prog_call(KSYS_SETLIMIT, which, (long)value, 0, 0, 0, 0);
 }
 
 /* The length of the line, without the library a program does not have. */
@@ -176,6 +218,31 @@ static inline void prog_put_dec(unsigned long value)
         count--;
         (void)prog_write(1, &digits[count], 1);
     }
+}
+
+/* A number in hexadecimal with `digits` places, the zeros in front: an
+ * address of this machine is long and the eye compares the ends of two. */
+static inline void prog_put_hex(unsigned long value, int digits)
+{
+    static const char hex[] = "0123456789abcdef";
+    char text[16];
+    int at = 0;
+
+    if (digits < 1) {
+        digits = 1;
+    }
+
+    if (digits > (int)sizeof(text)) {
+        digits = (int)sizeof(text);
+    }
+
+    while (at < digits) {
+        text[digits - 1 - at] = hex[value & 0xFu];
+        value >>= 4;
+        at++;
+    }
+
+    (void)prog_write(1, text, (unsigned long)digits);
 }
 
 #endif /* MICRO_OS_PORT_X86_64_PROGRAMS_PROG_H */

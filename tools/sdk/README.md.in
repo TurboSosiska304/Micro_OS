@@ -80,7 +80,7 @@ cc -Os -ffreestanding -nostdinc -isystem $SDK/include \
    -fno-pic -fno-pie -fno-stack-protector -ffunction-sections -fdata-sections \
    -c hello.c -o hello.o
 sh $SDK/bin/link_program.sh --cc cc --script $SDK/lib/program.ld \
-   --entry _start --out hello.mox --base 0x02000000 --arch x86-64 \
+   --entry _start --out hello.mox --base 0x10000000 --arch x86-64 \
    --mkprog $SDK/bin/mkprog.sh -- -Wl,--gc-sections \
    $SDK/lib/crt0.o hello.o $SDK/lib/libmicroos_user.a
 ```
@@ -109,7 +109,7 @@ vectors the kernel built for the image, as in a Unix-like system.
 | the image | 8 MiB (`K_EXEC_MAX_IMAGE`) | the kernel reads the file into one block of the allocator |
 | the bss | 1 MiB (`K_EXEC_BSS_MAX`) | the arena of the library lives in the bss |
 | the arena of `malloc` | @HEAP@ bytes | the library was built with `--heap`; see below |
-| the window | 16 MiB | from `0x02000000` to `0x03000000`, with a 64 KiB stack at the top |
+| the window | 96 MiB | from `0x10000000` to `0x16000000`, with a 64 KiB stack and a room of 1 MiB for it at the top (ADR 0057) |
 | one read or write | 64 KiB (`KSYS_MAX_IO`) | the size of one block of the system call |
 
 A program that needs a bigger arena than the one of this SDK rebuilds the

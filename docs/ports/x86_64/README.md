@@ -10,18 +10,20 @@ the machine where a program can really be loaded and run (the window of
 | port | `ports/port_x86_64` |
 | loader | `loader32.S`: a multiboot image that QEMU loads with `-kernel`; it copies the kernel to 16 MiB - or to the first free 2 MiB block above it when a module of the medium is in the way, the address it hands the kernel in a register - maps the same bytes at `0xFFFFFFFF80000000` (the top 2 GiB, where the image is linked), builds the identity map of the first gigabyte and turns the long mode on |
 | console | the framebuffer of the VGA of QEMU, 1280x800 at 16 bits per pixel in RGB565 (Bochs VBE, ADR 0023): a grid of 160x50 cells of the 8x16 font of the PC (Spleen, `line_gap` 0/2/4 px of `/etc/font`), the colours of `/etc/console`; the text mode of 80x25 at `0xB8000` when the machine has no Bochs VBE interface; COM1, 115200, `\r\n`, out of one `k_port_write()` |
-| input | the keyboard of the USB on the xHCI controller of the PCI bus: the rings of TRBs, the slots, the ports, the enumeration of one device and the boot protocol of HID, the reports of eight bytes decoded by `kernel/input_hid.c` (ADR 0040); or the PS/2 keyboard on IRQ1 with the scancode set **asked at the boot** (`0xF0 0x00`, and bit 6 of the 8042 for the translation): the set 1 of the XT, the set 2 of a laptop whose firmware does not translate it, and the set 3 are one table of the kernel (`kernel/input_scancode.c`, `make test`), with Shift, Ctrl, Caps Lock and the E0/E1 keys - the arrows, Home, End, PageUp, PageDown, Insert and Delete - as events of `/dev/input0`; or COM1 |
+| input | the keyboard of the USB on the xHCI controller of the PCI bus: the rings of TRBs, the slots, the ports - powered when the controller has PPC, reset through PRC and PED with the link state U0 of a USB 3.0 port, and tried five times, the way the core of Linux does - the enumeration of one device and the boot protocol of HID, the reports of eight bytes decoded by `kernel/input_hid.c` (ADR 0040); or the PS/2 keyboard on IRQ1 with the scancode set **asked at the boot** (`0xF0 0x00`, and bit 6 of the 8042 for the translation): the set 1 of the XT, the set 2 of a laptop whose firmware does not translate it, and the set 3 are one table of the kernel (`kernel/input_scancode.c`, `make test`), with Shift, Ctrl, Caps Lock and the E0/E1 keys - the arrows, Home, End, PageUp, PageDown, Insert and Delete - as events of `/dev/input0`; or COM1 |
 | clock | the PIT at 1 kHz on the core 0; the local APIC timer at 1 kHz on every application processor, calibrated against the TSC |
 | tasks | `switch.S` (callee-saved registers and the stack), one run queue per core under `KERNEL_SMP`, and a round robin over it |
 | processors | the MADT of ACPI, the trampoline at `0x7000`, INIT and the start-up IPI through the local APIC, one GDT/TSS/IST and one 64 KiB stack per core (ADR 0012) |
 | store | `usb0`: a stick of the Bulk-Only Transport on the xHCI controller - the class 08/06/0x50, INQUIRY, TEST UNIT READY, READ CAPACITY(10), READ(10), the partitions of the table and the rule of ADR 0041, read-only until the volume is ours and `/etc/volumes` names it (ADR 0040); `ata0`: a raw image on the primary IDE channel, PIO, MicroFS on its first partition, mounted at `/` (ADR 0008); `boot0p1`: the read-only root image of the ISO, as the second module of the boot (ADR 0026); `ram0`, 512 KB of the memory of the machine, when there is neither a disk nor a boot image |
-| network | `usbnet0`: a wire of CDC-ECM on the xHCI controller - SET_INTERFACE of the data setting, SET_ETHERNET_PACKET_FILTER, the MAC out of the string descriptor, frames over two bulk endpoints (ADR 0040); or `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; 10.0.2.15/24 on QEMU user-net, gateway 10.0.2.2, resolver 10.0.2.3, no DHCP |
-| programs | `k_port_exec_supported()` is true; the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`) over a physical arena at 64 MiB; a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `syscall` (the vector 0x80 is the second door, ADR 0007, ADR 0035) |
+| network | `e1000e0`: the ethernet of a laptop, the Intel I219 family - BAR0 mapped into the top 2 GiB, legacy descriptors, sixteen receive and eight transmit, polled, the MAC out of the NVM (ADR 0055); or `usbnet0`: a wire of CDC-ECM on the xHCI controller - SET_INTERFACE of the data setting, SET_ETHERNET_PACKET_FILTER, the MAC out of the string descriptor, frames over two bulk endpoints (ADR 0040); or `virtio0`: virtio-net-pci in its legacy I/O interface, polled; ARP, IPv4, ICMP, UDP, a client of TCP (one segment in flight, a timeout retransmission) and a listener with SYN/ACK and `accept`; the resolver of QEMU user-net with a cache of eight names and their time to live; the client of DHCP of `components/net` (DISCOVER/OFFER/REQUEST/ACK, T1/T2), the lease in `/etc/network`, the fixed 10.0.2.15/24 of 1.8 as the fallback |
+| programs | `k_port_exec_supported()` is true; the window is 96 MiB at 256 MiB (`0x10000000`-`0x16000000`) over a physical arena of 96 MiB at 64 MiB (ADR 0057); a program is a file in `/bin` (the MOX1 format of `kernel/exec.h`), runs in ring 3 with page tables of its own and calls the kernel with `syscall` (the vector 0x80 is the second door, ADR 0007, ADR 0035) |
 | protection | NX and W^X: `EFER.NXE` from the loader, the text read-only and executable, every data page - rodata, data, bss, stacks, heap, arena, screen - writable and NX; no page is both (ADR 0007, sections 9 and 10). The kernel is in the higher half: the image is linked at `0xFFFFFFFF80000000` and mapped there beside the low identity map |
+| the copy of a process | `fork()` copies the page tables of the parent, shares its frames and copies a page on the first write; a program of 64 MiB forks in about half a millisecond, and the port's line names the pages shared and the time of the call (ADR 0057). The gate is `make fork-smoke` |
+| the policy of a page | `mmap(PROT_WRITE \| PROT_EXEC)` is `EINVAL` and the audit of every `exec` refuses such a space; the stack of a program starts at 64 KiB and grows into a room of 1 MiB, page by page on the fault, up to `KSYS_RLIMIT_MEMORY` of the task; an anonymous mapping is counted against the same limit as the heap; the kernel is supervisor-only in every space; SMEP and SMAP are on when CPUID has them, with the `STAC`/`CLAC` window around every copy of a program's memory; a bad access is `EFAULT` with the address in the log. The gate is `make mmu-smoke` (ADR 0052) |
 | signature | the kernel carries a 120-byte trailer (magic, size, SHA-256 and Ed25519) and the loader verifies it before it copies a byte (ADR 0020); the public key is compiled into `loader32.elf`, the private key is outside the tree (`MICROOS_SIGN_KEY`), and `tools/microos_sign` signs and verifies |
 | firmware | `loader/uefi`: a PE/COFF application that the firmware of a machine starts from a FAT volume, with the picture of GOP (a shadow in RGB565 and a conversion, `src/gop.c`), the ACPI tables of the configuration table, the memory map and `ExitBootServices`; the disk is `disk.img` of the same volume, read by the loader and mounted from the memory as `boot0p1` (ADR 0037, [uefi.md](uefi.md)) |
 | build | `make x86-build` (needs `cmake`, `ninja`, `xorriso` is not needed), `make x86-disk` for the volume with `/bin`, and `make uefi` for the volume a firmware boots (needs `clang` and `lld-link`) |
-| check | `make x86-smoke` (serial), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make usb-smoke` (a keyboard, a stick and a wire of the USB on a machine with no PS/2), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
+| check | `make x86-smoke` (serial), `make mmu-smoke` (the policy of a page), `make fork-smoke` (the fork of 64 MiB), `make x86-vga-smoke` (the framebuffer, the text mode and the keyboard), `make usb-smoke` (a keyboard, a stick and a wire of the USB on a machine with no PS/2), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network) - all need `qemu-system-x86` |
 | build | `make x86-build` (needs `cmake`, `ninja`); `make x86-iso` needs `xorriso` and `grub-mkrescue` or limine, because it asks a boot loader to write the El Torito record ([iso.md](iso.md)) |
 | check | `make x86-smoke` (serial), `make x86-vga-smoke` (screen and keyboard), `make x86-disk-smoke` (two boots on a disk), `make x86-net-smoke` (the network), `make x86-iso-smoke` (a BIOS and a CD), `make x86-iso-usb-smoke` and `make x86-iso-uefi-smoke` (a stick, a BIOS and a firmware), `make uefi-smoke` (the loader of a firmware, the picture of GOP and the shell) - all need `qemu-system-x86`, the last four OVMF |
 | medium | `make x86-iso`: one image with the loader, the kernel and the root image, which boots in a BIOS and in a firmware of UEFI, from a CD and from a USB stick written with `dd`; `make uefi`: the same machine as a FAT volume a firmware starts itself ([iso.md](iso.md), [boot.md](boot.md), [uefi.md](uefi.md), ADR 0026, ADR 0037) |
@@ -137,7 +139,7 @@ two builds do not produce the same bytes. A release passes the key:
 
 `make x86-smoke` checks both answers: the normal boot accepts the image, and a
 kernel with one changed byte, a kernel without a trailer and a kernel signed
-by another key are each refused by the loader before `board: qemu_x86_64`
+by another key are each refused by the loader before `board: x86_64`
 appears. The tests call the same verifier on the host
 (`tests/cases/test_sign.c`), with the vectors of RFC 8032 and FIPS 180-4.
 
@@ -154,7 +156,7 @@ and loads the kernel. The build of the other policy is a directory of its own:
 
 `make x86-smoke` boots the signed kernel on the open loader (it is the same
 check), then an unsigned kernel and a kernel with a changed byte: each prints
-the warning and reaches `board: qemu_x86_64` and `the kernel is up`. The
+the warning and reaches `board: x86_64` and `the kernel is up`. The
 strict loader refuses the same bytes, which is what the signature checks of
 the smoke test already prove. The setting exists for a development machine
 whose image is not signed yet; it does not make a damaged image correct, and
@@ -191,8 +193,8 @@ a `lua_Number` and a human-readable size are doubles, and the loader turns the
 SSE and x87 units on for them. `zstdcat` is the same image as `zstd` under a
 second name.
 The first six use the raw `programs/prog.h`. The build passes
-`--base 0x02000000` to `tools/link_program.sh`, which links the program, checks
-that the text really landed at `0x02000020` - the ld of binutils 2.38 moves it
+`--base 0x10000000` to `tools/link_program.sh`, which links the program, checks
+that the text really landed at `0x10000020` - the ld of binutils 2.38 moves it
 32 bytes up, the 2.47 of this host does not - and hands the linked file to
 `mkprog.sh`; the image of another window is refused, and nothing relocates the
 program, so a wrong address would run and read its data from somewhere else.
@@ -464,16 +466,19 @@ does: `httpd 8080` on the console, then `curl http://127.0.0.1:8080/` on the
 host. The smoke test makes its own forward, on a port it found free, so a run
 of the test and a run of the machine do not fight over 8080.
 
-The driver is `src/virtio_net.c` and the protocols are `src/net.c`. The card
-is virtio-net and not e1000, and the reason is the address map of this port:
-the kernel is the identity map of the first gigabyte, and the MMIO BAR of a
-PCI device in QEMU sits near 4 GiB, outside that map. The legacy virtio
-interface is programmed through port I/O, so the rings are the only memory the
-device sees, and the page tables of the machine do not have to grow a mapping
-of MMIO before the first frame. The e1000 keeps its rings behind the BAR and
-would need that mapping first (ADR 0007 territory), and the virtqueue is a
-documented format while half of the e1000 is a register file learned from
-another driver.
+The drivers are `src/virtio_net.c`, `src/e1000e.c` and `src/usb_net.c`, and
+the protocols are `src/net.c`. K6 chose virtio-net for a reason of the address
+map: the kernel is the identity map of the first gigabyte, the MMIO BAR of a
+PCI device in QEMU sits near 4 GiB, and the legacy virtio interface is
+programmed through port I/O, so the rings are the only memory the device sees.
+2.0 keeps that card and adds the card of the laptop (ADR 0055): the e1000e of
+Intel, the I219 of a ThinkPad and the 82574L of `-device e1000e`, whose BAR0
+of 128 KiB is mapped into the top 2 GiB with
+`port_x86_64_paging_map_mmio()` - the window of the screen, the APIC, the SATA
+controller and the NVMe disk. The driver of the card speaks the legacy
+descriptor, takes the MAC out of the NVM and is polled; the seam of
+`src/netdev.c` is unchanged, and the first driver that comes up takes the
+stack, with the card of the laptop asked for first.
 
 The device is polled: the timer and the keyboard are the only lines the PIC
 unmasks, and a PCI line needs the I/O APIC (K8). The receive ring is asked for
@@ -510,18 +515,24 @@ on one card; the mutex is held for a look and a change and never across a
 wait. A frame is still dispatched by its four addresses, and a task that
 polls while the other waits is a task that serves both.
 
-The configuration is QEMU user-net and there is no DHCP: the guest is
-10.0.2.15/24, the host answers as 10.0.2.2 for everything outside the subnet
-and as the resolver, so a server of the host on the loopback is
-`10.0.2.2:<port>` for the guest. The numbers are constants of `src/net.c`.
-A name outside the guest network resolves through 10.0.2.3 and the client
-reaches it: on a host with a network, `http get http://example.com/` answers
-`HTTP 200` and the first bytes of the page (the buffer of the command is 256
-bytes, so the rest is cut).
+The address comes from a DHCP server: the client is
+`components/net/src/dhcp.c` (portable, with the four messages of RFC 2131 and
+the renewal at T1/T2) and the wire is this stack. QEMU user-net answers with
+the numbers K6 had as constants - 10.0.2.15/24, the gateway 10.0.2.2, the
+resolver 10.0.2.3 - and the host answers as 10.0.2.2 for everything outside
+the subnet, so a server of the host on the loopback is `10.0.2.2:<port>` for
+the guest. The lease is in `/etc/network`, read at the first use of the
+network and written after every answer; `dhcp 0` in that file keeps a fixed
+address and asks nobody, and a network without a server leaves the fixed
+10.0.2.15/24 of 1.8 and says so in the log and in `netinfo` (ADR 0055).
+A name outside the guest network resolves through the resolver of the lease
+and the client reaches it: on a host with a network,
+`http get http://example.com/` answers `HTTP 200` and the first bytes of the
+page (the buffer of the command is 256 bytes, so the rest is cut).
 
 | command | what it does |
 |---|---|
-| `netinfo` | the device, the MAC, the link, the address, the counters of the driver and of the stack, and the resolver's queries and hits |
+| `netinfo` | the device, the MAC, the link, the address, the lease of DHCP and its rest, the counters of the driver and of the stack, and the resolver's queries and hits |
 | `ping <address>` | one ICMP echo and the round trip |
 | `netudp <address> <port> <text>` | one UDP request and one answer, printed |
 | `dns [name]` | resolve a name (and say whether the cache answered) or list the names in the cache |

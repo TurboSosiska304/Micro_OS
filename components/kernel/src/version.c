@@ -19,8 +19,23 @@ const char *kernel_version(void)
         KERNEL_VERSION_SUFFIX;
 }
 
+/*
+ * The stamp of the build, or nothing when the build is reproducible.
+ *
+ * The tree builds with `SOURCE_DATE_EPOCH=0`, so `__DATE__` and `__TIME__` are
+ * the first second of 1970 - a number that is right and reads as a defect:
+ * the owner of a laptop saw `MicroOS 1.9.0 (build Jan 1 1970 00:00:00)` and
+ * asked what was wrong with the clock. A build whose date is the epoch has no
+ * date to print, and `uname` says so by printing nothing instead of 1970.
+ */
 const char *kernel_build_id(void)
 {
+    static const char epoch[] = "Jan  1 1970";
+
+    if (strncmp(__DATE__, epoch, sizeof(epoch) - 1u) == 0) {
+        return "";
+    }
+
     return __DATE__ " " __TIME__;
 }
 

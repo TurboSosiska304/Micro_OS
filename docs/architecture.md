@@ -98,18 +98,19 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | partial (a uid and a gid per task, inherited and checked; `/etc/passwd` and `/etc/shadow`, `login`, `su` and `id` on the console; no setuid bit in an image and no group in a record, ADR 0033) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked against the three triads of every object; `/etc/passwd`, `/etc/shadow` and `/etc/group`, `login`, `su`, `id` and `groups` on the console, and the setuid flag of an image, ADR 0033, ADR 0044, ADR 0053) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
 MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
 discipline. The x86-64 port has an MMU and uses it: a program gets page tables
-of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
+of its own, a 96 MiB window at 256 MiB, a guard page under its stack and ring
 3, and the kernel is supervisor-only and out of its reach. A fault of a
 program is reported and the program is taken down; the shell that ran it is
 alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
-clones its page tables and copies a page on the first write (ADR 0007). The
+clones its page tables, shares its frames and copies a page on the first write
+(ADR 0007, ADR 0057): a program of 64 MiB forks in about half a millisecond. The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
 mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
@@ -286,9 +287,12 @@ A task has three limits - the memory it holds, the processor time it spends
 and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
-They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, sixteen descriptors) and only go down: the ceiling belongs to the
-machine, and neither a task nor root lifts it.
+They start at the ceiling of the machine (the PSRAM of the board, 2 MiB; the
+window of the programs on x86-64, just under 95 MiB, ADR 0057; about 49 days
+of CPU; sixteen descriptors) and only go down: the ceiling belongs to the
+machine, and neither a task nor root lifts it. The memory ceiling is the one
+of the three that the port answers (`k_port_memory_limit()`, contract 1.15),
+because it is a fact of the machine and not of the kernel.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
 it looks for a block, charges the user blocks to the task that allocated them
@@ -304,6 +308,17 @@ ends it with 143. The descriptors stop at the limit in `kfile_alloc()`,
 system is `ENOSPC`; lowering the limit never closes what is already open.
 `ulimit` of the shell prints the three numbers and lowers them, and the
 library has `microos_getlimit()`/`microos_setlimit()`.
+
+The memory limit is also the ceiling of the address space of a program on a
+machine that has one (ADR 0052): `brk` is charged to it, an anonymous mapping
+is counted when it is made and given back when it is unmapped, and the stack
+of a program stops at it too - a program that lowers its limit to 128 KiB has
+a heap, a mapping and a stack that each stop there. What is not counted is a
+page of a file behind a mapping (it is the file), the stack pages already
+grown (the limit is applied to the stack as one object), and the copy of an
+anonymous mapping that a fork makes (the child starts with its parent's count
+and no charge of its own). A total `RLIMIT_AS` over every page is a debt of
+`docs/debts.md`.
 
 ## 5. Virtual filesystem (phase 2)
 
@@ -507,6 +522,25 @@ allows and the interrupt of a PCI line.
   map is kept for the heap, the arena and the devices (ADR 0007, "The higher
   half: taken").
 
+### The policy of a page (2.0, ADR 0052)
+
+The tables of the x86-64 port carry a policy and not only a map. A page of a
+program is code or it is data: `mmap` with `PROT_WRITE | PROT_EXEC` is
+`EINVAL`, the audit of every `exec` refuses a space that has such a page, and
+the boot reads the kernel's own map back. The stack of a program starts as
+64 KiB at the top of the window and grows downwards into a room of 1 MiB one
+page per fault, the page below the room is the guard and the lowest page the
+room may own, and the ceiling of the whole stack is `KSYS_RLIMIT_MEMORY` of
+the task. The kernel is supervisor-only in every space, so ring 3 cannot read
+or write a byte of it, and the two bits of CR4 that keep the kernel out of the
+memory of a program - SMEP and SMAP - are turned on when CPUID advertises them
+and named at the boot; the kernel opens the window of `STAC`/`CLAC` around
+every copy through a pointer of a program and closes it on the next context
+switch. A bad access is `EFAULT` with the address in the log, whether it was a
+fault of the program or a pointer a call refused. The host and the board have
+no page tables for a program and enforce nothing of this: the policy is the
+port's, and `docs/debts.md` names the two machines.
+
 ## 7. Drivers (phase 4)
 
 The interface follows Linux:
@@ -590,9 +624,12 @@ parses a format of its own and the port runs it. The decisions are in
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
 magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
 text, the data and the bss, and the machine the bytes are code for (`arch`: 0
-x86-64, 1 Xtensa). The image is linked for the window of the port - the code
-at its base plus the 32 bytes of the header - and copied as it is, because
-nothing relocates it; the bss is not in the file and the port clears it.
+x86-64, 1 Xtensa). The flags are `WX` (a page both writable and executable,
+which the parser refuses) and `SETUID` (the program asks for the identity of
+the owner of its file, ADR 0053); a bit the kernel does not know is a refusal.
+The image is linked for the window of the port - the code at its base plus the
+32 bytes of the header - and copied as it is, because nothing relocates it;
+the bss is not in the file and the port clears it.
 `tools/mkprog.sh` turns an object into the image and writes the machine. The
 parser (`components/kernel/src/exec.c`) checks the image against itself and
 nothing else: the magic and the version, an arch the format knows, sizes that
@@ -618,7 +655,7 @@ internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
 loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
-the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
+the program, maps the window at 256 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
 the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,

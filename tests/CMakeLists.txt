@@ -38,6 +38,7 @@ if(NOT ESP_PLATFORM)
         cases/test_ui.c
         cases/test_ui_windows.c
         cases/test_ui_palette.c
+        cases/test_ui_term.c
         cases/test_ui_wm.c
         cases/test_fb_ops.c
         cases/test_input_debounce.c
@@ -64,6 +65,7 @@ if(NOT ESP_PLATFORM)
         cases/test_settings.c
         cases/test_task.c
         cases/test_guard.c
+        cases/test_mm.c
         cases/test_sched.c
         cases/test_sched_queue.c
         cases/test_smp.c
@@ -89,6 +91,11 @@ if(NOT ESP_PLATFORM)
     if(MICRO_OS_NET AND MICRO_OS_NET_HTTP AND MICRO_OS_NET_HTTP_SERVER
        AND MICRO_OS_NET_NTP AND MICRO_OS_NET_MQTT)
         list(APPEND MICRO_OS_TEST_CASES cases/test_net.c)
+    endif()
+    # The client of DHCP is a protocol of its own and needs no socket of the
+    # host: its server is the script of tests/cases/test_dhcp.c.
+    if(MICRO_OS_NET)
+        list(APPEND MICRO_OS_TEST_CASES cases/test_dhcp.c)
     endif()
     if(MICRO_OS_NET AND MICRO_OS_NET_HTTP)
         list(APPEND MICRO_OS_TEST_CASES cases/test_pkg.c)

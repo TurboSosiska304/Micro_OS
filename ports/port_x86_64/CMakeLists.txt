@@ -129,6 +129,7 @@ set(KSHELL_SOURCES
     "${KSHELL_DIR}/src/kshell_files.c"
     "${KSHELL_DIR}/src/kshell_memtest.c"
     "${KSHELL_DIR}/src/kshell_mfetch.c"
+    "${KSHELL_DIR}/src/kshell_time.c"
     "${KSHELL_DIR}/src/kshell_pipe.c"
 )
 
@@ -212,7 +213,7 @@ set(SETTINGS_SOURCES
 # and not by the CMakeLists of the component, which is written for the tree of
 # ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
 # name, in every image, and it is the cache the contract of K6 asks for.
-set(NET_SOURCES "${NET_DIR}/src/dns.c")
+set(NET_SOURCES "${NET_DIR}/src/dns.c" "${NET_DIR}/src/dhcp.c")
 
 if(MICRO_OS_X86_NET)
     list(APPEND NET_SOURCES
@@ -317,7 +318,12 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # (ADR 0018). The default of mkprog.sh is the same number; the flag is written
 # out so that a port that builds for two machines says which one this is.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
-set(PROGRAM_BASE 0x02000000)
+# The base of the window is the one of the port (PORT_X86_64_USER_BASE in
+# include/port_x86_64.h): a program is linked where it will be mapped, and the
+# 96 MiB of ADR 0057 moved the window from 32 MiB to 256 MiB. The two numbers
+# are one promise and a test of the image (`mkprog.sh` refuses an image of
+# another base) is what keeps them together.
+set(PROGRAM_BASE 0x10000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 set(LINK_PROGRAM "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/link_program.sh")
 
@@ -418,6 +424,26 @@ add_program_image(fork fork_main)
 add_program_image(badptr badptr_main)
 add_program_image(signals signals_main)
 add_program_image(nx nx_main)
+
+# The attacks of the policy of a page (ADR 0052, `make mmu-smoke`): each one
+# breaks one rule of the map and is expected to end its own task with EFAULT,
+# except the two that ask for more than the policy allows and are answered by
+# the call - a writable and executable mapping, and a heap past the limit of
+# the task. The suite also reads the stack that grows by 128 KiB.
+add_program_image(mmu_text mmu_text_main)
+add_program_image(mmu_execstack mmu_execstack_main)
+add_program_image(mmu_kernel mmu_kernel_main)
+add_program_image(mmu_heap mmu_heap_main)
+add_program_image(mmu_wx mmu_wx_main)
+add_program_image(mmu_stray mmu_stray_main)
+add_program_image(mmu_stack mmu_stack_main)
+add_program_image(mmu_io mmu_io_main)
+
+# The fork of a program of 64 MiB (ADR 0057): the pages are shared and not
+# copied, the child writes four of them, the parent reads the old ones, and
+# the port's line carries the count of the shared pages and the time of the
+# call. `make fork-smoke` types the line and reads it.
+add_program_image(forksmoke forksmoke_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with
@@ -551,6 +577,7 @@ add_libc_program(edit
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
@@ -571,10 +598,37 @@ add_libc_program(wm
             "${LIBC_USER_DIR}/src/usleep.c"
             "${LIBC_USER_DIR}/src/unistd_ext.c"
             "${LIBC_USER_DIR}/src/stat.c"
+            "${LIBC_USER_DIR}/src/time.c"
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/client/src/wm_protocol.c"
+            "${UI_DIR}/client/src/wm_client.c"
+    INCLUDES ${UI_INCLUDES}
+)
+
+# --- /bin/term, the terminal window of the desktop (2.0, ADR 0054) ----------
+#
+# The window that runs the programs of /bin: a client of the server like the
+# editor, a grid of cells of `components/ui/src/term.c`, and a child process on
+# a pair of pipes. The grid is the portable half of the terminal and the host
+# test holds it (`tests/cases/test_ui_term.c`); this program is the picture of
+# the cells and the pipes.
+add_libc_program(term
+    MAIN "${PROGRAM_DIR}/term.c"
+    SOURCES "${PROGRAM_DIR}/uiprog.c"
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/font_spleen.c"
+            "${LIBC_USER_DIR}/src/usleep.c"
+            "${LIBC_USER_DIR}/src/unistd_ext.c"
+            "${LIBC_USER_DIR}/src/stat.c"
+            "${UI_DIR}/src/window.c"
+            "${UI_DIR}/src/draw.c"
+            "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
+            "${UI_DIR}/src/keyboard.c"
+            "${UI_DIR}/src/term.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
     INCLUDES ${UI_INCLUDES}
@@ -592,6 +646,7 @@ add_libc_program(fm
             "${UI_DIR}/src/window.c"
             "${UI_DIR}/src/draw.c"
             "${UI_DIR}/src/palette.c"
+            "${UI_DIR}/src/clock.c"
             "${UI_DIR}/src/keyboard.c"
             "${UI_DIR}/client/src/wm_protocol.c"
             "${UI_DIR}/client/src/wm_client.c"
@@ -1524,6 +1579,7 @@ add_executable(microos64
     src/virtio.c
     src/virtio_blk.c
     src/virtio_net.c
+    src/e1000e.c
     src/net.c
     src/libc_shim.c
     src/tls_platform.c
@@ -1563,7 +1619,7 @@ endif()
 
 target_compile_definitions(microos64 PRIVATE
     KERNEL_BOARD_NAME="x86_64"
-    KERNEL_BOARD_DESC="QEMU x86-64 machine"
+    KERNEL_BOARD_DESC="x86-64 machine"
     KERNEL_PSRAM=$<BOOL:${KERNEL_PSRAM}>
     KERNEL_EXEC=$<BOOL:${KERNEL_EXEC}>
     KERNEL_SMP=$<BOOL:${KERNEL_SMP}>

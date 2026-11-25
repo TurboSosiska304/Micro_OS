@@ -82,9 +82,11 @@ if(NOT CMAKE_C_COMPILER)
 endif()
 
 # The base of the window of the x86-64 port (ports/port_x86_64/CMakeLists.txt,
-# PROGRAM_BASE). mkprog.sh refuses an image linked for another one, so a port
-# with another window is this variable and nothing else.
-set(MICROOS_PROGRAM_BASE "0x02000000" CACHE STRING
+# PROGRAM_BASE; 96 MiB at 256 MiB since ADR 0057). mkprog.sh refuses an image
+# linked for another one, so a port with another window is this variable and
+# nothing else: a program of the SDK linked at the old base runs its first
+# instructions at the new one and names data that is not mapped.
+set(MICROOS_PROGRAM_BASE "0x10000000" CACHE STRING
     "the base of the window of the program (the port's PROGRAM_BASE)")
 option(MICROOS_FLOAT "the program computes in double: SSE and x87 are allowed" OFF)
 option(MICROOS_GC_SECTIONS "drop the sections no call of the program reaches" ON)

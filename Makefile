@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -48,7 +48,8 @@ help:
 	@echo "  make integrity  the integrity check of the repository and the bundle"
 	@echo "  make wiki-check the links of the user wiki (docs/wiki)"
 	@echo "  make ci         build, test, test-asan, test-tsan, smoke, coverage,"
-	@echo "                  x86-smoke when QEMU is there, reproducible, integrity"
+	@echo "                  x86-smoke and mmu-smoke when QEMU is there, reproducible,"
+	@echo "                  integrity"
 	@echo "                  (x86-smoke when qemu-system-x86_64 is installed)"
 	@echo "  make sim        build and run the host simulator"
 	@echo "  make clean      remove the host build directory"
@@ -63,12 +64,16 @@ help:
 	@echo "  make x86-run    boot it in a QEMU window (framebuffer 1280x800, keyboard)"
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
+	@echo "  make mmu-smoke  the policy of a page: the attacks of ADR 0052"
+	@echo "  make fork-smoke  the fork of a program of 64 MiB: a copy of the pages"
 	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
 	@echo "                  the machine: the gate of a program nobody rewrote"
 	@echo "  make tty-smoke  kilo, a full-screen editor of somebody else, typed at the"
 	@echo "                  machine with no line of its source edited (ADR 0051)"
 	@echo "  make uefi       the same kernel as an image a firmware starts: a FAT"
-	@echo "  make uefi-stick the same wrapped in a table of partitions: a stick of a UEFI machine"
+	@echo "  make uefi-stick a stick of two partitions: the ESP and the volume of the machine"
+	@echo "  make uefi-stick-smoke  the stick boots by OVMF as a USB disk, a file survives"
+	@echo "                  a power cut, and a foreign second partition stays read-only"
 	@echo "                  volume with BOOTX64.EFI, the kernel and disk.img"
 	@echo "  make uefi-run   boot that volume in QEMU under OVMF (a window)"
 	@echo "  make uefi-smoke boot it without a window and check the machine, the"
@@ -91,7 +96,7 @@ help:
 	@echo "  make nvme-smoke  the same image on the NVMe controller of a laptop: the"
 	@echo "                  same writes, the same rule, the same proof (ADR 0042)"
 	@echo "  make x86-fs-smoke  rename, rmdir, fsck ext2 and the SQLite journal"
-	@echo "  make x86-net-smoke   the network: ping, UDP and HTTP on QEMU user-net"
+	@echo "  make x86-net-smoke   the network: DHCP, ping, UDP, HTTP and the e1000e"
 	@echo "  make x86-iso    the bootable medium: CD and stick, BIOS and UEFI (K13)"
 	@echo "  make x86-iso-run    boot that image in a terminal (-nographic)"
 	@echo "  make x86-iso-smoke  boot the image from a CD on a BIOS and check the shell"
@@ -230,7 +235,7 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke x86-root-smoke usb-smoke ports-smoke
+CI_TARGETS += x86-smoke mmu-smoke fork-smoke x86-root-smoke usb-smoke ports-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -241,7 +246,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, mmu-smoke, fork-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
 endif
 
 sim: build
@@ -356,16 +361,32 @@ X86_PROGRAMS_IMAGE := $(X86_BUILD)/programs.img
 X86_PROGRAMS_EXT2_IMAGE := $(X86_BUILD)/programs-ext2.img
 X86_MKFS := $(BUILD_DIR)/tools/microos_mkfs
 
+# The programs of the SDK: `kilo` and the console set of sbase, built by
+# `tests/ports` with the SDK and by no CMake of this tree (ADR 0025, the lane
+# M3 of 1.8). The release image carries them in `/bin/ports` and the two gates
+# of the collection drive them, so the build is one stamp and not one per
+# caller: a source of `tests/ports` or the script of the SDK is the dependency.
+PORTS_BUILD := build-ports
+PORTS_DIR := $(PORTS_BUILD)/programs
+PORTS_STAMP := $(PORTS_DIR)/kilo.mox
+PORTS_SOURCES := $(shell find tests/ports -type f \( -name '*.c' -o -name '*.h' -o -name '*.txt' -o -name 'CMakeLists.txt' \) 2>/dev/null) \
+	tools/ports_build.sh tools/sdk/make_sdk.sh
+
+$(PORTS_STAMP): $(PORTS_SOURCES)
+	sh tools/ports_build.sh --build $(PORTS_BUILD)
+
+ports-build: $(PORTS_STAMP)
+
 # The root the machine of `make x86-run` boots: the MicroFS image by default,
 # the ext2 one with `make x86-run X86_ROOT=ext2` (ADR 0027 §3).
 X86_ROOT ?= mfs
 X86_ROOT_IMAGE := $(if $(filter ext2,$(X86_ROOT)),$(X86_PROGRAMS_EXT2_IMAGE),$(X86_PROGRAMS_IMAGE))
 
-x86-disk: x86-build build
+x86-disk: x86-build build $(PORTS_STAMP)
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_IMAGE) \
-		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+		--build $(X86_BUILD) --mkfs $(X86_MKFS) --ports $(PORTS_DIR)
 	python3 tools/x86_image.py --image $(X86_PROGRAMS_EXT2_IMAGE) --fs ext2 \
-		--build $(X86_BUILD) --mkfs $(X86_MKFS)
+		--build $(X86_BUILD) --mkfs $(X86_MKFS) --ports $(PORTS_DIR)
 
 # The gate of a reproducible image: the same inputs, the same bytes. The
 # moments of the MicroFS records come from SOURCE_DATE_EPOCH (the tool has
@@ -422,6 +443,29 @@ x86-smoke: x86-disk x86-open-build
 	python3 tools/x86_smoke.py --image $(X86_PROGRAMS_IMAGE) --open-build $(X86_OPEN_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
+# The policy of a page (ADR 0052, lane M1 of 2.0): a program that writes its
+# text, executes its stack, writes the kernel, touches a page it does not own,
+# asks for a writable and executable mapping and grows past the limit of its
+# task - each ends the program with the reason in the log - plus the stack
+# that grows by 128 KiB and the W^X audit of every program of the run. The
+# machine carries the two bits of 2014 (SMEP and SMAP) so that the kernel side
+# of the boundary is exercised too; `make mmu-smoke MMU_CPU=qemu64` runs the
+# same suite on the supervisor bit alone.
+MMU_CPU ?= qemu64,+smep,+smap
+
+mmu-smoke: x86-disk
+	python3 tools/x86_mmu_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD) \
+		--cpu $(MMU_CPU) --timeout 240
+
+# The fork of a real process (ADR 0057, lane M2 of 2.0): a program of 64 MiB
+# maps and touches its memory, forks, writes four pages in the child and reads
+# the same four in the parent. The pages are shared by the fork and copied on
+# the write, the time of the call is the line of the port, and the ceiling is
+# the millisecond the release promises.
+fork-smoke: x86-disk
+	python3 tools/x86_fork_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD) \
+		--timeout 240
+
 # The gate of a program nobody rewrote (lane M3 of 1.8, docs/ports-table.md):
 # the console set of sbase - true, false, echo, basename, dirname, pwd,
 # printenv, sleep, cksum, tee, cmp - is built by **the SDK** and not by the
@@ -432,10 +476,7 @@ x86-smoke: x86-disk x86-open-build
 # answers are the answers of the release. The three calls of a command that
 # 1.8 added to the library - popen, pclose and system - are the program
 # /bin/ports/command of the same gate.
-PORTS_BUILD := build-ports
-
 ports-smoke: x86-disk
-	sh tools/ports_build.sh --build $(PORTS_BUILD)
 	python3 tools/ports_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 180
 
@@ -445,7 +486,6 @@ ports-smoke: x86-disk
 # reads the line back. `ports-smoke` builds the same programs with the same
 # SDK; this one drives the keyboard that a transcript of lines cannot.
 tty-smoke: x86-disk
-	sh tools/ports_build.sh --build $(PORTS_BUILD)
 	python3 tools/tty_smoke.py --build $(PORTS_BUILD) --x86 $(X86_BUILD) \
 		--disk $(X86_DISK_BUS) --timeout 240
 
@@ -485,20 +525,26 @@ uefi: x86-build x86-disk
 	python3 tools/uefi_esp.py --image $(UEFI_IMAGE) --build $(X86_BUILD) \
 		--disk $(X86_PROGRAMS_IMAGE)
 
-# The stick of a firmware machine: the ESP above, wrapped in the table of the
-# partitions a firmware reads before it looks for a file. A stick written with
-# `dd` from this image boots on a machine of UEFI only - no BIOS, no CD, no
-# optical drive - which is what a laptop of these years is. The size is the
-# table and the volume; the rest of a stick stays as it was.
+# The stick of a person (ADR 0056): a GPT with the ESP of the firmware and,
+# in the partition after it, the MicroFS volume the kernel writes through the
+# USB port. The ESP keeps the image of the boot as the fallback of a machine
+# whose controller did not come up; the volume is a partition, not a file in
+# the ESP, so a file a person writes is a sector of the stick and not a byte
+# of the memory. `tools/uefi_stick.py` writes the table and the two parts.
 UEFI_STICK := $(UEFI_BUILD)/stick.img
-UEFI_STICK_MB := 64
 
-uefi-stick: uefi
-	rm -f $(UEFI_STICK)
-	truncate -s $(UEFI_STICK_MB)M $(UEFI_STICK)
-	printf 'label: gpt\n,48M,uefi\n' | sfdisk -q $(UEFI_STICK)
-	dd if=$(UEFI_IMAGE) of=$(UEFI_STICK) bs=512 seek=2048 conv=notrunc status=none
+uefi-stick: uefi x86-disk $(PORTS_STAMP)
+	python3 tools/uefi_stick.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS) \
+		--ports $(PORTS_DIR)
 	@echo "$(UEFI_STICK): write it with dd to a stick and start it from the menu of the firmware"
+	@echo "  it is a stick of two partitions: the ESP of the firmware and the volume of the machine"
+
+# The gate of the stick (ADR 0056): the image is booted as a USB stick by OVMF,
+# a file is written, the power goes with the process, and the second boot finds
+# the file; a stick whose second partition is a volume of another system stays
+# read-only and its SHA-256 is the same before and after.
+uefi-stick-smoke: uefi-stick
+	python3 tools/uefi_stick_smoke.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS)
 
 # The machine of a person: the window of QEMU shows the picture of the
 # firmware and the keyboard of the window is the PS/2 keyboard of the port.
@@ -701,6 +747,11 @@ x86-fs-smoke: x86-disk
 # part of `make ci`: the network of the test is the loopback of the host, and
 # a build farm is not a place to open a port. The default image keeps the flag
 # off, so `make x86-smoke` is the same machine it always was.
+#
+# Since 2.0 the smoke test boots three machines of that image (ADR 0055): the
+# card of virtio of K6, the e1000e of a laptop on the same user network, and
+# the e1000e on a wire whose other end never answers - where the client of
+# DHCP has to fall back to the fixed address in its budget and say so.
 X86_NET_BUILD := build-x86-net
 
 # The machine of `make x86-net-run` forwards 8080 of the loopback to 8080 of

@@ -57,6 +57,20 @@ k_mm_space_t k_mm_current(void)
     return k_port_mm_supported() ? k_port_mm_current() : 0;
 }
 
+/*
+ * A page is code or it is data (ADR 0052). The rule is the one the tables of
+ * every program already carry - a page of the text is executable and not
+ * writable, every data page, the stack, the arena and the heap are writable
+ * and NX - and here it is stated once, where a mapping is asked for, so that
+ * a program cannot ask the kernel for the one page the processor refuses to
+ * build honestly.
+ */
+bool k_mm_prot_allowed(k_u32_t prot)
+{
+    return (prot & (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC)) !=
+           (k_u32_t)(K_MM_PROT_WRITE | K_MM_PROT_EXEC);
+}
+
 static struct k_mm_space *space_find(k_mm_space_t handle)
 {
     k_size_t i;
@@ -158,12 +172,36 @@ static void region_free(struct k_mm_region *region)
  * past the end of the file is zeros, which is what a mapping of a file that
  * is shorter than its region reads.
  */
+static int region_attach_file(struct k_mm_region *region, const char *path, k_u32_t flags);
+
+/*
+ * The file of a region that was copied by a fork is not open: the child gets
+ * the name and not a descriptor, and the first page of the file that the
+ * child touches is the one that opens it (ADR 0057). A fork of a program of
+ * 64 MiB is then the walk of its tables and not four opens of the disk, and a
+ * child that never reads a page of the file - the one that calls `execve` a
+ * line later - never opens it at all.
+ */
+static int region_open(struct k_mm_region *region)
+{
+    if (region->file_open || region->path[0] == '\0') {
+        return 0;
+    }
+
+    return region_attach_file(region, region->path, region->flags);
+}
+
 static int region_fill(struct k_mm_region *region, k_u64_t vaddr, void *page)
 {
     k_u64_t offset;
-    int got = 0;
+    int got;
 
     memset(page, 0, K_MM_PAGE_SIZE);
+
+    got = region_open(region);
+    if (got != 0) {
+        return got;
+    }
 
     if (!region->file_open) {
         return 0;
@@ -195,6 +233,28 @@ static bool region_is_shared(const struct k_mm_region *region)
 static bool region_is_writable(const struct k_mm_region *region)
 {
     return (region->prot & K_MM_PROT_WRITE) != 0;
+}
+
+/*
+ * The bytes of the anonymous mappings of a space, which is what the budget of
+ * the task counts (ADR 0052). The answer is read from the regions of the list
+ * and not kept in a counter of its own: a counter would be a second truth
+ * that `munmap`, a fork and the end of the space each have to update, and the
+ * list is the hand of records a program can make. A region leaves the list
+ * when it is unmapped, so the bytes it counted go with it.
+ */
+static k_u64_t space_mapped(const struct k_mm_space *space)
+{
+    k_u64_t total = 0;
+    const struct k_mm_region *region;
+
+    for (region = space->regions; region != NULL; region = region->next) {
+        if ((region->flags & K_MM_CHARGED) != 0) {
+            total += region->len;
+        }
+    }
+
+    return total;
 }
 
 /* The bit of a page in the map of the pages that were written. It is the
@@ -232,7 +292,15 @@ static int region_writeback(struct k_mm_space *space, struct k_mm_region *region
     k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);
     k_size_t index;
 
-    if (!region->file_open || !region_is_shared(region)) {
+    if (!region_is_shared(region)) {
+        return 0;
+    }
+
+    if (region_open(region) != 0) {
+        return 0;
+    }
+
+    if (!region->file_open) {
         return 0;
     }
 
@@ -437,7 +505,7 @@ static int region_attach_file(struct k_mm_region *region, const char *path, k_u3
 
     region->file_open = true;
 
-    if ((flags & K_MM_SHARED) != 0) {
+    if ((flags & K_MM_SHARED) != 0 && region->dirty == NULL) {
         k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);
 
         region->dirty = (k_u8_t *)kmm_alloc((pages + 7u) / 8u, KMM_PRIORITY_SYSTEM);
@@ -470,6 +538,16 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
         (flags & ~(k_u32_t)(K_MM_SHARED | K_MM_PRIVATE | K_MM_ANONYMOUS)) != 0 ||
         ((flags & K_MM_SHARED) != 0 && (flags & K_MM_PRIVATE) != 0) ||
         (offset % K_MM_PAGE_SIZE) != 0) {
+        return KERR_INVAL;
+    }
+
+    /*
+     * The policy of the page (ADR 0052): a program may not ask for a page it
+     * may write and run at once. The refusal is the call and not a page fault
+     * later, so a program that asks for a code it built itself is told EINVAL
+     * and keeps running; the tables of the port never carry such a page.
+     */
+    if (!k_mm_prot_allowed(prot)) {
         return KERR_INVAL;
     }
 
@@ -535,7 +613,27 @@ int k_mm_map(k_mm_space_t handle, k_u64_t address, k_size_t len, k_u32_t prot, k
                         ? K_MM_ANONYMOUS
                         : ((flags & K_MM_SHARED) != 0 ? K_MM_SHARED : K_MM_PRIVATE);
 
-    if (region->flags != K_MM_ANONYMOUS) {
+    /*
+     * An anonymous mapping is memory the program owns and not a page of a
+     * file, so it is bounded by the budget of the task that makes it, the
+     * same KSYS_RLIMIT_MEMORY the heap is counted against (ADR 0052). The
+     * call is the one of the program: a space that the kernel is filling for
+     * another task (execve places the image of a program in a space that is
+     * not the space of the caller) is not charged to the caller, which would
+     * put a program's bss on the shell's budget.
+     */
+    if (region->flags == K_MM_ANONYMOUS && handle == k_port_mm_current()) {
+        struct task *self = task_self();
+
+        if (self != NULL && !task_memory_fits(self, space_mapped(space) + (k_u64_t)len)) {
+            region_free(region);
+            return KERR_NOMEM;
+        }
+
+        region->flags |= K_MM_CHARGED;
+    }
+
+    if ((region->flags & K_MM_ANONYMOUS) == 0) {
         rc = region_attach_file(region, path, region->flags);
         if (rc != 0) {
             region_free(region);
@@ -844,7 +942,6 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
     for (region = from->regions; region != NULL; region = region->next) {
         struct k_mm_region *copy = region_new();
-        int rc;
 
         if (copy == NULL) {
             return KERR_NOMEM;
@@ -852,17 +949,16 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
         *copy = *region;
         copy->next = NULL;
+
+        /*
+         * The file of the child is a name and not a descriptor (ADR 0057): it
+         * is opened by the first page of it that the child faults on
+         * (region_open), so the fork writes no record of a volume and reads
+         * none. The map of the dirty pages of a shared mapping is a copy, and
+         * it is the one the child writes back with.
+         */
         copy->file_open = false;
         copy->dirty = NULL;
-
-        if (region->file_open) {
-            rc = region_attach_file(copy, region->path, copy->flags);
-
-            if (rc != 0) {
-                region_free(copy);
-                return rc;
-            }
-        }
 
         if (region->dirty != NULL) {
             k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);

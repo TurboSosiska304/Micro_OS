@@ -26,7 +26,9 @@ machine runs it, and the x86-64 port is the proof that this one does.
 The plan of the kernel is [docs/roadmap.md](docs/roadmap.md). The board has a
 plan of its own, with the port: [docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md).
 The user guide is the wiki in [docs/wiki](docs/wiki/README.md); the same pages
-build a site with `mkdocs build` and `mkdocs.yml`.
+build a site with `mkdocs build` and `mkdocs.yml`. To put the system on a
+laptop, from a USB stick to a file that survives the power:
+[docs/install.md](docs/install.md).
 The changes of every release are in [CHANGELOG.md](CHANGELOG.md); a machine
 from 0.x moves with [docs/migration.md](docs/migration.md), and the security
 model, with the way to report a problem, is in [SECURITY.md](SECURITY.md).
@@ -141,29 +143,48 @@ Micro_OS/
   there: no memory protection, no address-space isolation. The x86-64 port
   has an MMU and uses it: a program is a task of ring 3 with page tables of
   its own, the text is read-only code and every data page is NX (ADR 0007).
+  Since 2.0 the port also has a *policy* ([ADR 0052](docs/adr/0052-the-policy-of-a-page.md)):
+  a writable and executable page is refused, the stack of a program grows to
+  the limit of its task, the heap and the anonymous mappings stop at
+  `ulimit -m`, the kernel is supervisor-only in every space, and SMEP/SMAP
+  are turned on when the processor has them - with `make mmu-smoke` as the
+  gate. The board keeps its logical split and the host has no space for a
+  program, which the ADR says in its first table.
 * **`fork()` is a placeholder on those ports.** Without an MMU the child
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are
-  copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
-* **A user, a mode and an owner.** A file has a mode and an owner in its
-  inode, the mode is checked at the edge of the system against the uid of the
-  task, and a task inherits its uid and gid from the one that started it
-  (`getuid`, `setuid` and their siblings are calls of the ABI). Root passes
-  the triads of read and write. The boot and the shell still run as root,
-  there is no login file or `su`, and no filesystem stores a group: the gid is
-  kept but the group triad is never the one that decides.
+  copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)), and
+  since 2.0 the copy is cheap: a program of 64 MiB forks in about half a
+  millisecond, with the pages shared and copied on the first write
+  ([ADR 0057](docs/adr/0057-the-copy-of-a-process.md), `make fork-smoke`).
+* **A user, a mode, an owner and a group.** A file has a mode, an owner and a
+  group in its record, the mode is checked at the edge of the system against
+  the effective uid and the gid of the task (owner triad, group triad,
+  others), and a task inherits its credentials from the one that started it
+  (`getuid`, `geteuid`, `setuid` and their siblings are calls of the ABI).
+  Root passes the triads of read and write. `/etc/passwd`, `/etc/shadow` and
+  `/etc/group` name the people and the groups, `login`/`su`/`id`/`groups` are
+  commands of the shell, and an image may ask for the identity of its owner
+  with the setuid flag of `MOX1`
+  ([ADR 0053](docs/adr/0053-the-setuid-bit-of-an-image.md)).
 * **Programs are young.** The format (MOX1), `execve`, `chmod`/`chown`, the
-  window of the x86-64 port and a library of a program exist: `/bin` has
-  `hello`, `cat`, `echo`, `ls`, `spawn` and the programs of the tests, all of
-  them ring 3 tasks with `argc`, `argv` and `envp` and an `exit` that the
+  window of the x86-64 port and a library of a program exist: `/bin` has the
+  thirty-five images of the release - the programs of the tests, the tools of
+  sbase, the interpreters, the editors and the desktop - and `/bin/ports` the
+  programs the SDK builds; the names are `tests/ports/promised.txt`. All of
+  them are ring 3 tasks with `argc`, `argv` and `envp` and an `exit` that the
   caller waits for ([ADR 0016](docs/adr/0016-userland.md)). The board runs
   `/bin/hello` and `/bin/cat` too, as tasks of its kernel without an address
   space: one program at a time, 8 KiB of text and 8 KiB of data, and a bad
   pointer can reboot the machine ([ADR 0018](docs/adr/0018-esp32-programs.md)).
   There is no shell `export` (the environment of a program is the four words
   of the kernel) and no job control: no groups, no `&`, no `fg`/`bg`.
-* **No TLS, and the network is the LAN.** HTTP, MQTT and telnet speak plain
-  text: there is no HTTPS, no certificate store, no IPv6 and no raw sockets.
+* **TLS on x86-64, and the network is the LAN.** The port speaks HTTPS with
+  mbedTLS (`wget`, `http` and `pkg`, since 1.2.0) and the image carries the
+  Mozilla bundle in `/etc/ssl/certs.pem`; the board keeps the copy of ESP-IDF
+  and no command of its shell speaks TLS
+  ([docs/wiki/network.md](docs/wiki/network.md)). HTTP, MQTT and telnet speak
+  plain text: there is no IPv6 and no raw sockets.
   `telnet` asks for the account of the machine (`/etc/passwd` and
   `/etc/shadow`) on the socket of the session, and `httpd` takes no password,
   so the machine belongs on the network of its owner, not on the open
@@ -174,12 +195,13 @@ Micro_OS/
   a chipset and the NVMe controller of a laptop find the disk of a machine,
   mount the volume of its first partition and write nothing: a volume is
   writable only when its superblock carries the identifier of this system
-  **and** `/etc/volumes` names it. A volume that passes the two is written,
-  and `make x86-disk-smoke` keeps a file across a reset on the IDE channel, on
-  SATA and on NVMe (ADR 0041, ADR 0042). What is not there: the same rule for
-  a medium of the USB that is written and taken out while it is mounted, and
-  an NVMe driver with one pair of queues, one command in flight and no
-  completion interrupt (`docs/plan-1.8.md`, M2).
+  **and** `/etc/volumes` names it. A volume that passes the two is written:
+  `make x86-disk-smoke` keeps a file across a reset on the IDE channel, and
+  `make ahci-smoke`/`make nvme-smoke` on SATA and on NVMe (ADR 0041, ADR 0042);
+  the stick of [ADR 0056](docs/adr/0056-the-stick-of-a-person-is-a-disk.md) is
+  written through the same rule. What is not there is the unplug of a stick
+  while a volume of it is mounted, which leaves the VFS naming a device that is
+  gone (`docs/debts.md`).
 * **The board has limits of its own**: no PMIC, 8 MB of flash with two
   application slots (the update is over USB), a 200 mAh battery. They are in
   [docs/ports/esp32](docs/ports/esp32/README.md).

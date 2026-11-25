@@ -310,6 +310,9 @@ static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
      */
     out->mode = mfs_inode_mode(&inode);
     out->owner = mfs_inode_owner(&inode);
+    /* The group of a version 3 record; a volume of version 1 or 2 has no
+     * word for it and the reader answers zero, the group of root. */
+    out->group = mfs_inode_group(&inode);
 
     return mfs_to_kerr(MFS_OK);
 }
@@ -337,10 +340,9 @@ static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
     /*
      * The group is a word of its own in the record of a version 3 volume
      * (ADR 0038); a volume of version 1 or 2 has no group and the reader
-     * answers zero, the group of root. The door of the system calls that
-     * sets a group and the triad of the group in the check of the access
-     * are the work of the release that gives the groups a meaning: this is
-     * the storage and the answer of statx (docs/debts.md).
+     * answers zero, the group of root. The same number decides the triad of
+     * the group in the check of the access (ADR 0044) and is the answer of
+     * the stat call above.
      */
     out->group = mfs_inode_group(&inode);
     /*
@@ -390,6 +392,18 @@ static int vfs_set_owner(void *ctx, const char *path, k_u32_t owner)
     return mfs_to_kerr(mfs_chown(path, owner));
 }
 
+static int vfs_set_group(void *ctx, const char *path, k_u32_t group)
+{
+    K_UNUSED(ctx);
+
+    /*
+     * A volume of MicroFS version 1 or 2 has no word of a group and answers
+     * MFS_ENOTSUP, which mfs_to_kerr turns into KERR_NOTSUP: the attribute is
+     * not there, the call is not forbidden. A version 3 volume keeps it.
+     */
+    return mfs_to_kerr(mfs_chgrp(path, group));
+}
+
 static int mfs_statfs_volume(void *ctx, struct vfs_statfs *out)
 {
     struct mfs_info info;
@@ -427,6 +441,7 @@ static const struct vfs_operations g_mfs_operations = {
     .rename = vfs_rename_object,
     .chmod = vfs_set_mode,
     .chown = vfs_set_owner,
+    .chgrp = vfs_set_group,
     .statfs = mfs_statfs_volume,
     .strerror = vfs_strerror_mfs,
 };

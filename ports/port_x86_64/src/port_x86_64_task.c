@@ -74,6 +74,18 @@ struct port_task {
     bool is_user;      /* a program of ring 3 runs on this context */
     bool exiting;      /* k_port_task_exit has begun on this context */
     /*
+     * The window of a copy into the memory of a program is open on this
+     * context (ADR 0052). AC is a flag of the core and the switch does not
+     * carry it, but a read or a write of a program may sleep inside its
+     * window - a pipe with no room, a terminal with no key - so the flag
+     * travels with the context that opened it and is put back when that
+     * context comes back.
+     */
+    bool copying;
+    /* The pages this context copied on write after a fork (ADR 0057): the
+     * count of the child of a fork that is in the log when it ends. */
+    k_u32_t copied_pages;
+    /*
      * The x87 and XMM state of the context, saved when it leaves the CPU and
      * loaded when it comes back (see commit_switch()). The extra bytes are
      * the alignment: fpu_area() finds the 512 bytes inside them.
@@ -373,6 +385,18 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     this_cpu()->current = next;
 
     /*
+     * The window of a copy into the memory of a program (ADR 0052) travels
+     * with its context and not with the core. AC is a flag of the processor,
+     * so the context that gives up the CPU leaves it in its own record - the
+     * copy it was in the middle of is the operation a program asked for, and
+     * a read or a write may sleep before the bytes travel - and the context
+     * that takes the CPU gets its own answer back below. A task that is taken
+     * down inside a window therefore does not leave SMAP open for the next
+     * one, which is the half of this that the attack suite would miss.
+     */
+    prev->copying = (port_x86_64_read_flags() & PORT_X86_64_RFLAGS_AC) != 0;
+
+    /*
      * The thread pointer follows the task, not the machine: each one has its
      * own errno, and the block is put in the register before the other
      * context is resumed with it.
@@ -408,6 +432,21 @@ static void commit_switch(struct port_task *prev, struct port_task *next)
     fpu_load(next);
 
     port_x86_64_switch(&prev->rsp, next->rsp);
+
+    /*
+     * This context is the one that runs now, and the window it left open - if
+     * any - is the one it gets back. The context is read from the core and
+     * not from `next`: a task may be resumed from a call of the switch whose
+     * `next` was another context - `port_x86_64_yield_to_idle()` hands the
+     * CPU to the boot context and is resumed by the scheduler from the same
+     * call - and the flag belongs to the task that runs, not to the one that
+     * was asked for a moment ago.
+     */
+    if (this_cpu()->current != NULL && this_cpu()->current->copying) {
+        port_x86_64_user_access_begin();
+    } else {
+        port_x86_64_user_access_end();
+    }
 }
 
 /*
@@ -789,6 +828,15 @@ void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
     }
 }
 
+void port_x86_64_task_cow_copy(void)
+{
+    struct port_task *current = this_cpu()->current;
+
+    if (current != NULL && current->copied_pages != 0xFFFFFFFFu) {
+        current->copied_pages++;
+    }
+}
+
 bool port_x86_64_task_is_user(void)
 {
     struct port_task *current = this_cpu()->current;
@@ -981,6 +1029,20 @@ void k_port_task_exit(int code)
     k_u64_t flags;
 
     K_UNUSED(code);
+
+    /*
+     * The count of the pages the task copied on write after a fork goes to
+     * the log now and not at every fault: a line per page would be inside the
+     * output of a program that prints, and one line at the end of the task is
+     * the count a person reads (ADR 0057).
+     */
+    if (dead != NULL && dead->copied_pages != 0u) {
+        struct task *self_task = k_port_task_current();
+
+        kinfo("x86-64: the task (pid %u) copied %u page(s) on write",
+              (self_task != NULL) ? (unsigned)self_task->pid : 0u, (unsigned)dead->copied_pages);
+        dead->copied_pages = 0u;
+    }
 
     /*
      * The stack of the task cannot be released from here: the block holds

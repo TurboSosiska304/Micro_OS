@@ -62,6 +62,14 @@ int mkfs_mfs_build_image(const char *image_path, k_u32_t size_mb, k_u32_t start_
  */
 #define MKFS_MFS_JOURNAL 0x1u
 
+/*
+ * Write the volume alone, at the first byte of the file: no MBR and no
+ * partition table. It is what a partition of another table holds - the volume
+ * of the stick of ADR 0056 - and the caller is the partition table, not this
+ * tool.
+ */
+#define MKFS_MFS_VOLUME_ONLY 0x2u
+
 int mkfs_mfs_build_image_ex(const char *image_path, k_u32_t size_mb, k_u32_t start_lba,
                             const struct mkfs_mfs_entry *entries, k_size_t count, k_u64_t epoch,
                             k_u32_t flags);

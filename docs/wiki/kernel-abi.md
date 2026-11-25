@@ -47,11 +47,11 @@ who wants to use the system, not a second copy of the contract.
 | 33 | `setlimit` | lower one of them |
 | 34 | `rename` | a name of an object inside one filesystem |
 | 35 | `ftruncate` | cut an open file to a size |
-| 36 | `getuid` | the uid of the task |
-| 37 | `geteuid` | the uid of the task (one credential) |
+| 36 | `getuid` | the real uid of the task |
+| 37 | `geteuid` | the effective uid of the task |
 | 38 | `getgid` | the gid of the task |
-| 39 | `setuid` | change the uid: root names any, another task itself |
-| 40 | `setgid` | change the gid by the same rule |
+| 39 | `setuid` | change the uid: root names any, another task its real or saved uid |
+| 40 | `setgid` | change the gid by the rule of one gid |
 
 `41` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
@@ -116,7 +116,7 @@ Every argument is checked where it enters, in
 `EFAULT` is the most interesting of them, because it is what a machine with an
 MMU can finally say. On x86-64 the null page, the guard page under the stack,
 the part of the window that was never mapped and a range that runs past
-`0x03000000` are all "not there": the call answers `-14` instead of taking a
+`0x16000000` are all "not there": the call answers `-14` instead of taking a
 page fault in ring 0. `/bin/badptr` is the program of that test - it hands
 `write`, `stat` and `read` a pointer outside the window, a range that crosses
 its end and the guard page, and every call answers 14 while the machine goes on
@@ -181,7 +181,8 @@ is `EBADF`. [ADR 0014](../adr/0014-pipes.md) has the design and
 ## Limits
 
 A task starts with the ceiling of three resources and may only lower them:
-the memory it holds (2 MiB), the processor time it spends (about 49 days) and
+the memory it holds (2 MiB on the board and the host, the window of the
+programs on x86-64), the processor time it spends (about 49 days) and
 the descriptors it opens (16). `setlimit` (33) takes a selector
 (`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
 current limit to the caller. A raise is `EPERM`: the ceiling belongs to the
@@ -196,6 +197,14 @@ and the default action ends it with 143. The descriptors stop at the limit
 with `EMFILE`: `open`, `pipe` and a `dup2` onto a number at or above it.
 Lowering a limit never closes what is already open.
 
+On the machine with page tables the memory limit is the ceiling of the whole
+address space of a program: `brk` is charged to it as it grows, an anonymous
+mapping is counted when it is made and given back when it is unmapped, and
+the stack of a program stops at it too - a program that lowers its limit to
+128 KiB has a heap, a mapping and a stack that each stop there. A page that
+the program asks for as writable and executable at once is `EINVAL`, not a
+page: a page is code or it is data (ADR 0052).
+
 The library has `microos_getlimit`, `microos_setlimit` and
 `microos_getrlimits`, the shell has `ulimit` to print and lower the limits of
 the shell, and [`docs/syscall-abi.md`](../syscall-abi.md) has the contract.
@@ -206,16 +215,19 @@ Every object has nine bits of `rwx` and a uid of fifteen bits, stored in the
 spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-record-of-an-inode)).
 A new file is `0644`, a new directory `0755`, and the owner is 0.
 
-Every task has a **uid** and a **gid**, inherited from the task that made it
-(`getuid` 36, `geteuid` 37, `getgid` 38, `setuid` 39, `setgid` 40). Root is
-uid 0 and it passes the triads of read and write: a file of mode `0200` is
-read by root, and one of `0400` is written by it. An object owned by the uid
-of the task is judged by the triad of the owner, one owned by any other
-number by the triad of the others, because no filesystem stores a group. The
-execute bit is the exception: `execve` needs an `x` bit for somebody, root
-included. `open` compares its access with the mode before a descriptor
+Every task has a real, an effective and a saved **uid** and a **gid**,
+inherited from the task that made it (`getuid` 36 is the real uid, `geteuid`
+37 the effective one that every check reads, `getgid` 38, `setuid` 39,
+`setgid` 40). Root is uid 0 and it passes the triads of read and write: a file
+of mode `0200` is read by root, and one of `0400` is written by it. An object
+owned by the effective uid of the task is judged by the triad of the owner,
+one whose group is the gid of the task by the triad of the group, and every
+other by the triad of the others. The execute bit is the exception: `execve`
+needs an `x` bit for somebody, root included. An image with the setuid flag of
+`MOX1` runs with the identity of the owner of its file for the length of the
+run (ADR 0053). `open` compares its access with the mode before a descriptor
 exists, so every filesystem answers a forbidden open the same way (`EPERM`);
-`stat` reports and checks nothing, as in POSIX. `chmod` is the owner or root,
+`stat` reports and checks nothing, as in POSIX. `chmod` and `chgrp` are the owner or root,
 `chown`, `mount` and `umount` are root, and a signal to a task of another uid
 is `EPERM`.
 

@@ -33,6 +33,7 @@
 #include "kernel/mm.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
+#include "kernel/port/time.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "port_x86_64.h"
@@ -380,6 +381,96 @@ static bool space_zero(k_u64_t space, k_u64_t vaddr, k_size_t len)
 }
 
 /*
+ * The stack of the program that runs grew (ADR 0052). The room under the
+ * first 64 KiB of the stack is a demand-paged region like the mappings of
+ * kernel/mm.h: the fault handler asks here before it calls the fault a fault.
+ *
+ * The lowest page the stack owns is read from the tables and not kept in a
+ * record, because the tables are the truth: a fork copies them and the child
+ * inherits the stack its parent had, an `execve` makes them again, and a page
+ * the program already took cannot be taken twice. The walk starts at the
+ * floor and stops at the first present page, so it costs a page table read
+ * per step of a stack that has not grown and one read after it has.
+ *
+ * The limit is the task's, not the port's: the room is the most a stack may
+ * ever be, and KSYS_RLIMIT_MEMORY (`ulimit -m`) is the ceiling the task
+ * carries. A program that lowers it below the room has a stack that stops
+ * there, and the next frame is the fault of the program - a stack overflow is
+ * not an answer of a call, it is the end of the task.
+ */
+bool port_x86_64_stack_grow(k_u64_t address)
+{
+    struct task *self = task_self();
+    k_u64_t space = port_x86_64_task_space();
+    k_u64_t floor = PORT_EXEC_BASE + (k_u64_t)PORT_X86_64_USER_STACK_FLOOR_OFFSET;
+    k_u64_t bottom = 0;
+    k_u64_t ceiling = (k_u64_t)PORT_X86_64_USER_STACK_SIZE + (k_u64_t)PORT_X86_64_USER_STACK_ROOM;
+    k_u64_t at;
+
+    if (space == 0 || address < floor || address >= PORT_EXEC_LIMIT) {
+        return false;
+    }
+
+    address &= ~(k_u64_t)(PAGE_SIZE - 1u);
+
+    for (at = floor; at < PORT_EXEC_LIMIT; at += PAGE_SIZE) {
+        if (port_x86_64_paging_phys(space, at) != NULL) {
+            bottom = at;
+            break;
+        }
+    }
+
+    /* No stack, or a page the stack already owns: not a fault of the guard. */
+    if (bottom == 0 || address >= bottom) {
+        return false;
+    }
+
+    /*
+     * The ceiling of the task, applied to the stack as one object: the stack
+     * of a program is the memory it holds in its frames, and a task that
+     * asked for a smaller limit than the room gets the smaller stack.
+     */
+    if (self != NULL) {
+        k_u64_t asked = 0;
+
+        if (task_limit_get(self, KSYS_RLIMIT_MEMORY, &asked) == 0 && asked < ceiling) {
+            ceiling = asked;
+        }
+    }
+
+    if (ceiling > PORT_EXEC_LIMIT) {
+        ceiling = PORT_EXEC_LIMIT;
+    }
+
+    if (address < PORT_EXEC_LIMIT - ceiling) {
+        return false;
+    }
+
+    for (at = address; at < bottom; at += PAGE_SIZE) {
+        if (port_x86_64_paging_map_page(space, at, PORT_X86_64_PAGE_WRITE) == NULL) {
+            return false;
+        }
+    }
+
+    /*
+     * The line of the growth, for a frame that took more than one page. A
+     * stack that grows is a promise of the map and this is the only place it
+     * is visible - the program sees the same address it always had - but a
+     * recursion that walks down a page at a time is how a stack is used and
+     * not news: one line per page of a deep recursion would be a log nobody
+     * reads. A frame of 128 KiB is one line.
+     */
+    if ((bottom - address) > PAGE_SIZE) {
+        klog(K_LOG_LEVEL_INFO,
+             "x86-64: the stack of the program (pid %u) grew by %u page(s) to 0x%08x%08x",
+             (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)((bottom - address) / PAGE_SIZE),
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu));
+    }
+
+    return true;
+}
+
+/*
  * The first code of the program in kernel mode. The task was made by
  * k_port_exec_enter() as an ordinary task of the scheduler; here it takes the
  * address space that belongs to it and drops to ring 3 on its user stack.
@@ -444,6 +535,25 @@ void *k_port_exec_base(void)
 }
 
 /*
+ * The line of a range that is not memory of the program (ADR 0052). The call
+ * that asked answers EFAULT, and the log names the address: a person reads
+ * which pointer of which program was wrong instead of a lone number in a
+ * shell, and the attack suite of `make mmu-smoke` is a reader of this line.
+ */
+static bool range_refused(k_u64_t start, k_size_t size)
+{
+    struct task *self = task_self();
+
+    klog(K_LOG_LEVEL_ERROR,
+         "x86-64: the program (pid %u) named 0x%08x%08x (+%u bytes), which is not memory it owns: "
+         "EFAULT",
+         (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)(start >> 32),
+         (unsigned)(start & 0xFFFFFFFFu), (unsigned)size);
+
+    return false;
+}
+
+/*
  * The edge of the system call on a machine with page tables. The syscall stub
  * runs in ring 0 but under the CR3 of the program that called it, so a user
  * address of that program is readable by the kernel - once every page of the
@@ -474,11 +584,11 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
 
     /* A range that wraps the address space is not a range. */
     if (end < start) {
-        return false;
+        return range_refused(start, size);
     }
 
     if (start < PORT_EXEC_BASE || end > PORT_EXEC_LIMIT) {
-        return false;
+        return range_refused(start, size);
     }
 
     /*
@@ -492,7 +602,7 @@ bool k_port_exec_contains(const void *ptr, k_size_t size)
      */
     for (at = start & ~(k_u64_t)(PAGE_SIZE - 1u); at < end; at += PAGE_SIZE) {
         if (port_x86_64_paging_phys(space, at) == NULL) {
-            return false;
+            return range_refused(start, size);
         }
     }
 
@@ -505,6 +615,22 @@ bool k_port_exec_active(void)
     return port_x86_64_task_is_user();
 }
 
+/*
+ * The window of a copy into the memory of a program (ADR 0052). The processor
+ * of this port may have SMAP, and then the kernel may not read or write a page
+ * of ring 3 until AC is set; the portable kernel opens this around every copy
+ * it makes through a pointer of a program. On a processor without the bit the
+ * pair does nothing, which is why the kernel can call it unconditionally.
+ */
+void k_port_exec_user_access_begin(void)
+{
+    port_x86_64_user_access_begin();
+}
+
+void k_port_exec_user_access_end(void)
+{
+    port_x86_64_user_access_end();
+}
 void k_port_exec_exit(int code)
 {
     task_exit(code);
@@ -518,11 +644,34 @@ void k_port_exec_exit(int code)
  * is then a task that returns from the call at the instruction after it, and
  * the parent returns from this one with the pid.
  */
+/*
+ * The microseconds between two readings of the TSC, for the line of a fork.
+ * `k_port_uptime_us()` of the port counts the ticks of the machine and its
+ * unit is the millisecond; the fork of ADR 0057 is measured in microseconds
+ * and the TSC is the clock of the processor that has them.
+ */
+static k_u64_t fork_microseconds(k_u64_t ticks)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+    k_u64_t hz;
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return ticks;
+    }
+
+    hz = info->cpu_hz;
+
+    return (ticks / hz) * 1000000u + ((ticks % hz) * 1000000u) / hz;
+}
+
 int k_port_fork_copy(struct task *child)
 {
     k_u64_t parent_space = port_x86_64_task_space();
     k_u64_t parent_top = port_x86_64_task_stack_top();
     k_u64_t child_space;
+    k_u64_t started;
+    k_u64_t cloned;
+    k_u32_t shared = 0;
     const void *frame;
     int rc;
 
@@ -538,10 +687,14 @@ int k_port_fork_copy(struct task *child)
         return -1;
     }
 
-    child_space = port_x86_64_paging_space_clone(parent_space);
+    started = port_rdtsc();
+
+    child_space = port_x86_64_paging_space_clone(parent_space, &shared);
     if (child_space == 0) {
         return -2;
     }
+
+    cloned = port_rdtsc();
 
     frame = (const void *)(uintptr_t)(parent_top - PORT_X86_64_SYSCALL_FRAME_SIZE);
     rc = port_x86_64_task_fork_create(child, child_space, frame, PORT_X86_64_SYSCALL_FRAME_SIZE,
@@ -550,6 +703,20 @@ int k_port_fork_copy(struct task *child)
         port_x86_64_paging_space_destroy(child_space);
         return -2;
     }
+
+    /*
+     * The line of the promise of ADR 0057: the call shares the frames of the
+     * parent and copies no byte of them, so a program of 64 MiB is the walk
+     * of its tables and this number is the cost of the call. The clock is the
+     * TSC of the processor, which is the one clock of this machine that has a
+     * microsecond in it (`k_port_uptime_us()` counts the ticks of the timer,
+     * and its unit is the millisecond). The first number is the whole call,
+     * the second the tables of the child alone - the task of the child, its
+     * stack and its frame are the rest.
+     */
+    kinfo("x86-64: fork (pid %u) shares %u page(s) in %u us (tables %u us)", (unsigned)child->pid,
+          (unsigned)shared, (unsigned)fork_microseconds(port_rdtsc() - started),
+          (unsigned)fork_microseconds(cloned - started));
 
     return (int)child->pid;
 }
@@ -1244,6 +1411,16 @@ int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ss
      */
     frame_addr = (old_rsp - (k_u64_t)sizeof(saved)) & ~(k_u64_t)15u;
 
+    /*
+     * The frame is written below the stack pointer, and a program in the
+     * middle of a frame of its own - or one that has just moved RSP into the
+     * room of ADR 0052 - may have no page there yet. The port grows the stack
+     * for the frame it is about to write, the same way it grows it for a
+     * store of the program; an address outside the room is still refused and
+     * the signal still ends the task.
+     */
+    (void)port_x86_64_stack_grow(frame_addr - sizeof(k_u64_t));
+
     if (!k_port_exec_contains((const void *)(uintptr_t)(frame_addr - sizeof(k_u64_t)),
                               sizeof(saved) + sizeof(k_u64_t))) {
         /* The stack of the program cannot carry the frame: the signal is the
@@ -1265,10 +1442,14 @@ int k_port_task_signal_enter(struct task *t, int sig, void (*handler)(int), k_ss
     /*
      * The kernel is on the page tables of the program here (a call of ring 3
      * and an interrupt of ring 3 both keep them), and k_port_exec_contains()
-     * has said that every page of the range is there.
+     * has said that every page of the range is there. The window around the
+     * two copies is what SMAP asks for (ADR 0052): a supervisor store into a
+     * page of ring 3 is refused unless AC is set.
      */
+    port_x86_64_user_access_begin();
     memcpy((void *)(uintptr_t)frame_addr, &saved, sizeof(saved));
     memcpy((void *)(uintptr_t)(frame_addr - sizeof(k_u64_t)), &restorer, sizeof(restorer));
+    port_x86_64_user_access_end();
 
     /*
      * The handler is a function of one argument: the number of the signal.
@@ -1297,7 +1478,9 @@ int k_port_task_signal_leave(struct task *t, k_ssize_t *result)
         return KERR_INVAL;
     }
 
+    port_x86_64_user_access_begin();
     memcpy(&saved, (const void *)(uintptr_t)frame[PORT_FRAME_RSP], sizeof(saved));
+    port_x86_64_user_access_end();
 
     if (saved.magic != PORT_SIGNAL_MAGIC) {
         return KERR_INVAL;
@@ -1340,6 +1523,8 @@ void port_x86_64_signal_tick(k_u64_t *frame)
 
 void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip)
 {
+    struct task *self = task_self();
+
     /*
      * The error code is part of the line because it names the access: the
      * program that fetched an NX page and the one that wrote its own text
@@ -1351,6 +1536,30 @@ void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k
          (unsigned)vector, (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
          (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu), (unsigned)(rip >> 32),
          (unsigned)(rip & 0xFFFFFFFFu));
+
+    /*
+     * The reason, in the words of the ABI (ADR 0052). A page fault is a
+     * program that touched an address it does not own - the page under its
+     * stack, a page of the kernel, the text it may not write, the stack it
+     * may not run - and the answer of a bad address is EFAULT. The line
+     * carries the address twice on purpose: the first line has the number CR2
+     * holds, the second the sentence a person reads. Any other vector is not
+     * an address and does not wear its name: the instruction is named and the
+     * task ends with the same status.
+     */
+    if (vector == 14u) {
+        klog(K_LOG_LEVEL_ERROR,
+             "x86-64: the program (pid %u) touched 0x%08x%08x and that is not a page it may use: "
+             "EFAULT, the task ends, the machine stays",
+             (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)(address >> 32),
+             (unsigned)(address & 0xFFFFFFFFu));
+    } else {
+        klog(K_LOG_LEVEL_ERROR,
+             "x86-64: the program (pid %u) met exception %u at 0x%08x%08x: the task ends, the "
+             "machine stays",
+             (self != NULL) ? (unsigned)self->pid : 0u, (unsigned)vector, (unsigned)(address >> 32),
+             (unsigned)(address & 0xFFFFFFFFu));
+    }
 
     /* A fault of a program is the end of its task, not of the machine. */
     task_exit(255);

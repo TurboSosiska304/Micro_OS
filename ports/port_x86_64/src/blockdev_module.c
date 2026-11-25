@@ -106,11 +106,26 @@ static int module_sync(void *ctx)
     return 0;
 }
 
+/*
+ * The door of the writes of an image of the boot: there is none to open, and
+ * a mount that asks is told so. The volume is the bytes the loader copied to
+ * the memory before the kernel ran (ADR 0056): a write would be a byte of the
+ * RAM and not of a medium, so it is refused at the door and the root stays
+ * read-only, which is what it is.
+ */
+static int module_writes(void *ctx, bool open)
+{
+    K_UNUSED(ctx);
+
+    return open ? KERR_ROFS : 0;
+}
+
 static const struct k_blockdev_ops g_module_ops = {
     .read = module_read,
     .write = module_write,
     .erase = NULL, /* there is nothing to erase: the medium is the image */
     .sync = module_sync,
+    .writes = module_writes,
 };
 
 static struct k_blockdev g_module_device = {
@@ -142,6 +157,20 @@ void port_x86_64_module_init(void)
     if (size < MODULE_MIN_BYTES) {
         kwarn("x86-64: the module %u of the boot is %u byte(s), not a root image", MODULE_INDEX,
               (unsigned)size);
+        return;
+    }
+
+    /*
+     * The window of the programs is a hole in the identity map of every
+     * program's space (ADR 0057): the kernel reads a page of this module
+     * through that map during a system call of a program, and a module that
+     * lies in the physical range of the window would be a page the program's
+     * space does not map. The two loaders of the tree place a module low or
+     * near the top of the first gigabyte, so the refusal is for a loader of
+     * another kind and not for a module of this one.
+     */
+    if (start < (k_u64_t)PORT_X86_64_USER_LIMIT && start + size > (k_u64_t)PORT_X86_64_USER_BASE) {
+        kwarn("x86-64: the root image of the boot is inside the window of the programs, not used");
         return;
     }
 

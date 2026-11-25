@@ -908,6 +908,47 @@ static void test_license_rule(void)
     drop_tree();
 }
 
+/*
+ * The property: the installer reads the flag of the owner from the header of
+ * the image and from nowhere else (ADR 0053). A file that is not an image, or
+ * one too short to hold the flags word, asks for nothing; the bit alone is the
+ * question, and the rest of the header decides nothing about it.
+ */
+static void test_owner_flag(void)
+{
+    k_u8_t image[K_EXEC_HEADER_SIZE + 4];
+
+    ktest_begin("pkg: an image asks for the identity of its owner in its header");
+
+    memset(image, 0, sizeof(image));
+    memcpy(image, "MOX1", 4);
+    image[4] = K_EXEC_VERSION;
+
+    /* An ordinary image: the flags word is zero. */
+    KT_CHECK(!pkg_image_asks_owner(image, sizeof(image)));
+
+    /* The flag of ADR 0053, in the word of the flags and not in the mode:
+     * the image is the same program under another identity. */
+    image[8] = (k_u8_t)K_EXEC_FLAG_SETUID;
+    KT_CHECK(pkg_image_asks_owner(image, sizeof(image)));
+
+    /* The other flag of the format is not this one. */
+    image[8] = (k_u8_t)K_EXEC_FLAG_WX;
+    KT_CHECK(!pkg_image_asks_owner(image, sizeof(image)));
+
+    /* A file that is not an image, a header too short for the word, and no
+     * memory at all are three kinds of "no". */
+    memset(image, 0, sizeof(image));
+    memcpy(image, "ELF", 3);
+    KT_CHECK(!pkg_image_asks_owner(image, sizeof(image)));
+    {
+        static const char short_image[11] = "MOX1\x02\0\0\0";
+
+        KT_CHECK(!pkg_image_asks_owner(short_image, sizeof(short_image)));
+    }
+    KT_CHECK(!pkg_image_asks_owner(NULL, sizeof(image)));
+}
+
 void test_pkg(void)
 {
     microos_ed25519_keypair(g_public, g_secret, g_seed);
@@ -920,4 +961,5 @@ void test_pkg(void)
     test_downgrade_and_dry_run();
     test_offline_and_remove();
     test_license_rule();
+    test_owner_flag();
 }

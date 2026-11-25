@@ -38,6 +38,7 @@ static void run_tests(void *arg)
     test_render();
     test_task();
     test_guard();
+    test_mm();
     test_sched();
     test_sched_queue();
     test_smp();
@@ -62,6 +63,7 @@ static void run_tests(void *arg)
     test_ui();
     test_ui_windows();
     test_ui_palette();
+    test_ui_term();
     test_ui_wm();
     test_fb_ops();
     test_input_debounce();
@@ -86,6 +88,9 @@ static void run_tests(void *arg)
     test_initd();
     test_config();
     test_settings();
+#if MICRO_OS_NET
+    test_dhcp();
+#endif
 #if MICRO_OS_NET && MICRO_OS_NET_HTTP && MICRO_OS_NET_HTTP_SERVER && MICRO_OS_NET_NTP &&           \
     MICRO_OS_NET_MQTT
     test_net();
