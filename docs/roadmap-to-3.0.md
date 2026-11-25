@@ -144,6 +144,28 @@ system any more, and the release says so and drops it.
   broken, and `idf-build` with the budget of the image checked.
 * **Catches**: the drift of a port nobody runs.
 
+## 10a. The machine keeps its own log (2.1)
+
+Proposed by the owner on 25 November 2026, for the release after 2.0: the
+capture of the kernel log that already exists in RAM (`g_capture`, the boot
+until the console exists) and the stream of the console are written to the
+root volume.
+
+* `/etc/bootlog.log` - the captured boot of this start, written once the root
+  is up and mounted read-write; the previous one becomes `bootlog.1.log`, so a
+  machine that does not start still leaves the boot of the attempt before it.
+* `run.log` - the console of the session, appended: a person who reports "it
+  hung" can say where, and a test of the real machine has a transcript.
+* **The rule of the password**: the input of a password is never written -
+  the log keeps what the machine printed, not what a person typed at a prompt
+  of `login`, `su` or `passwd`. A log that leaks a password on a shared machine
+  is worse than no log.
+* A read-only root (the ISO, `boot0p1` of the stick) keeps the log in RAM and
+  says it does; the board has `/etc` in the NVS and no volume to append to, so
+  it keeps the same log in RAM until a store exists.
+* The size is bounded: a rotation at 64 KiB per file, two files, and a line
+  that says a file was rotated.
+
 ## 11. The packages of a person (promised to 3.0)
 
 The person who uses 3.0 must be able to install **base applications from the
