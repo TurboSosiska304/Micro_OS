@@ -90,7 +90,13 @@ switches with Ctrl+T: 78 columns and 24 rows of its window at the small size,
 
 The server paints *rectangles*: a frame of a client, a motion of the pointer,
 a raise and a drag are rectangles of a list of damage, and the loop paints the
-rects of the list and nothing else. A window that another one covers is never
+rects of the list and nothing else. The first frame of a client is one of
+those rectangles and it comes from a process: the spawn of a window makes the
+rectangle of it and not its picture, so the line `wm: the desktop is up` waits
+for the damage of every window before it is printed - a line a person reads as
+"the picture is on the screen", and the gate of the screen reads the same way
+(`desktop_first_frames()` in `programs/wm.c`, with a ceiling for a slow
+client). A window that another one covers is never
 read from its file: the compositor asks for the part of it that is visible.
 The shadow is a colour of the wallpaper at the row it falls on - the palette's
 shadow blended over the gradient - so the bar of depth is the same on the dark

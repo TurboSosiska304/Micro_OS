@@ -134,6 +134,13 @@ struct wm_app {
      * second Alt+F4 or a second square of the bar is a press of nothing, which
      * is the rule of every button of the interface. */
     bool closing;
+
+    /* The client drew once. A window is a process and not a picture: the
+     * spawn makes the rectangle and the program draws into it when it is
+     * ready, so the server says "the desktop is up" only when every window
+     * has sent the damage of a frame. */
+    bool first_frame;
+
     unsigned char inbox[WM_MESSAGE_BYTES];
     unsigned inbox_bytes;
 };
@@ -1341,6 +1348,7 @@ static void app_requests(int index)
 
     switch (message.type) {
     case WM_MSG_DAMAGE:
+        app->first_frame = true;
         damage_add(app->rect.x + message.x, app->rect.y + message.y, message.w, message.h);
         break;
     case WM_MSG_TITLE: {
@@ -2023,6 +2031,64 @@ static int live_windows(void)
     return count;
 }
 
+/*
+ * The first frame of every window, or the ceiling of a slow client.
+ *
+ * A window is a process of its own: `app_spawn` makes its rectangle and the
+ * program draws into the buffer when it is ready, then says so with a message
+ * of damage. The line "the desktop is up" is a promise that the picture is on
+ * the screen - a person reads it, and the gate of the screen reads it - so the
+ * server waits here for the first frame of every window. The ceiling is the
+ * rule of a program that is slow: a window that has not drawn yet is a
+ * rectangle of the desk for a moment, and its frame arrives with the loop.
+ */
+static void desktop_first_frames(unsigned timeout_ms)
+{
+    unsigned started = now_ms();
+
+    for (;;) {
+        struct pollfd entries[WM_APPS];
+        int indices[WM_APPS];
+        int count = 0;
+        int pending = 0;
+        int ready;
+
+        for (int index = 0; index < WM_APPS; index++) {
+            if (!g_apps[index].used) {
+                continue;
+            }
+
+            if (!g_apps[index].first_frame) {
+                pending++;
+            }
+
+            entries[count].fd = g_apps[index].requests;
+            entries[count].events = KSYS_POLLIN;
+            entries[count].revents = 0;
+            indices[count] = index;
+            count++;
+        }
+
+        if (pending == 0 || count == 0 || (unsigned)(now_ms() - started) >= timeout_ms) {
+            break;
+        }
+
+        ready = poll(entries, (nfds_t)count, 16);
+
+        if (ready > 0) {
+            for (int slot = 0; slot < count; slot++) {
+                if (entries[slot].revents != 0) {
+                    app_requests(indices[slot]);
+                }
+            }
+        }
+    }
+
+    /* Whatever arrived is painted, and the windows that did not draw are the
+     * rectangles of the desk for a moment longer. */
+    flush_pending();
+}
+
 int main(int argc, char *const argv[], char *const envp[])
 {
     struct ui_rect bounds;
@@ -2087,6 +2153,9 @@ int main(int argc, char *const argv[], char *const envp[])
     }
 
     desktop_open();
+
+    /* The picture with the windows in it, before the line that says so. */
+    desktop_first_frames(1000u);
 
     say("wm: the desktop is up\n");
 
