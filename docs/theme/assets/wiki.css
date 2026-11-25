@@ -217,6 +217,30 @@ a:hover {
     padding: 8px;
     box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
     z-index: 20;
+
+    /*
+     * Forty-three versions do not fit on a phone, and a menu that is taller
+     * than the screen cannot be reached: the header is sticky and the menu is
+     * absolute, so the list ran off the bottom with no scroll of its own. The
+     * menu scrolls now, and keeps the page from scrolling under the finger at
+     * the end of it.
+     */
+    max-height: min(70vh, 460px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+/* On a phone the menu takes the width of the screen instead of 210 pixels of
+ * a corner that the list of versions would overflow anyway. */
+@media (max-width: 560px) {
+    .versions-menu {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        top: 58px;
+        min-width: 0;
+    }
 }
 
 .versions-group {
