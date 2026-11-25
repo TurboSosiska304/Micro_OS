@@ -56,3 +56,21 @@ gate that boots that medium.
   `acpi=off` as well.
 * The full gate of 2.0.1 again, since the merge of these paths touches the
   kernel, the port and the desk.
+
+## The decision of the owner: ramfs, and all the memory that is free
+
+`/tmp` is a **ramfs**, not a tmpfs with a fixed ceiling, and it is **not
+mounted on the board at all** (the desk of 2.0 is the machine of x86-64; the
+board has about 100 KB of SRAM and no window to draw in).
+
+The size is not a number of megabytes: a file takes blocks from the kernel's
+allocator as it is written and gives them back when it is removed, so the limit
+of a file is the memory that is free - the same promise as the ramfs of Linux.
+One reserve stays out of reach of a person's file, because a machine has to
+keep running when `/tmp` is full: the last megabyte of the heap (a constant of
+the build, `RAMFS_RESERVE_KB`) is not given to a write, which answers
+`ENOSPC` instead, and `df` says how much is free.
+
+A deletion returns its memory at once, `unlink` of an open file keeps the
+blocks until the last descriptor closes, a read past the end of a file answers
+zero, and `truncate` frees the tail. The board does not build the filesystem.
