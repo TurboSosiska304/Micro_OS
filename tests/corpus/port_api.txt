@@ -1,4 +1,4 @@
-# Micro OS — the contract of the platform port, 1.14, as it was recorded.
+# Micro OS — the contract of the platform port, 1.15, as it was recorded.
 #
 # This file is the golden record of kernel/port/*.h: the functions a machine
 # has to implement to be a port of this kernel. `make integrity` compares it
@@ -33,7 +33,7 @@
 # override the default for them and does not fail a port that does not. The
 # wake of a core (ADR 0034) is the third of them: a port without a wake-up
 # interrupt of its own leaves the task to the next tick of the core.
-api 1 14
+api 1 15
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
@@ -83,6 +83,7 @@ k_port_mutex_unlock kernel/port/lock.h
 
 # kernel/port/mem.h — the internal heap and the PSRAM
 k_port_heap_free kernel/port/mem.h
+k_port_memory_limit kernel/port/mem.h
 k_port_heap_total kernel/port/mem.h
 k_port_psram_free kernel/port/mem.h
 k_port_psram_total kernel/port/mem.h

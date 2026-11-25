@@ -2558,7 +2558,7 @@ static void limits_defaults_task(void *arg)
     g_limit_rc[4] = ksys_getlimit(KSYS_RLIMIT_FDS + 1, &g_limit_value[0]);
     g_limit_rc[5] = ksys_getlimit(KSYS_RLIMIT_FDS, NULL);
     g_limit_rc[6] = ksys_setlimit(0, 0);
-    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)KSYS_RLIMIT_MEMORY_MAX + 1u);
+    g_limit_rc[7] = ksys_setlimit(KSYS_RLIMIT_MEMORY, (k_u64_t)task_memory_limit() + 1u);
 }
 
 static void test_limits_defaults(void)
@@ -2578,7 +2578,7 @@ static void test_limits_defaults(void)
         KT_CHECK_INT_EQ(g_limit_rc[0], 0);
         KT_CHECK_INT_EQ(g_limit_rc[1], 0);
         KT_CHECK_INT_EQ(g_limit_rc[2], 0);
-        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_value[0], (int)task_memory_limit());
         KT_CHECK_INT_EQ((int)g_limit_value[1], (int)KSYS_RLIMIT_CPU_MAX);
         KT_CHECK_INT_EQ((int)g_limit_value[2], (int)KSYS_RLIMIT_FDS_MAX);
         KT_CHECK_INT_EQ((int)g_limit_value[3], 0);

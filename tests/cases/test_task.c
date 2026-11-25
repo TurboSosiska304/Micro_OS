@@ -488,7 +488,7 @@ static void test_task_limits(void)
     if (worker != NULL) {
         KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
 
-        KT_CHECK_INT_EQ((int)g_task_limit_value[0], (int)TASK_LIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_task_limit_value[0], (int)task_memory_limit());
         KT_CHECK_INT_EQ((int)g_task_limit_value[2], TASK_MAX_FDS);
         KT_CHECK_INT_EQ(g_task_limit_rc[0], 0);
         KT_CHECK_INT_EQ((int)g_task_limit_value[1], 10);

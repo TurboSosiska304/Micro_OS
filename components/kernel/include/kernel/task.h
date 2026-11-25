@@ -69,8 +69,11 @@ struct k_terminal;
 /*
  * The ceiling of the resources of a task. A limit of a fresh task is its
  * ceiling and may only be lowered (kernel/ksys.h has the ABI of the calls).
- * The memory ceiling is the external pool of the board: one task can never
- * own more than the PSRAM, and the internal RAM stays for the kernel.
+ * The memory ceiling is a fact of the machine and the port answers it
+ * (k_port_memory_limit() in kernel/port/mem.h): the PSRAM of the board, the
+ * window of the programs on x86-64, and the 2 MiB below for a machine whose
+ * programs share the memory of the kernel - the constant here is that last
+ * number and the value KSYS_RLIMIT_MEMORY_MAX names for a program.
  * The CPU ceiling is a 32-bit number of milliseconds, which is the width the
  * accounting of a task has; about 49 days of processor time.
  */
@@ -337,6 +340,10 @@ int task_limit_set(struct task *t, k_u32_t which, k_u64_t value);
 
 /* The descriptors a task may open: its limit, clamped to the table. */
 k_u32_t task_fd_limit(const struct task *t);
+
+/* The ceiling of the memory of a task on this machine, which is the answer of
+ * k_port_memory_limit() and the number a fresh task starts at. */
+k_u64_t task_memory_limit(void);
 
 /* A child of a fork starts with the limits of its parent. */
 void task_limits_inherit(struct task *child, const struct task *parent);
