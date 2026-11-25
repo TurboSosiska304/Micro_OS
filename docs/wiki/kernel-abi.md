@@ -45,8 +45,15 @@ who wants to use the system, not a second copy of the contract.
 | 31 | `sigreturn` | return from a handler (the port's page, not a program) |
 | 32 | `getlimit` | the current memory, CPU or descriptor limit of the task |
 | 33 | `setlimit` | lower one of them |
+| 34 | `rename` | a name of an object inside one filesystem |
+| 35 | `ftruncate` | cut an open file to a size |
+| 36 | `getuid` | the real uid of the task |
+| 37 | `geteuid` | the effective uid of the task |
+| 38 | `getgid` | the gid of the task |
+| 39 | `setuid` | change the uid: root names any, another task its real or saved uid |
+| 40 | `setgid` | change the gid by the rule of one gid |
 
-`34` is the count, not a call. A number that is not in the table is `ENOSYS`;
+`41` is the count, not a call. A number that is not in the table is `ENOSYS`;
 a new call always takes the next free number, and an old one never moves. The
 shell prints the same table with `abi`:
 
@@ -65,7 +72,14 @@ nr    name
 31    sigreturn
 32    getlimit
 33    setlimit
-34 call(s) registered
+34    rename
+35    ftruncate
+36    getuid
+37    geteuid
+38    getgid
+39    setuid
+40    setgid
+41 call(s) registered
 ```
 
 The convention is the one of Linux: the number and six arguments, the result in
@@ -102,7 +116,7 @@ Every argument is checked where it enters, in
 `EFAULT` is the most interesting of them, because it is what a machine with an
 MMU can finally say. On x86-64 the null page, the guard page under the stack,
 the part of the window that was never mapped and a range that runs past
-`0x03000000` are all "not there": the call answers `-14` instead of taking a
+`0x16000000` are all "not there": the call answers `-14` instead of taking a
 page fault in ring 0. `/bin/badptr` is the program of that test - it hands
 `write`, `stat` and `read` a pointer outside the window, a range that crosses
 its end and the guard page, and every call answers 14 while the machine goes on
@@ -137,10 +151,11 @@ x86-64 smoke test runs `/bin/signals` through all of it.
 
 ## Descriptors
 
-Every task has a table of four descriptors, and the descriptor is the number of
-the slot. The open file behind it is a counted description of the kernel: two
-descriptors of one task (`dup2`) and the copies of the parent and the child of
-a fork name one open file, with one position and one set of flags. A
+Every task has a table of sixteen descriptors, and the descriptor is the
+number of the slot. The open file behind it is a counted description of the
+kernel: two descriptors of one task (`dup2`) and the copies of the parent and
+the child of a fork name one open file, with one position and one set of
+flags. A
 descriptor remembers the access it was opened with: reading one opened for
 writing, or writing one opened for reading, is `EBADF` before a filesystem is
 asked. The position lives in the description, so two tasks that opened their
@@ -151,23 +166,27 @@ A directory is opened with `KSYS_O_DIRECTORY` (`0x0800`) and read with
 `EISDIR`, and `readdir` of a file is `ENOTDIR`.
 
 `pipe(fds)` (27) gives two ordinary descriptors, `fds[0]` reading and `fds[1]`
-writing; the pipe is a ring of 256 bytes in the kernel. The end of the writing
-end is the end of the file (a read gives 0), and a write with no reader is
-`EPIPE` - there is no `SIGPIPE` yet, so the error is the whole answer. A wait
-of a pipe is a poll with a bound of half a second and then `EAGAIN`; `lseek`
-of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`. `dup2(oldfd, newfd)` (28)
-makes `newfd` a second descriptor of one open file, closes what was open
-there, and answers `newfd`; a number outside the table is `EBADF`.
-[ADR 0014](../adr/0014-pipes.md) has the design and the limits.
+writing; the pipe is a ring of the port, 64 KiB on x86-64 and 4 KiB on the
+board, taken from the allocator with the pipe (ADR 0035). The end of the
+writing end is the end of the file (a read gives 0), and a write with no
+reader is `EPIPE` - there is no `SIGPIPE` yet, so the error is the whole
+answer. A read of an empty pipe sleeps until the bytes arrive, a write of at
+most `PIPE_BUF` bytes lands whole, and a signal cuts a wait short with
+`EINTR`; `lseek` of a pipe is `ESPIPE` and `readdir` is `ENOTDIR`.
+`dup2(oldfd, newfd)` (28) makes `newfd` a second descriptor of one open file,
+closes what was open there, and answers `newfd`; a number outside the table
+is `EBADF`. [ADR 0014](../adr/0014-pipes.md) has the design and
+[ADR 0035](../adr/0035-the-grain-of-the-io.md) the ring and the wait of 1.6.
 
 ## Limits
 
 A task starts with the ceiling of three resources and may only lower them:
-the memory it holds (2 MiB), the processor time it spends (about 49 days) and
-the descriptors it opens (4). `setlimit` (33) takes a selector
+the memory it holds (2 MiB on the board and the host, the window of the
+programs on x86-64), the processor time it spends (about 49 days) and
+the descriptors it opens (16). `setlimit` (33) takes a selector
 (`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
-current limit to the caller. A raise is `EPERM`: there is one user, uid 0, and
-it gets no exemption, so a program cannot lift its own ceiling.
+current limit to the caller. A raise is `EPERM`: the ceiling belongs to the
+machine, and even root cannot lift a limit.
 
 The memory is the sum of the user blocks of the task - the kernel and the
 system utilities are not charged - and a block over it is 0 from `malloc`
@@ -177,6 +196,14 @@ task is marked with `SIGTERM` (the closest of the four signals to `SIGXCPU`)
 and the default action ends it with 143. The descriptors stop at the limit
 with `EMFILE`: `open`, `pipe` and a `dup2` onto a number at or above it.
 Lowering a limit never closes what is already open.
+
+On the machine with page tables the memory limit is the ceiling of the whole
+address space of a program: `brk` is charged to it as it grows, an anonymous
+mapping is counted when it is made and given back when it is unmapped, and
+the stack of a program stops at it too - a program that lowers its limit to
+128 KiB has a heap, a mapping and a stack that each stop there. A page that
+the program asks for as writable and executable at once is `EINVAL`, not a
+page: a page is code or it is data (ADR 0052).
 
 The library has `microos_getlimit`, `microos_setlimit` and
 `microos_getrlimits`, the shell has `ulimit` to print and lower the limits of
@@ -188,13 +215,21 @@ Every object has nine bits of `rwx` and a uid of fifteen bits, stored in the
 spare bits of its MicroFS record ([`docs/memory.md`](../memory.md#6-the-record-of-an-inode)).
 A new file is `0644`, a new directory `0755`, and the owner is 0.
 
-The system has **one user**, uid 0, and it gets **no exemption of root**: a file
-of mode `0200` cannot be read by the only user of the system either. An object
-owned by uid 0 is judged by the triad of the owner, one owned by any other
-number by the triad of the others, because there is no group here. `open`
-compares its access with the mode before a descriptor exists, so every
-filesystem answers a forbidden open the same way (`EPERM`); `execve` needs the
-`x` bit; `stat` reports and checks nothing, as in POSIX.
+Every task has a real, an effective and a saved **uid** and a **gid**,
+inherited from the task that made it (`getuid` 36 is the real uid, `geteuid`
+37 the effective one that every check reads, `getgid` 38, `setuid` 39,
+`setgid` 40). Root is uid 0 and it passes the triads of read and write: a file
+of mode `0200` is read by root, and one of `0400` is written by it. An object
+owned by the effective uid of the task is judged by the triad of the owner,
+one whose group is the gid of the task by the triad of the group, and every
+other by the triad of the others. The execute bit is the exception: `execve`
+needs an `x` bit for somebody, root included. An image with the setuid flag of
+`MOX1` runs with the identity of the owner of its file for the length of the
+run (ADR 0053). `open` compares its access with the mode before a descriptor
+exists, so every filesystem answers a forbidden open the same way (`EPERM`);
+`stat` reports and checks nothing, as in POSIX. `chmod` and `chgrp` are the owner or root,
+`chown`, `mount` and `umount` are root, and a signal to a task of another uid
+is `EPERM`.
 
 A mode outside the nine bits and an owner outside the fifteen are `EINVAL`, not
 a number cut to fit. `chmod 000` is not expressible: a zero in the record means

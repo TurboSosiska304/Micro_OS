@@ -18,17 +18,17 @@ parentheses is the reason.
 
 | | ESP32 (board) | x86-64 (QEMU) | host (simulator) | null |
 |---|---|---|---|---|
-| shell | UART and TFT | VGA, PS/2, COM1 | stdin/stdout | - |
+| shell | UART and TFT | VGA, PS/2 or USB HID, COM1 | stdin/stdout | - |
 | MicroFS | the `mfs` partition, 5.56 MiB | the disk, or 512 KB of RAM | a file, 512 KB | - |
 | `/proc`, `/dev` | yes | yes | yes | - |
 | `/etc` and its store | files, NVS behind them | files, no store | files, a file per key | - |
 | `execve` | Xtensa code from `progs`, no protection | ring 3, own page tables | `ENOSYS` (a harness) | `ENOSYS` |
 | `fork()` | shared memory | copy on write | shared memory | shared memory |
-| disk | the internal flash | ATA PIO, `ata0` | - | - |
-| network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, HTTP, httpd, DNS, MQTT is off | - | - |
-| panel | ST7789v2 and a copy of the console | VGA text | a renderer into a file | - |
-| MMU | - (the chip has none) | yes: ring 3, NX/W^X | - | - |
-| cores | 2 under FreeRTOS, the kernel on 1 | 2 in the MADT, the kernel on 1 | `MICRO_OS_CPUS`, 1 by default | 1 |
+| disk | the internal flash | `ata0` (bus-master or PIO), `ahci0`, `nvme0`, the stick as `usb0` | - | - |
+| network | WiFi, lwIP, telnet, HTTP, MQTT | virtio-net, e1000e, usbnet, DHCP, DNS, HTTPS, httpd, MQTT is off | - | - |
+| screen | ST7789v2 and a copy of the console | a framebuffer of 1280x800 of the 8x16 font of the PC (Spleen, 160x50, `font.line_gap`), the VGA text as the fallback | a renderer into a file | - |
+| MMU | - (the chip has none) | yes: ring 3, NX/W^X, the policy of ADR 0052, SMEP/SMAP | - | - |
+| cores | 2 under FreeRTOS, the kernel on 1 | 2 in the MADT, both with `KERNEL_SMP` (off by default) | `MICRO_OS_CPUS`, 1 by default | 1 |
 | build | `make idf-build` | `make x86-build` | `make build` | by the host build |
 
 The matrix follows the ports, not a wish: the board has no MMU and its flash is
@@ -77,35 +77,40 @@ turns long mode on.
 
 ```bash
 make x86-build
-make x86-run            # the window: VGA text and the PS/2 keyboard
+make x86-run            # the window: a framebuffer of 1280x800 and the PS/2 keyboard
 make x86-run-serial     # the same machine in a terminal
 make x86-smoke          # boot and check the transcript
 ```
 
 The processors come from the MADT of ACPI, and the boot prints how many the
-firmware describes and how many it runs: `-smp 2` gives
-`2 cpu(s) reported by the firmware, 1 in use`, because the APs wait for the
-trampoline of ADR 0012 that is not written yet. `make x86-smp-build` builds
-the portable kernel with `KERNEL_SMP=ON`.
+firmware describes and how many it runs: a kernel built without `KERNEL_SMP`
+says `2 cpu(s) reported by the firmware, 1 in use` and names the flag, and one
+built with it brings the second processor up through the trampoline of ADR
+0012 (`make x86-smp-smoke`). `make x86-smp-build` builds the portable kernel with
+`KERNEL_SMP=ON`, and the flag is off by default.
 
-What works: the VGA text console and COM1 out of one `k_port_write()`, the
+What works: a framebuffer of 1280x800 in RGB565 through the Bochs VBE
+interface of the VGA (ADR 0023) - a grid of 160x50 cells of the 8x16 font of
+the PC (Spleen), the step of a line from `font.line_gap`, the colours of
+`/etc/console`, and the text mode of the VGA when the card has no such
+interface - COM1 out of one `k_port_write()`, the
 PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
 NX/W^X (the text of the kernel and of a program is read-only code, every data
 page and stack is NX, and the boot audits the tables), the kernel in the
 higher half at `0xFFFFFFFF80000000` (ADR 0007),
 `execve` with `MOX1` images, `fork()` with copy on write, MicroFS on the first
 partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
-owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
-server of TCP and a resolver with a cache (`make x86-net-smoke`). It is the
-machine of [`programs.md`](programs.md) and the proof that the kernel is
+owners, and the network: the ethernet of a laptop (the `e1000e` of an Intel
+I219) or a virtio-net card, ARP, ICMP, UDP, a client and a server of TCP, a
+resolver with a cache and a client of DHCP that takes the address of the
+network and keeps the lease in `/etc/network` (`make x86-net-smoke`). It is
+the machine of [`programs.md`](programs.md) and the proof that the kernel is
 portable.
 
-What does not: the second processor (the list is read, the AP bring-up is the
-blocker of ADR 0012, "The pilot of 1.x"), the key-value store (no `/etc` to
-persist), a second disk, DMA,
-SMAP/SMEP (a documented decision, ADR 0007), and
-the parts of the network that wait for a real link: DHCP, IPv6 and a
-congestion window. The details are in
+What does not: the key-value store (there is no `/etc` that survives a reset),
+Wi-Fi and the touchpad of a laptop, and the parts of the network that
+wait for more than one machine: IPv6, a congestion window, and the PHY of a
+real I219 (the driver of `e1000e` has its plain half). The details are in
 [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
 
 ## host: the tests and the simulator

@@ -1,5 +1,12 @@
 # The 1.1 release
 
+`1.1.2` is the second patch: the shell stops at no limit of a directory, a
+path with `.`/`..` works, and the long help is not cut. `1.1.1` is the
+first patch: the filesystem fixed the data loss of a
+directory that grows, and the console refuses `umount /` and `kill 1`; the
+volume and the ABI do not change. The notes are in
+[the release](../releases/1.1.1.md).
+
 `1.1.0` is the release of the board's last major changes. The ESP32 gets the
 settings of `/etc`, the programs in a partition of their own and an update
 with a rollback; the kernel gets the first phase of many cores. After this

@@ -6,8 +6,12 @@ portability as much as a product:
 | Build | What it produces | Commands | Directory |
 |---|---|---|---|
 | host | the unit tests and the simulator, as a Linux process | `make build`, `make test`, `make sim`, `make smoke` | `build-host/`, `build-asan/`, `build-tsan/` |
-| x86-64 | a bare-metal kernel and its loader, for QEMU | `make x86-build`, `make x86-run`, `make x86-smoke` | `build-x86/` |
-| ESP32 | the firmware of the board, through ESP-IDF v5.3 | `make idf-build`, `make idf-flash`, `make bundle` | `build/` |
+| x86-64 | a bare-metal kernel and its loader, for QEMU | `make x86-build`, `make x86-run`, `make x86-smoke`, `make bundle-x86` | `build-x86/` |
+| ESP32 | the firmware of the board, through ESP-IDF v5.3 | `make idf-build`, `make idf-flash`, `make bundle-board` | `build/` |
+
+`make bundle` packs both machines into `dist/`; the two halves are separate
+targets, so the x86-64 one never needs ESP-IDF and the board one never needs
+QEMU.
 
 The null port (`ports/port_null`) has no build of its own: it is linked into
 the host build as `microos_null_probe`, and the link is the check.
@@ -21,6 +25,7 @@ the host build as `microos_null_probe`, and the link is the check.
 | `python3` | the tools, the checks, ESP-IDF | `python` | `python3` |
 | `qemu-system-x86_64` | running the x86-64 machine | `qemu-system-x86` | `qemu-system-x86` |
 | GTK backend of QEMU | the window of `make x86-run` | `qemu-ui-gtk` | `qemu-system-gui` |
+| `grub-mkrescue` (with `xorriso`, `mtools`) or `limine` | `make x86-iso` | `grub libisoburn mtools` | `grub-pc-bin xorriso mtools` |
 | `clang-format` | `make format`, the format check | `clang-format` | `clang-format` |
 | `valgrind` | the cloud run of the tests, optional | `valgrind` | `valgrind` |
 | `pyserial` | `tools/console.py`, `tools/stream_console.py` | `python3 -m pip install pyserial` | the same |
@@ -70,18 +75,30 @@ a list of commands and checks the transcript. `make clean` removes
 
 ```bash
 make x86-build            # the loader, the kernel and the programs, into build-x86/
+make x86-all              # the complete machine: network, disk and run.sh
+make x86-all-run          # boot it in a window (x86-all-run-serial: a terminal)
+make x86-user             # unpack the release tar and start it, as a person does
+make x86-user-serial      # the same tar in a terminal
 make x86-disk             # build-x86/programs.img: /bin and /etc of MicroFS
-make x86-run              # a QEMU window: VGA text and the PS/2 keyboard
+make x86-run              # a QEMU window: framebuffer 1280x800 and the keyboard
 make x86-run-serial       # the same machine in a terminal (-nographic)
 make x86-smoke            # boot and check the transcript, no window
-make x86-vga-smoke        # check the screen and the keyboard without a display
+make x86-vga-smoke        # check both screens and the keyboard, without a display
 make x86-run-disk         # the window with a disk of its own, kept between runs
 make x86-run-disk-serial  # the same disk in a terminal
 make x86-disk-smoke       # two boots on one image: a file survives both
+make x86-iso              # the BIOS ISO: loader, kernel and root image
+make x86-iso-run          # boot the ISO in a terminal (-nographic)
+make x86-iso-smoke        # boot the ISO and check the shell and /bin
 ```
 
 The build is a CMake project of its own (`ports/port_x86_64`), because the
-kernel there has no libc under it. The machine boots from three files:
+kernel there has no libc under it. The console of the screen draws with the
+8x16 font of the PC - Spleen 8x16 2.3.0 (BSD-2-Clause), generated into
+`ports/port_x86_64/src/font_spleen.c` from the BDF in `third_party/spleen` by
+`tools/spleen_font.py`; it is part of the kernel image, so `tools/bundle.sh`
+puts `LICENSE.spleen` into the x86-64 archive (`docs/licensing.md`). The
+machine boots from three files:
 `build-x86/loader32.elf` (a multiboot loader that QEMU takes with `-kernel`),
 `build-x86/microos64.bin` (the flat kernel image) and
 `build-x86/programs.img` (the disk). The programs of `/bin` are built first
@@ -90,11 +107,35 @@ MicroFS volume of the disk by `tools/mkfs_mfs.c`; the kernel carries no copy
 of a program, and the boot mounts the volume and reads `/bin/hello` with
 `execve`.
 
+`make x86-all` is the machine a person can start without knowing which of
+the builds it is made of: `build-x86-all/` holds `loader32.elf`,
+`microos64.bin`, `x86-all.img` (the disk with `/bin` and `/etc`) and a `run.sh`
+that boots the three with a virtio-net card on the user network of QEMU (port
+8080 forwarded). `X86_SERIAL=1 ./build-x86-all/run.sh` gives the serial
+console and no window.
+
+`make x86-user` closes the loop: it builds that machine and the x86-64 tar,
+then unpacks `dist/MicroOS-x86_64-<version>.tar.gz` into
+`build-x86-user/` and starts `run.sh` from the tar - not from the tree. The
+tar of a release carries the same `loader32.elf`, `microos64.bin`,
+`x86-all.img`, the licenses and the `run.sh`, so what a person downloads is
+what the target starts. `make x86-user-serial` gives the console of the tar
+without a window.
+
+`make x86-user` does not need ESP-IDF: the tar is the `--x86-only` half of
+`tools/bundle.sh`, built by `make bundle-x86`, and nothing of the firmware
+build, esptool or the board takes part in it. `make bundle` is both halves -
+`bundle-board` (the firmware, ESP-IDF) and then `bundle-x86` - so a release
+workflow has one command, and a person who only wants the x86-64 machine has
+one that works without the firmware toolchain.
+
 The display backend is a package of its own in some distributions: the target
 asks QEMU for its list of backends first and prints the command to run when
 the one asked for is missing. `make x86-run X86_DISPLAY=sdl` picks SDL, and
 `make x86-run-serial` is the machine for a box without a display server at
-all.
+all. The window shows the framebuffer of 1280x800 of ADR 0023 (`-vga std`);
+a machine whose card has no Bochs VBE interface keeps the text mode of 80x25,
+which is what `make x86-run` shows with `-vga cirrus`.
 
 The disk is a raw image of 8 MB, made by `make x86-disk`
 (`tools/mkfs_mfs.c`, which links `components/mfs`) and kept in
@@ -103,6 +144,24 @@ The disk is a raw image of 8 MB, made by `make x86-disk`
 not committed; `make clean` does not remove `build-x86/`, so
 `rm -rf build-x86` is the way to start over. The details are in the port's
 README, [`docs/ports/x86_64/README.md`](../ports/x86_64/README.md).
+
+`make uefi-stick` is the medium of a laptop of these years - a firmware of
+UEFI reads the ESP and the machine's disk is the second partition of the same
+stick, a MicroFS volume it writes (the page is [install.md](install.md),
+[ADR 0056](../adr/0056-the-stick-of-a-person-is-a-disk.md)); it needs
+`clang`, `lld`, `sfdisk` and the tools of the volume, and writes
+`build-uefi/stick.img` of 90 MB.
+
+`make x86-iso` is the medium, not the hypervisor: it stages
+`loader32.elf`, `microos64.bin` and `programs.img` into an ISO with an El
+Torito catalogue and asks `grub-mkrescue` (or `limine` when the machine has
+no GRUB) for the boot record. The image is `build-x86-iso/microos.iso`;
+the root image is the second module of the boot, the port mounts its first
+partition as a read-only `/`, and `make x86-iso-smoke` boots it with
+`-cdrom` and no `-kernel`. The tools the build needs are in
+[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md); the root of that medium
+is read-only, and the stick of [install.md](install.md) is the one that keeps a
+file.
 
 ## The ESP32 build
 
@@ -116,7 +175,9 @@ make idf-build     # idf.py -D IDF_TARGET=esp32 build
 make idf-flash     # flash over USB; make idf-flash IDF_PORT=/dev/ttyACM0
 make idf-monitor   # the serial monitor (leave with Ctrl+])
 make idf-size      # the size report of the firmware
-make bundle        # build everything and collect dist/ for distribution
+make bundle        # build both machines and collect dist/ (firmware and x86-64 tar)
+make bundle-board  # the firmware alone into dist/ (needs ESP-IDF)
+make bundle-x86    # the x86-64 tar alone into dist/ (needs no ESP-IDF)
 ```
 
 A first checkout needs the target once. With ESP-IDF exported:
@@ -148,6 +209,7 @@ pins and quirks are in
 
 ```bash
 make integrity   # the bundle, the image headers, the partition table, git, hygiene, format
+make wiki-check  # every link and anchor of docs/wiki
 make format      # reformat the C sources with clang-format
 make ci          # build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity
 ```

@@ -17,7 +17,9 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 |---|---|
 | know what the first major release is and promises | [release-1.0.md](release-1.0.md) |
 | see what 1.1 changed on the board | [release-1.1.md](release-1.1.md) |
+| see what 1.2 brought to x86-64 | [release-1.2.md](release-1.2.md) |
 | see what the system is and run it in ten minutes | [getting-started.md](getting-started.md) |
+| put it on a laptop from a USB stick | [install.md](install.md) |
 | build the host, x86-64 or ESP32 image | [build.md](build.md) |
 | type a command at the prompt | [shell.md](shell.md) |
 | understand the filesystems and `/etc` | [files.md](files.md) |
@@ -28,6 +30,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | understand `exec`, `MOX1` and ring 3 | [programs.md](programs.md) |
 | know which machine does what | [ports.md](ports.md) |
 | bring Micro OS to another machine | [porting.md](porting.md) |
+| port a program of somebody else (zlib, Lua, sbase) | [../porting-programs.md](../porting-programs.md) |
 | move a machine from 0.x to 1.0 | [`docs/migration.md`](../migration.md) |
 | read the syscall contract | [kernel-abi.md](kernel-abi.md) |
 | run the checks | [testing.md](testing.md) |
@@ -39,7 +42,9 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 |---|---|---|
 | **The 1.0 release** | [release-1.0.md](release-1.0.md) | what 1.0 is, promises and does not |
 | **The 1.1 release** | [release-1.1.md](release-1.1.md) | the last major changes of the board, and the first phase of many cores |
+| **The 1.2 release** | [release-1.2.md](release-1.2.md) | the screen of x86-64, the stream and the installer, the ISO, and the ports |
 | **Start here** | [getting-started.md](getting-started.md) | what the system is, the first commands |
+| **Install** | [install.md](install.md) | the stick, the firmware, the first boot, the file that survives the power |
 | **Build and run** | [build.md](build.md) | host, x86-64, ESP32, dependencies |
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |
@@ -47,9 +52,10 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **Screen** | [screen.md](screen.md) | the TFT, the VGA, the framebuffer of 1.2, what a desktop needs |
 | **Network** | [network.md](network.md) | DNS, TCP, HTTP, NTP, the stream and TLS of 1.2 |
 | **Packages** | [pkg.md](pkg.md) | `pkg`, the flags, the repositories, the signature |
-| **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork` |
+| **Programs** | [programs.md](programs.md) | `MOX1`, `/bin`, `exec`, ring 3, `fork`, PCRE2 |
 | **Ports** | [ports.md](ports.md) | ESP32, x86-64, host, null: what runs where |
 | **Porting** | [porting.md](porting.md) | the contract, the bring-up order, the checks |
+| **Porting a program** | [../porting-programs.md](../porting-programs.md) | `third_party/`, the port layer, the archive, the tests, the license |
 | **Kernel and ABI** | [kernel-abi.md](kernel-abi.md) | the calls, the rights, `EFAULT`, contract 1.9 |
 | **Testing** | [testing.md](testing.md) | `make ci`, the smoke tests, the device test |
 | **Troubleshooting** | [troubleshooting.md](troubleshooting.md) | symptom, cause, what to do |

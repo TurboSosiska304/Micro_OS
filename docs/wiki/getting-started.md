@@ -85,6 +85,13 @@ fsck: the volume is consistent
 `make smoke` drives the same simulator with a scripted list of commands and
 checks the transcript; it is the end-to-end test of the host build.
 
+## On a laptop, from a stick
+
+The page for a machine of your own is [install.md](install.md): one USB stick
+of 90 MB, a firmware of UEFI with Secure Boot off, and ten minutes from the
+`dd` to a file that survives the power. The short version of the two machines
+below is what the port is built of; the stick is what you carry.
+
 ## The other two machines
 
 The x86-64 port is the one that proves the kernel is portable, and the only
@@ -93,12 +100,12 @@ machine that runs a program out of a file:
 ```bash
 make x86-build       # the loader, the kernel image and the programs, in build-x86/
 make x86-disk        # build-x86/programs.img: /bin and /etc of MicroFS
-make x86-run         # a QEMU window: VGA text and the PS/2 keyboard
+make x86-run         # a QEMU window: the framebuffer of 1280x800 and the keyboard
 make x86-run-serial  # the same machine on the serial console (-nographic)
 make x86-smoke       # boot it and check the transcript, without a window
 ```
 
-The machine boots from the disk image: `/bin` (sixteen programs) and `/etc`
+The machine boots from the disk image: `/bin` (thirty-one programs) and `/etc`
 are objects of a MicroFS volume that `make x86-disk` writes with the host
 tool `tools/mkfs_mfs.c`, and the boot mounts the volume and runs `/bin/hello`
 through `execve`. The tree is the tree of the other ports - `/bin`, `/etc`,
@@ -144,8 +151,13 @@ A short list, so that nothing here reads as a promise:
   and page tables; the board runs an Xtensa `.mox` without protection; the
   simulator and the null port answer `ENOSYS`, because jumping into an
   arbitrary image inside the test process is not a promise the host can keep.
-* **One user, uid 0.** A file has a mode and an owner, and the mode is checked,
-  but there is no group and no second user.
+* **A uid, a gid and a login of the wire.** A file has a mode, an owner and a
+  group, the mode is checked against the effective uid and the gid of the task
+  and root passes it, a task inherits its credentials from the one that
+  started it, and `login`/`su`/`id`/`groups` change and name them
+  (the accounts are `/etc/passwd`, `/etc/shadow` and `/etc/group`, ADR 0033
+  and ADR 0044). An image may ask for the identity of the owner of its file
+  with the setuid flag of `MOX1` (ADR 0053); there is no setgid bit.
 * **No TLS, and the network is the LAN.** HTTP, MQTT and telnet are plain
   text; there is no HTTPS, no certificate store, no IPv6 and no raw sockets,
   and `httpd` and `telnet` take no password. Keep the machine on the network
