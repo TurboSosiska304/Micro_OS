@@ -110,7 +110,17 @@ microos> kilo /notes.txt
 the port draws through the framebuffer of the firmware
 ([kilo and the terminal](programs.md)).
 
-## 6. Two accounts
+## 6. The network
+
+The image of this page is the **plain machine**: it has no network stack, and
+`netinfo` says `there is no network device` (`wget` is not even a command).
+The wire of 2.0 - DHCP, the Intel NIC, `wget`, `ping`, `telnet` - is in the
+complete machine of `make x86-all`, and a stick written from that build
+(`tools/uefi_stick.py --build build-x86-all`) is the same medium with the
+network. The file of the machine is `/etc/network` (`dhcp 0`, `address`,
+`netmask`, `gateway`, `dns`, one a line); Wi-Fi is in neither build.
+
+## 7. Two accounts
 
 ```text
 microos> cat /etc/passwd
@@ -142,6 +152,9 @@ read by the group and not written by it.
 | `shutdown` does not switch off | `this machine has no software switch-off` | press the power button; the data is flushed already |
 | a file is gone after the power | `root: ... boot0p1` | the machine booted the image of the ESP, not your stick |
 | `kilo: not found in /bin:/bin/ports:/usr/bin` | - | an image older than 1.9; use a 1.9+ release |
+| `netinfo: there is no network device` | that line | this image has no network stack; the complete machine of `make x86-all` has it |
+| `netinfo: e1000e0, link down` | that line | the cable, or the PHY of the port; Wi-Fi is not supported |
+| `dhcp: no server, the fixed address of 1.8` | that line | the LAN has no DHCP server: `kilo /etc/network` with `dhcp 0` and the address |
 
 The full page has the report of a walk through all of this, and
 [troubleshooting.md](troubleshooting.md) has the rest of the system.

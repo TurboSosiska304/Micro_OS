@@ -269,7 +269,52 @@ emulator of this project that is tens of seconds; the console of the serial
 port has none of that cost, and `Ctrl-S`/`Ctrl-Q` are read from the keyboard
 as they are typed.
 
-## 6. Two accounts, one console
+## 6. The network
+
+The image of this page is built as the **plain machine**: the kernel, the
+filesystems, the shell, the programs. It carries no network stack, and the
+machine says so honestly:
+
+```text
+microos> netinfo
+netinfo: there is no network device
+microos> wget http://example.org/x /tmp/x
+wget: command not found. Type 'help' for the list.
+```
+
+The wire of 2.0 - DHCP, the Intel NIC of a laptop, `wget`, `ping`, `telnet` -
+is in the **complete machine**, the build of `make x86-all`, and a stick
+written from that build is the same medium with the network on it (the
+recipe is in "Build the image yourself"). A machine of the complete build
+with a cable says, in the boot and in `netinfo` (these lines are the emulated
+network of the project; a laptop's LAN gives its own numbers):
+
+```text
+e1000e0: 52:54:00:12:34:56, link up
+net: 10.0.2.15/24, gateway 10.0.2.2, dns 10.0.2.3
+dhcp: leased 10.0.2.15 for 86400 s from 10.0.2.2 (t1 43200, t2 75600)
+...
+microos> netinfo
+netinfo: e1000e0, link up
+  mac 52:54:00:12:34:56
+  ip 10.0.2.15/24, gateway 10.0.2.2, dns 10.0.2.3
+  dhcp: leased for 86400 s, 86400 s left (t1 43200, t2 75600), server 10.0.2.2
+microos> ping 10.0.2.2
+ping: 40 bytes from 10.0.2.2, 1 ms
+```
+
+The complete build also listens on TCP 23 with the shell of `telnet` and asks
+for an account of `/etc/passwd`; `telnet off` closes it. The machine belongs
+on the network of its owner and not on the open Internet
+([SECURITY.md](../SECURITY.md)).
+
+A network without a DHCP server leaves the machine with the address of the
+emulator (`10.0.2.15`) and says `dhcp: no server, the fixed address of 1.8`:
+the file of the machine is `/etc/network` (one `name value` a line: `dhcp 0`,
+`address`, `netmask`, `gateway`, `dns`), and `kilo /etc/network` is the editor
+that writes it. There is no Wi-Fi in this release: the card is the cable.
+
+## 7. Two accounts, one console
 
 The machine has the accounts of `/etc/passwd`: `root` and `guest`. The console
 is root; `su - guest` becomes the other person (root becomes anybody without a
@@ -295,7 +340,7 @@ is read by the members of that group and not written by them
 ([ADR 0044](adr/0044-a-session-and-the-group.md), and
 `tests/cases/test_users.c` is the matrix).
 
-## 7. When something does not work
+## 8. When something does not work
 
 Read the console from the top. The table names the symptom, the line that says
 what happened, and the move. "Send this" is what to put in a report: the whole
@@ -314,6 +359,9 @@ answer.
 | a file is gone after the power | `root: the root is mfs on boot0p1` | the machine booted the image of the ESP (see above); the file was written to the memory |
 | `date` names a year that is not yours | `date` | the CMOS battery of the machine, or a firmware whose century register is odd; `date set YYYY-MM-DD HH:MM:SS` writes the clock |
 | `exec: kilo: not found in /bin:/bin/ports:/usr/bin` | - | the image predates 1.9; a release of 1.9 or later carries `/bin/ports` |
+| `netinfo: there is no network device` | that line | this image has no network stack; the complete machine of `make x86-all` has it (section 6) |
+| `netinfo: e1000e0, link down` | that line | the cable, or a port whose PHY does not come up; Wi-Fi is not supported |
+| `dhcp: no server, the fixed address of 1.8` | that line | the LAN has no DHCP server: `kilo /etc/network` with `dhcp 0` and the address of the machine |
 | the boot stops at `usb: the port N is not enabled after its reset` | that line | a controller this port cannot finish; send the `usb:`/`xhci:` lines and the model of the laptop |
 
 Two more moves that solve most of the rest:
@@ -328,16 +376,17 @@ Two more moves that solve most of the rest:
   there and not on the laptop, the difference is the firmware of the laptop,
   and the console of the two is the comparison.
 
-## 8. What this machine does not do yet
+## 9. What this machine does not do yet
 
 The honest list, with the place each item is tracked:
 
 * **the touchpad and the mouse of the laptop** are not read; the keyboard is.
   ([`docs/debts.md`](debts.md))
-* **Wi-Fi** is not there: the wire is the network of this release
+* **Wi-Fi** is in neither build: the wire is the network of this release
   ([`docs/plan-wifi.md`](plan-wifi.md));
-* **TLS** is not in the x86-64 image; `wget` speaks plain HTTP on the LAN
-  ([`docs/debts.md`](debts.md), K12);
+* **the network** is in the complete build and not in the image of this page
+  (section 6), and its certificate store is the bundle of `/etc/ca` of that
+  build ([`docs/wiki/network.md`](wiki/network.md));
 * **the second partition is the root**: no installer adds a partition beside
   the files of a stick, and the image erases the stick it is written to
   ([ADR 0056](adr/0056-the-stick-of-a-person-is-a-disk.md), K12);
@@ -346,7 +395,7 @@ The honest list, with the place each item is tracked:
 * the **board** is another machine: its page is
   [`docs/ports/esp32`](ports/esp32/README.md).
 
-## 9. Build the image yourself
+## 10. Build the image yourself
 
 The same stick, from the sources, on a Linux machine with the tools of the
 table above:
@@ -365,6 +414,19 @@ errors of the build). The file is the same medium the release carries: a
 `make bundle` after `make uefi-stick` copies it into `dist/` as
 `MicroOS-<version>-uefi.img` (`tools/bundle.sh`; without a stick built, the
 bundle has no stick and the ISO alone).
+
+The stick of the **complete** machine - the same medium with the network - is
+the same tool and a build with the network on:
+
+```bash
+cmake -B build-x86-all -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DMICRO_OS_X86_NET=ON -DMICRO_OS_TELNET=ON
+cmake --build build-x86-all --target image uefi
+python3 tools/x86_image.py --image build-x86-all/programs.img --build build-x86-all \
+    --mkfs build-host/tools/microos_mkfs --ports build-ports/programs
+python3 tools/uefi_stick.py --image build-uefi/stick-all.img --build build-x86-all \
+    --mkfs build-host/tools/microos_mkfs --ports build-ports/programs
+```
 
 The gate of the medium proves the promise on the emulated machine: a file is
 written, the power goes, the same bytes boot again and the file is read
