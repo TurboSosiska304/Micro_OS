@@ -167,11 +167,11 @@ def main(argv: list) -> int:
             execs += 1
             report.expect("mmu_text: the program prints where its text is",
                           "the text is at 0x" in text, text)
-            check_death(report, text, "mmu_text", "7", "00000000020", "the text took the write")
+            check_death(report, text, "mmu_text", "7", "0000000010", "the text took the write")
 
             stack = machine.run("exec /bin/mmu_execstack", args.timeout)
             execs += 1
-            check_death(report, stack, "mmu_execstack", "15", "0000000002ff",
+            check_death(report, stack, "mmu_execstack", "15", "0000000015ff",
                         "the stack page executed")
 
             kernel = machine.run("exec /bin/mmu_kernel", args.timeout)
@@ -183,7 +183,7 @@ def main(argv: list) -> int:
 
             stray = machine.run("exec /bin/mmu_stray", args.timeout)
             execs += 1
-            check_death(report, stray, "mmu_stray", "6", "0000000002e00000",
+            check_death(report, stray, "mmu_stray", "6", "0000000014000000",
                         "the stray page took the write")
 
             # --- the two calls that answer and let the program live --------

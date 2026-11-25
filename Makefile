@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -65,6 +65,7 @@ help:
 	@echo "  make x86-run-serial  boot it with the serial console (-nographic)"
 	@echo "  make x86-smoke  boot it and check what it says"
 	@echo "  make mmu-smoke  the policy of a page: the attacks of ADR 0052"
+	@echo "  make fork-smoke  the fork of a program of 64 MiB: a copy of the pages"
 	@echo "  make ports-smoke  the console set of sbase built by the SDK and run on"
 	@echo "                  the machine: the gate of a program nobody rewrote"
 	@echo "  make tty-smoke  kilo, a full-screen editor of somebody else, typed at the"
@@ -234,7 +235,7 @@ wiki-check:
 CI_QEMU := $(shell command -v qemu-system-x86_64 2>/dev/null)
 CI_TARGETS := build test test-asan test-tsan test-minimal test-valgrind test-smp smoke coverage
 ifneq ($(CI_QEMU),)
-CI_TARGETS += x86-smoke mmu-smoke x86-root-smoke usb-smoke ports-smoke
+CI_TARGETS += x86-smoke mmu-smoke fork-smoke x86-root-smoke usb-smoke ports-smoke
 endif
 # The boot of the firmware needs QEMU and the firmware: a machine with one and
 # not the other is a machine of the BIOS gate alone.
@@ -245,7 +246,7 @@ CI_TARGETS += reproducible integrity
 
 ci: $(CI_TARGETS)
 ifeq ($(CI_QEMU),)
-	@echo "ci: qemu-system-x86_64 not found, x86-smoke, mmu-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
+	@echo "ci: qemu-system-x86_64 not found, x86-smoke, mmu-smoke, fork-smoke, x86-root-smoke, usb-smoke and ports-smoke are skipped"
 endif
 
 sim: build
@@ -455,6 +456,15 @@ MMU_CPU ?= qemu64,+smep,+smap
 mmu-smoke: x86-disk
 	python3 tools/x86_mmu_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD) \
 		--cpu $(MMU_CPU) --timeout 240
+
+# The fork of a real process (ADR 0057, lane M2 of 2.0): a program of 64 MiB
+# maps and touches its memory, forks, writes four pages in the child and reads
+# the same four in the parent. The pages are shared by the fork and copied on
+# the write, the time of the call is the line of the port, and the ceiling is
+# the millisecond the release promises.
+fork-smoke: x86-disk
+	python3 tools/x86_fork_smoke.py --image $(X86_PROGRAMS_IMAGE) --build $(X86_BUILD) \
+		--timeout 240
 
 # The gate of a program nobody rewrote (lane M3 of 1.8, docs/ports-table.md):
 # the console set of sbase - true, false, echo, basename, dirname, pwd,
