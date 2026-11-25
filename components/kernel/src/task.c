@@ -145,7 +145,7 @@ int task_limit_set(struct task *t, k_u32_t which, k_u64_t value)
 
     switch (which) {
     case KSYS_RLIMIT_MEMORY:
-        if (value > t->limit_memory || value > (k_u64_t)TASK_LIMIT_MEMORY_MAX) {
+        if (value > t->limit_memory || value > k_port_memory_limit()) {
             rc = KERR_PERM;
         } else {
             t->limit_memory = value;
@@ -396,6 +396,11 @@ void task_limits_inherit(struct task *child, const struct task *parent)
     k_port_exit_critical();
 }
 
+k_u64_t task_memory_limit(void)
+{
+    return k_port_memory_limit();
+}
+
 bool task_memory_fits(const struct task *t, k_size_t size)
 {
     k_u64_t used;
@@ -606,7 +611,7 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->suid = (creator != NULL) ? creator->suid : 0u;
         t->gid = (creator != NULL) ? creator->gid : 0u;
         t->mem_priority = KMM_PRIORITY_USER;
-        t->limit_memory = TASK_LIMIT_MEMORY_MAX;
+        t->limit_memory = k_port_memory_limit();
         t->limit_cpu_ms = TASK_LIMIT_CPU_MAX;
         t->limit_fds = TASK_LIMIT_FDS_MAX;
         t->cpu_stamp_ms = k_sched_uptime_ms();

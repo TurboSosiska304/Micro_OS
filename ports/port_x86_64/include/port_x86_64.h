@@ -406,10 +406,12 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
  * handle is its physical address, which is also the value that goes into CR3.
  * Create builds the kernel map with the user window; clone copies the tables
  * of a parent and turns the pages of the window into copy-on-write pages of
- * both; destroy gives the tables and the frames back. Zero means failure.
+ * both, and answers in `out_shared` the number of frames the two spaces now
+ * share (ADR 0057); destroy gives the tables and the frames back. Zero means
+ * failure.
  */
 k_u64_t port_x86_64_paging_space_create(void);
-k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3);
+k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3, k_u32_t *out_shared);
 void port_x86_64_paging_space_destroy(k_u64_t cr3);
 
 /*
@@ -822,9 +824,22 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
  * The arena is outside the heap (which stops at 32 MiB) and inside the
  * identity map of the kernel, which is how the kernel writes an image the
  * program will read.
+ *
+ * 2.0 makes the window 96 MiB: a program of 64 MiB is the one the fork of
+ * `make fork-smoke` copies on write (ADR 0057), and the image, the heap, the
+ * mappings and the room of the stack have to fit beside it. The arena below
+ * it is the same size, and it sits at 64 MiB where the kernel heap (which
+ * stops at 32 MiB) never reaches; a machine needs 160 MiB of RAM for the
+ * window to be whole, and the boot says so when the memory map of the machine
+ * does not have it.
+ *
+ * The window is also a hole in the identity map of every program's space: the
+ * kernel reaches physical 256 MiB - 352 MiB only through the tables of the
+ * kernel, so a module of the boot (the root image of an ISO) may not live
+ * there, and src/blockdev_module.c refuses one that does.
  */
-#define PORT_X86_64_USER_BASE 0x02000000u  /* 32 MiB */
-#define PORT_X86_64_USER_LIMIT 0x03000000u /* 48 MiB */
+#define PORT_X86_64_USER_BASE 0x10000000u  /* 256 MiB */
+#define PORT_X86_64_USER_LIMIT 0x16000000u /* 352 MiB */
 #define PORT_X86_64_USER_PHYS 0x04000000u  /* 64 MiB */
 
 /* The bytes of the arena: the window, which is the same size, is mapped onto

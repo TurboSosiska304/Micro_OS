@@ -322,7 +322,7 @@ int main(int argc, char *const argv[], char *const envp[])
 
         /* A heap past the stack of the program is the refusal of the call
          * and not a panic: the answer is ENOMEM and the break stays. */
-        if (brk((void *)0x03000000ul) != 0) {
+        if (brk((void *)0x16000000ul) != 0) {
             say_number("mmap: the heap past the stack says ", errno);
         } else {
             say("mmap: the heap grew past the stack\n");

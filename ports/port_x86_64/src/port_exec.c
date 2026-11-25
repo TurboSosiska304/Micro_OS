@@ -33,6 +33,7 @@
 #include "kernel/mm.h"
 #include "kernel/port.h"
 #include "kernel/port/exec.h"
+#include "kernel/port/time.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "port_x86_64.h"
@@ -643,11 +644,34 @@ void k_port_exec_exit(int code)
  * is then a task that returns from the call at the instruction after it, and
  * the parent returns from this one with the pid.
  */
+/*
+ * The microseconds between two readings of the TSC, for the line of a fork.
+ * `k_port_uptime_us()` of the port counts the ticks of the machine and its
+ * unit is the millisecond; the fork of ADR 0057 is measured in microseconds
+ * and the TSC is the clock of the processor that has them.
+ */
+static k_u64_t fork_microseconds(k_u64_t ticks)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+    k_u64_t hz;
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return ticks;
+    }
+
+    hz = info->cpu_hz;
+
+    return (ticks / hz) * 1000000u + ((ticks % hz) * 1000000u) / hz;
+}
+
 int k_port_fork_copy(struct task *child)
 {
     k_u64_t parent_space = port_x86_64_task_space();
     k_u64_t parent_top = port_x86_64_task_stack_top();
     k_u64_t child_space;
+    k_u64_t started;
+    k_u64_t cloned;
+    k_u32_t shared = 0;
     const void *frame;
     int rc;
 
@@ -663,10 +687,14 @@ int k_port_fork_copy(struct task *child)
         return -1;
     }
 
-    child_space = port_x86_64_paging_space_clone(parent_space);
+    started = port_rdtsc();
+
+    child_space = port_x86_64_paging_space_clone(parent_space, &shared);
     if (child_space == 0) {
         return -2;
     }
+
+    cloned = port_rdtsc();
 
     frame = (const void *)(uintptr_t)(parent_top - PORT_X86_64_SYSCALL_FRAME_SIZE);
     rc = port_x86_64_task_fork_create(child, child_space, frame, PORT_X86_64_SYSCALL_FRAME_SIZE,
@@ -675,6 +703,20 @@ int k_port_fork_copy(struct task *child)
         port_x86_64_paging_space_destroy(child_space);
         return -2;
     }
+
+    /*
+     * The line of the promise of ADR 0057: the call shares the frames of the
+     * parent and copies no byte of them, so a program of 64 MiB is the walk
+     * of its tables and this number is the cost of the call. The clock is the
+     * TSC of the processor, which is the one clock of this machine that has a
+     * microsecond in it (`k_port_uptime_us()` counts the ticks of the timer,
+     * and its unit is the millisecond). The first number is the whole call,
+     * the second the tables of the child alone - the task of the child, its
+     * stack and its frame are the rest.
+     */
+    kinfo("x86-64: fork (pid %u) shares %u page(s) in %u us (tables %u us)", (unsigned)child->pid,
+          (unsigned)shared, (unsigned)fork_microseconds(port_rdtsc() - started),
+          (unsigned)fork_microseconds(cloned - started));
 
     return (int)child->pid;
 }

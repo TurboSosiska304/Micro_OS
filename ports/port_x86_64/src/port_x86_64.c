@@ -1747,6 +1747,18 @@ k_size_t k_port_heap_total(void)
     return g_heap_total;
 }
 
+/*
+ * The memory of one task on this machine is the window of the programs: the
+ * heap, the mappings and the room of the stack all live in it, so the ceiling
+ * is the window below the restorer and nothing more could be used anyway
+ * (ADR 0057). The 96 MiB of it are what a program of 64 MiB needs beside the
+ * image, the stack and the vectors of the entry.
+ */
+k_u64_t k_port_memory_limit(void)
+{
+    return (k_u64_t)PORT_X86_64_USER_TOP - (k_u64_t)PORT_X86_64_USER_BASE;
+}
+
 k_size_t k_port_heap_free(void)
 {
     return g_heap_free;
@@ -2151,7 +2163,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 14u
+#define PORT_API_MINOR 15u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");

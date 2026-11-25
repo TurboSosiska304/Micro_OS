@@ -369,7 +369,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 14u
+#define PORT_API_MINOR 15u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");
@@ -544,6 +544,14 @@ k_size_t k_port_heap_free(void)
 #else
     return 0;
 #endif
+}
+
+/* The ceiling of a task on the host is the one of every machine without a
+ * window of its own: the 2 MiB the tests and the simulator have always had
+ * (ADR 0057). */
+k_u64_t k_port_memory_limit(void)
+{
+    return (k_u64_t)TASK_LIMIT_MEMORY_MAX;
 }
 
 k_size_t k_port_heap_total(void)

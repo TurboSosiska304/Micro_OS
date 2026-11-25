@@ -101,6 +101,9 @@ PROGRAMS = [
     "mmu_stray",
     "mmu_stack",
     "mmu_io",
+    # The fork of a program of 64 MiB (ADR 0057): the pages are shared by the
+    # fork and copied on the write, and the gate reads the time of the call.
+    "forksmoke",
     "zcat",
     "pcre2grep",
     "lua",

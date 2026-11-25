@@ -571,7 +571,7 @@ EXPECTED = [
     # it (ADR 0020); the line is the proof that the check ran and passed.
     "Micro OS: image signature ok (sha-256, ed25519)",
     board_line(),
-    "port: x86_64, contract 1.14",
+    "port: x86_64, contract 1.15",
     "[ ok ] sched",
     "subsystem(s) ready",
     "the kernel is up",
@@ -1960,7 +1960,11 @@ def check(output: str) -> list:
     limited = answer("exec /bin/limit")
     expect(
         "a program reads the memory limit of its task",
-        "limit: the memory limit is 2097152 bytes" in limited,
+        # The ceiling is a fact of the machine (ADR 0057): the window of the
+        # programs on x86-64 and not the 2 MiB of a machine without one.
+        re.search(r"limit: the memory limit is (\d+) bytes", limited) is not None
+        and int(re.search(r"limit: the memory limit is (\d+) bytes", limited).group(1))
+        >= 64 * 1024 * 1024,
         limited,
     )
     expect(
@@ -3284,13 +3288,13 @@ def check(output: str) -> list:
     # mapped, so a recursion that runs past the limit of the task meets that
     # page and not the data of the program. The fault is a store into a page
     # that is not present (error 0x6: not present, write, ring 3) in the
-    # guard page at 0x02eef000 - and the program never prints the line after
+    # guard page at 0x15eef000 - and the program never prints the line after
     # the recursion.
     stack = answer("exec /bin/crash stack")
     expect("the stack overrun program starts", "PROGRAM: crash overruns the stack" in stack)
     expect(
         "the guard page under the stack takes the program down",
-        "the program faulted: vector 14 at 0x0000000002ee" in stack
+        "the program faulted: vector 14 at 0x0000000015ee" in stack
         and "error 0x0000000000000006" in stack,
         stack[-400:],
     )

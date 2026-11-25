@@ -82,6 +82,9 @@ struct port_task {
      * context comes back.
      */
     bool copying;
+    /* The pages this context copied on write after a fork (ADR 0057): the
+     * count of the child of a fork that is in the log when it ends. */
+    k_u32_t copied_pages;
     /*
      * The x87 and XMM state of the context, saved when it leaves the CPU and
      * loaded when it comes back (see commit_switch()). The extra bytes are
@@ -825,6 +828,15 @@ void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
     }
 }
 
+void port_x86_64_task_cow_copy(void)
+{
+    struct port_task *current = this_cpu()->current;
+
+    if (current != NULL && current->copied_pages != 0xFFFFFFFFu) {
+        current->copied_pages++;
+    }
+}
+
 bool port_x86_64_task_is_user(void)
 {
     struct port_task *current = this_cpu()->current;
@@ -1017,6 +1029,20 @@ void k_port_task_exit(int code)
     k_u64_t flags;
 
     K_UNUSED(code);
+
+    /*
+     * The count of the pages the task copied on write after a fork goes to
+     * the log now and not at every fault: a line per page would be inside the
+     * output of a program that prints, and one line at the end of the task is
+     * the count a person reads (ADR 0057).
+     */
+    if (dead != NULL && dead->copied_pages != 0u) {
+        struct task *self_task = k_port_task_current();
+
+        kinfo("x86-64: the task (pid %u) copied %u page(s) on write",
+              (self_task != NULL) ? (unsigned)self_task->pid : 0u, (unsigned)dead->copied_pages);
+        dead->copied_pages = 0u;
+    }
 
     /*
      * The stack of the task cannot be released from here: the block holds

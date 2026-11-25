@@ -66,6 +66,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-run-serial` | the machine on the serial console and no window |
 | `make x86-vga-smoke` | check the framebuffer and the text mode with a screenshot, and the keyboard |
 | `make x86-disk-smoke` | two boots on one disk image: a file survives both (57 checks) |
+| `make fork-smoke` | the fork of a real process (ADR 0057): a program of 64 MiB maps and touches its memory, forks, writes four pages in the child and reads the same four in the parent. The pages are shared by the call and copied on the first write, the port's line names the pages shared and the time of the call (under a millisecond), and the child's exit names the pages it copied (13 checks) |
 | `make mmu-smoke` | the policy of a page (ADR 0052): a program that writes its text, executes its stack, writes the kernel, touches a page it does not own, maps a writable and executable page or grows past the limit of its task - each ends the program or is refused - plus the stack that grows by 128 KiB, a copy that sleeps, and the W^X audit of every program of the run. The machine is `-cpu qemu64,+smep,+smap`; `MMU_CPU=qemu64` runs the same suite on the supervisor bit alone (43 checks) |
 | `make ports-smoke` | the gate of a program nobody rewrote: thirteen utilities of sbase built by **the SDK** and not by the CMake of the tree, byte for byte the release (`tests/ports/upstream.txt`), run on the machine out of `/bin/ports`, plus `popen`/`pclose`/`system` (1.8, `docs/ports-table.md`) |
 | `make ahci-smoke` | the image on the SATA controller of a chipset (q35): the volume of `ahci0p1` is mounted read-only, a write is refused by the rule of ADR 0041, a volume of btrfs is refused at the mount, and the SHA-256 of each image is the same before and after its boot (21 checks) |
@@ -90,7 +91,7 @@ sudo gpasswd -a $USER uucp    # log out and back in afterwards
 | `make x86-user` | build the complete machine and its release tar, unpack the tar and start it (the artifact a person downloads; no ESP-IDF needed) |
 | `make x86-user-serial` | the same tar with the serial console and no window |
 | `make bundle-x86` | the tar of the x86-64 machine alone into `dist/`, without the firmware build |
-| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `mmu-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
+| `make ci` | `build`, `test`, `test-asan`, `test-tsan`, `test-minimal`, `test-smp`, `smoke`, `coverage`, `x86-smoke`, `mmu-smoke`, `fork-smoke`, `x86-root-smoke`, `usb-smoke` and `ports-smoke` when QEMU is there, `reproducible`, `integrity` — run it before pushing; the cloud adds valgrind, `ahci-smoke`, `nvme-smoke` and the firmware |
 
 The same build by hand:
 

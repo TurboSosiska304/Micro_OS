@@ -160,6 +160,20 @@ void port_x86_64_module_init(void)
         return;
     }
 
+    /*
+     * The window of the programs is a hole in the identity map of every
+     * program's space (ADR 0057): the kernel reads a page of this module
+     * through that map during a system call of a program, and a module that
+     * lies in the physical range of the window would be a page the program's
+     * space does not map. The two loaders of the tree place a module low or
+     * near the top of the first gigabyte, so the refusal is for a loader of
+     * another kind and not for a module of this one.
+     */
+    if (start < (k_u64_t)PORT_X86_64_USER_LIMIT && start + size > (k_u64_t)PORT_X86_64_USER_BASE) {
+        kwarn("x86-64: the root image of the boot is inside the window of the programs, not used");
+        return;
+    }
+
     g_module_base = (const k_u8_t *)(uintptr_t)start;
     g_module_sectors = (k_u32_t)(size / MFS_BLOCK_SIZE);
     g_module_device.sectors = g_module_sectors;

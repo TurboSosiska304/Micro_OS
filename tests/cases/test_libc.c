@@ -1090,7 +1090,7 @@ static void test_limits(void)
         KT_CHECK_INT_EQ(task_wait(worker->pid, NULL, 2000), 0);
 
         KT_CHECK_INT_EQ(g_limit_rc[0], 0);
-        KT_CHECK_INT_EQ((int)g_limit_set.memory, (int)KSYS_RLIMIT_MEMORY_MAX);
+        KT_CHECK_INT_EQ((int)g_limit_set.memory, (int)task_memory_limit());
         KT_CHECK_INT_EQ((int)g_limit_set.cpu_ms, (int)KSYS_RLIMIT_CPU_MAX);
         KT_CHECK_INT_EQ((int)g_limit_set.fds, (int)KSYS_RLIMIT_FDS_MAX);
         KT_CHECK_INT_EQ(g_limit_rc[1], 0);

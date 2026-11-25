@@ -15,7 +15,7 @@
  */
 #include "prog.h"
 
-#define MMU_STRAY_ADDRESS 0x02E00000ul
+#define MMU_STRAY_ADDRESS 0x14000000ul
 
 int mmu_stray_main(int argc, char *const argv[])
 {
