@@ -249,9 +249,11 @@ Open items from `docs/roadmap.md`:
 
 ## Subagents
 
-A subagent runs on a **free model of the tariff** (`opencode-go/*-free`), with
-two exceptions only: the owner assigned a model to that agent, or the owner
-asked for the model of the main session. The brief names the files, the
+**Every** subagent runs on a **free model of the tariff** (`opencode-go/*-free`;
+the list is `tools.opencode.models(type: "chat")` filtered by a zero price),
+the named agents of `.opencode/agents/` included - their `model:` field says
+it. The only exception is an instruction from the owner for that run: "use
+this model" or "the same model as yours". The brief names the files, the
 constraints and the command that decides "done"; the answer is a report, not a
 transcript.
 

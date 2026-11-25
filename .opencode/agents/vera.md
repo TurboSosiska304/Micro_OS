@@ -1,5 +1,6 @@
 ---
 description: Вера — userland: libc, программы, порты чужих утилит, пакеты, shell
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#c78aff"
 steps: 120

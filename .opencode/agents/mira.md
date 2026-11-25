@@ -1,5 +1,6 @@
 ---
 description: Мира — ядро и память: планировщик, ожидания, MMU, guard-страницы, задачи
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#4ea3ff"
 steps: 120

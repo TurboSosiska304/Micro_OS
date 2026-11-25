@@ -1,7 +1,7 @@
 ---
 description: The lead of many cores - AP bring-up, per-core state, LAPIC/IOAPIC/IPI, locking
 mode: all
-model: opencode-go/deepseek-v4.1-flash
+model: opencode-go/hy4-flash-free
 color: "#ff4444"
 steps: 160
 permissions:
