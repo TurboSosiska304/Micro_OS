@@ -104,7 +104,7 @@ def build_esp(image: str, build_dir: str, esp_mb: int, verbose: bool) -> int:
 
 
 def build_volume(image: str, build_dir: str, mkfs: str, volume_mb: int, second: str,
-                 verbose: bool) -> int:
+                 ports: str | None, verbose: bool) -> int:
     """The second partition: a MicroFS volume of this system, or a foreign one."""
     if not os.path.isfile(mkfs):
         print(f"missing {mkfs}: run make build", file=sys.stderr)
@@ -123,6 +123,7 @@ def build_volume(image: str, build_dir: str, mkfs: str, volume_mb: int, second: 
             volumes=STICK_VOLUMES,
             journal=True,
             volume_only=True,
+            ports=ports,
             verbose=verbose,
         )
 
@@ -190,6 +191,9 @@ def main(argv: list) -> int:
                         help="the size of the volume (24)")
     parser.add_argument("--second", choices=("mfs", "fat32"), default="mfs",
                         help="the volume of the second partition (default: mfs)")
+    parser.add_argument("--ports", default=None, metavar="DIR",
+                        help="the programs of the SDK into /bin/ports of the volume "
+                        "(default: none; `make uefi-stick` passes build-ports/programs)")
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -207,7 +211,7 @@ def main(argv: list) -> int:
         print("the ESP of the stick is not written", file=sys.stderr)
         return 1
 
-    if build_volume(volume, args.build, args.mkfs, args.volume_mb, args.second,
+    if build_volume(volume, args.build, args.mkfs, args.volume_mb, args.second, args.ports,
                     args.verbose) != 0:
         print("the volume of the stick is not written", file=sys.stderr)
         return 1

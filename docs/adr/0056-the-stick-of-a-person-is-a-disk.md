@@ -144,14 +144,17 @@ goes), and boots the same bytes again. The checks are the promise:
   the writes and `/proc/mounts` says `usb0p2 / mfs rw`;
 * `write /persist.txt the-stick-remembers` answers with the bytes, the
   SHA-256 of the medium changes, and the second boot reads the text back;
+* the volume of the stick carries `/bin/ports` - the programs of the SDK
+  (`kilo` and the console set of sbase) are on the medium a person installs,
+  and not only in the disk image of `make x86-disk`;
 * `fsck` of the second boot says the volume is consistent;
 * the negative half: a stick whose second partition is FAT32 (a volume of
   another system) is not taken for a root. The machine boots the image of the
   ESP, the root is `boot0p1` read-only, the write is refused, and the SHA-256
   of the stick is the same before and after.
 
-Twenty checks, about a minute, on a machine with OVMF. It is not part of
-`make ci`: it needs the firmware and QEMU's USB controller.
+Twenty-one checks, about a minute, on a machine with OVMF. It is not part
+of `make ci`: it needs the firmware and QEMU's USB controller.
 
 ### 6. What it costs
 
@@ -160,7 +163,7 @@ Twenty checks, about a minute, on a machine with OVMF. It is not part of
 | ESP of the stick | 64 MiB (FAT32 minimum is 48) |
 | volume of the machine | 24 MiB (the tree is about 10) |
 | the stick image | 90 MB |
-| the gate | 20 checks, two boots and one foreign boot, about a minute |
+| the gate | 21 checks, two boots and one foreign boot, about a minute |
 
 The volume is smaller than the 5 GiB of the disk of the release on purpose:
 a stick of a person is a rescue and a demonstration of the machine, and the
