@@ -139,7 +139,7 @@ two builds do not produce the same bytes. A release passes the key:
 
 `make x86-smoke` checks both answers: the normal boot accepts the image, and a
 kernel with one changed byte, a kernel without a trailer and a kernel signed
-by another key are each refused by the loader before `board: qemu_x86_64`
+by another key are each refused by the loader before `board: x86_64`
 appears. The tests call the same verifier on the host
 (`tests/cases/test_sign.c`), with the vectors of RFC 8032 and FIPS 180-4.
 
@@ -156,7 +156,7 @@ and loads the kernel. The build of the other policy is a directory of its own:
 
 `make x86-smoke` boots the signed kernel on the open loader (it is the same
 check), then an unsigned kernel and a kernel with a changed byte: each prints
-the warning and reaches `board: qemu_x86_64` and `the kernel is up`. The
+the warning and reaches `board: x86_64` and `the kernel is up`. The
 strict loader refuses the same bytes, which is what the signature checks of
 the smoke test already prove. The setting exists for a development machine
 whose image is not signed yet; it does not make a damaged image correct, and
