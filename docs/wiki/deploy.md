@@ -13,7 +13,10 @@ release candidate or a feature branch. The development pages follow
 (`docs/wiki/`) and the link check; it does not carry the site.
 
 The site is a **project page**, so its address and the prefix of every path is
-fixed by the repository, not by a domain:
+fixed by the repository, not by a domain. A wiki is a wiki: it stays at
+`turbososiska304.github.io/Micro_OS/`, ugly and informative, and any borrowed
+name of the project belongs to the landing page alone (the owner's decision,
+25 November 2026):
 
 ```
 https://turbososiska304.github.io/Micro_OS/
