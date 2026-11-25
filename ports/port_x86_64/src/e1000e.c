@@ -16,12 +16,28 @@
  * (EXTEN clear) at reset, and a stack of one segment in flight has nothing to
  * gain from a descriptor that carries a checksum it will not use.
  *
- * The memory of the rings is the memory of the kernel: the heap of the port
- * is the identity map of the first gigabyte (ADR 0032 §1), so the address of
- * a descriptor is the address the device wants and port_x86_64_bus_phys() is
- * the one place that says so. The window of the registers is behind the BAR
- * and sits above that map, so it is mapped into the top 2 GiB of the kernel
- * before the first read, as the SATA controller and the NVMe disk are.
+ * The memory of the rings is the memory of the kernel: the port keeps its
+ * kernel in the identity map of the first gigabyte (ADR 0032 §1), so the
+ * address of a descriptor is the address the device wants and
+ * port_x86_64_bus_phys() is the one place that says so. The window of the
+ * registers is behind the BAR and sits above that map, so it is mapped into
+ * the top 2 GiB of the kernel before the first read, as the SATA controller
+ * and the NVMe disk are.
+ *
+ * The rings are arrays of the kernel and not blocks of the heap. The init of
+ * this driver is among the last things the port does before the timer, and a
+ * driver that asks the allocator for its rings is a driver that can wait on a
+ * lock of a machine that has no task yet - one class of hanging that a boot
+ * of a card does not have to carry at all.
+ *
+ * The waits of this file are deadlines of the time stamp counter, not counts
+ * of `pause`. The init runs before `port_x86_64_interrupts_init()`, where
+ * `k_port_uptime_ms()` is a zero that never moves, but the TSC was measured
+ * against the PIT at the start of the boot and it moves from the first
+ * instruction. Every step of the init has a hard budget (`E1000_WAIT_MS`), so
+ * a card that does not answer is one line of the log, a `return`, and a
+ * machine that goes on to its shell: a wire that does not answer is not a
+ * boot that stops.
  */
 #include "port_x86_64.h"
 
@@ -86,12 +102,16 @@ static const k_u16_t g_e1000_ids[] = {
 #define E1000_RAL0 0x5400u
 #define E1000_RAH0 0x5404u
 
-/* The control register: the software reset, and the bit that forces the link
- * up instead of letting the card negotiate it. */
+/* The control register: the software reset, the bit that forces the link up
+ * instead of letting the card negotiate it, and the bit that makes the card
+ * stop being the master of the bus before it is reset. The status register
+ * says whether the master is still there. */
 #define E1000_CTRL_SLU 0x00000040u
+#define E1000_CTRL_GIO_MASTER_DISABLE 0x00000004u
 #define E1000_CTRL_RST 0x04000000u
 
 #define E1000_STATUS_LU 0x00000002u
+#define E1000_STATUS_GIO_ENABLE 0x00000008u
 
 /* The NVM read: the address goes out, the done bit comes back, the word is in
  * the upper half of the register. The fields of this register are the ones of
@@ -161,16 +181,43 @@ struct e1000_tx_desc {
  * asks for, which is also the size of the map. */
 #define E1000_WINDOW_SIZE 0x20000u
 
-/* The waits of this file are counted and not measured: the init of the driver
- * runs before the timer of the machine (src/port_x86_64.c), where the clock of
- * the port is still at zero, so a deadline of k_port_uptime_ms() would never
- * pass and a card that did not answer would hold the boot for ever. The budget
- * is far above what a card of QEMU or of a laptop needs for one register. */
-#define E1000_WAIT_COUNT 100000u
+/*
+ * The budget of one step of the init, in real milliseconds. The waits of this
+ * file are counted in nothing else: the TSC is the clock of the boot and a
+ * step that spends the budget is a card that is not answering.
+ */
+#define E1000_WAIT_MS 200u
+
+/* The master of the bus has to be quiet before the reset, and the card says
+ * so in the status register within a few microseconds of a real card. */
+#define E1000_MASTER_WAIT_MS 100u
+
+/*
+ * The fallback of a machine whose TSC was not calibrated (the PIT of a
+ * firmware that owns it): a count of pauses, ~25 nanoseconds each, so this is
+ * about eighty milliseconds of patience on a processor of any age. It only
+ * has to end.
+ */
+#define E1000_PAUSE_BUDGET 4000000u
 
 /* The send path runs with the timer of the machine behind it, so the wait for
  * a descriptor the card gave back is a deadline of the clock. */
 #define E1000_TX_TIMEOUT_MS 100u
+
+/*
+ * The power management capability of the configuration space: the status word
+ * says whether the function has a list of capabilities at all, the byte at
+ * 0x34 is the first of them, and a power capability is identified by 0x01
+ * with the power state in the lowest two bits of the control word four bytes
+ * after its head (PCI PM 1.2 §3.2).
+ */
+#define PCI_STATUS_REG 0x06u
+#define PCI_STATUS_CAP_LIST 0x0010u
+#define PCI_CAP_POINTER 0x34u
+#define PCI_CAP_ID_POWER 0x01u
+#define PCI_PM_CSR_POWER_MASK 0x0003u
+#define PCI_PM_CSR_D0 0x0000u
+#define PCI_CAP_GUARD 48u /* the longest list a function may have, as a guard */
 
 static volatile k_u32_t *g_regs;
 static k_u8_t g_mac[6];
@@ -192,6 +239,65 @@ static k_u64_t g_rx_dropped;
 /* The operations the stack reads once the card is up (the bottom of this
  * file): the driver registers them from the init, which is above them. */
 static const struct port_x86_64_nic_ops g_e1000_ops;
+
+/* --- the clock of the waits ----------------------------------------------- */
+
+/*
+ * The clock of the init is the time stamp counter. The port measured it
+ * against the PIT before it made its own page tables (src/port_x86_64.c,
+ * "the calibration of the processor clock"), so it is the one clock that runs
+ * in the window between the boot and the timer. A machine whose measurement
+ * failed answers zero, and every wait of this file then falls back to a count
+ * of pauses: slower than the time asked for, and finite.
+ */
+static k_u64_t e1000_tsc_span_ms(k_u32_t ms)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return 0u;
+    }
+
+    return (info->cpu_hz / 1000u) * (k_u64_t)ms;
+}
+
+/* The milliseconds between a reading of the TSC and now; zero on a machine
+ * whose frequency is not known. */
+static k_u32_t e1000_ms_since(k_u64_t start)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return 0u;
+    }
+
+    return (k_u32_t)(((port_rdtsc() - start) * 1000u) / info->cpu_hz);
+}
+
+/* Spend `ms` milliseconds on the TSC, or on the count of pauses of a machine
+ * without one. A reset of a card of this family is milliseconds of the
+ * silicon, and a driver that reads the register file while it is in the reset
+ * is a driver that reads an answer the card is not giving yet. */
+static void e1000_delay_ms(k_u32_t ms)
+{
+    k_u64_t span = e1000_tsc_span_ms(ms);
+    k_u64_t start;
+    k_u32_t pauses;
+
+    if (span == 0u) {
+        for (pauses = 0; pauses < ms * 40000u; pauses++) {
+            __asm__ volatile("pause");
+        }
+
+        return;
+    }
+
+    start = port_rdtsc();
+
+    while (port_rdtsc() - start < span) {
+        __asm__ volatile("pause");
+    }
+}
 
 /* --- the register file ---------------------------------------------------- */
 
@@ -232,37 +338,111 @@ static bool e1000_window_ready(void)
     return port_x86_64_paging_kernel_present((k_u64_t)(uintptr_t)g_regs & ~(k_u64_t)0xFFFu);
 }
 
+/*
+ * Wait until `mask` of the word at `offset` is `set` (or clear), or the budget
+ * of the step runs out. The last word read is handed back either way, and
+ * `spent_ms` is the time the wait took when the machine has a clock to say it
+ * (zero on one whose TSC is unknown).
+ */
+static bool e1000_wait_bit(k_u16_t offset, k_u32_t mask, bool set, k_u32_t budget_ms,
+                           k_u32_t *value, k_u32_t *spent_ms)
+{
+    k_u64_t span = e1000_tsc_span_ms(budget_ms);
+    k_u64_t start = port_rdtsc();
+    k_u32_t pauses = 0;
+
+    for (;;) {
+        k_u32_t answer = e1000_read(offset);
+
+        if (((answer & mask) != 0u) == set) {
+            if (value != NULL) {
+                *value = answer;
+            }
+
+            if (spent_ms != NULL) {
+                *spent_ms = e1000_ms_since(start);
+            }
+
+            return true;
+        }
+
+        if (span != 0u) {
+            if (port_rdtsc() - start >= span) {
+                break;
+            }
+        } else if (pauses++ >= budget_ms * (E1000_PAUSE_BUDGET / E1000_WAIT_MS)) {
+            break;
+        }
+
+        __asm__ volatile("pause");
+    }
+
+    if (value != NULL) {
+        *value = e1000_read(offset);
+    }
+
+    if (spent_ms != NULL) {
+        *spent_ms = span != 0u ? e1000_ms_since(start) : budget_ms;
+    }
+
+    return false;
+}
+
+static bool e1000_wait_set(k_u16_t offset, k_u32_t mask, k_u32_t budget_ms, k_u32_t *value,
+                           k_u32_t *spent_ms)
+{
+    return e1000_wait_bit(offset, mask, true, budget_ms, value, spent_ms);
+}
+
+static bool e1000_wait_clear(k_u16_t offset, k_u32_t mask, k_u32_t budget_ms, k_u32_t *value,
+                             k_u32_t *spent_ms)
+{
+    return e1000_wait_bit(offset, mask, false, budget_ms, value, spent_ms);
+}
+
 /* --- the NVM -------------------------------------------------------------- */
 
 /*
  * One word of the NVM. The card of this family keeps its MAC in the first
  * three words, and the register completes the read before the next
- * instruction on QEMU; the loop is for a card of a person, where the read is
- * a few microseconds of the flash behind the controller.
+ * instruction on QEMU; the wait is for a card of a person, where the read is
+ * a few microseconds of the flash behind the controller and the card of a
+ * laptop with the management engine awake is slower still. The budget is
+ * `E1000_WAIT_MS` and a card that spends it is a card that does not answer.
  */
 static bool e1000_nvm_read(k_u8_t address, k_u16_t *value)
 {
-    k_u32_t count = E1000_WAIT_COUNT;
+    k_u32_t answer = 0u;
 
     e1000_write(E1000_EERD, ((k_u32_t)address << E1000_EERD_SHIFT) | E1000_EERD_START);
 
-    for (;;) {
-        k_u32_t answer = e1000_read(E1000_EERD);
-
-        if ((answer & E1000_EERD_DONE) != 0u) {
-            *value = (k_u16_t)(answer >> 16);
-            return true;
-        }
-
-        if (count-- == 0u) {
-            return false;
-        }
-
-        __asm__ volatile("pause");
+    if (!e1000_wait_set(E1000_EERD, E1000_EERD_DONE, E1000_WAIT_MS, &answer, NULL)) {
+        kerror("e1000e0: the NVM did not answer the word %u (EERD 0x%08x)", (unsigned)address,
+               (unsigned)answer);
+        return false;
     }
+
+    *value = (k_u16_t)(answer >> 16);
+
+    return true;
 }
 
-static bool e1000_read_mac(k_u8_t mac[6])
+/* A MAC of all zeroes and one of all ones are what a card without an NVM
+ * answers: neither names a station. */
+static bool e1000_mac_valid(const k_u8_t mac[6])
+{
+    if ((mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) == 0u) {
+        return false;
+    }
+
+    if ((mac[0] & mac[1] & mac[2] & mac[3] & mac[4] & mac[5]) == 0xFFu) {
+        return false;
+    }
+
+    return true;
+}
+
+static bool e1000_read_mac_nvm(k_u8_t mac[6])
 {
     k_u16_t word;
     k_size_t i;
@@ -276,56 +456,75 @@ static bool e1000_read_mac(k_u8_t mac[6])
         mac[i * 2u + 1u] = (k_u8_t)(word >> 8);
     }
 
-    /* A MAC of all zeroes and one of all ones are what a card without an NVM
-     * answers: neither names a station. */
-    if ((mac[0] | mac[1] | mac[2] | mac[3] | mac[4] | mac[5]) == 0u) {
+    return e1000_mac_valid(mac);
+}
+
+/*
+ * The second door to the station: the filter the reset loaded. The card
+ * copies the address out of its NVM into RA0 itself, and a laptop whose
+ * management engine holds the flash busy answers that register while it does
+ * not answer EERD. The address bits are the ones the driver writes back into
+ * the same register, so a station read here is a station the card knows.
+ */
+static bool e1000_read_mac_filter(k_u8_t mac[6])
+{
+    k_u32_t ral;
+    k_u32_t rah;
+
+    if (!g_mapped) {
         return false;
     }
 
-    if ((mac[0] & mac[1] & mac[2] & mac[3] & mac[4] & mac[5]) == 0xFFu) {
+    ral = e1000_read(E1000_RAL0);
+    rah = e1000_read(E1000_RAH0);
+
+    if ((rah & E1000_RAH_AV) == 0u) {
         return false;
     }
 
-    return true;
+    mac[0] = (k_u8_t)(ral & 0xFFu);
+    mac[1] = (k_u8_t)((ral >> 8) & 0xFFu);
+    mac[2] = (k_u8_t)((ral >> 16) & 0xFFu);
+    mac[3] = (k_u8_t)((ral >> 24) & 0xFFu);
+    mac[4] = (k_u8_t)(rah & 0xFFu);
+    mac[5] = (k_u8_t)((rah >> 8) & 0xFFu);
+
+    return e1000_mac_valid(mac);
 }
 
 /* --- the rings ------------------------------------------------------------ */
 
-/* A block of the heap, aligned up to `alignment`: the descriptor rings are
- * read by the device and its addresses are the ones the heap gave, so the
- * alignment is a property of the format and not a preference. The block
- * itself is never freed: the rings live as long as the machine does. */
-static void *e1000_alloc(k_size_t size, k_size_t alignment)
-{
-    k_u8_t *raw = (k_u8_t *)k_port_alloc(size + alignment, false);
-    k_u64_t address;
+/*
+ * The memory of the rings and of the buffers, as arrays of the kernel. The
+ * alignment is a property of the format of the descriptor - the card reads a
+ * ring of 128-byte lines - and a static array is aligned by the compiler
+ * without an allocator, without a lock and without a failure path: the bytes
+ * are there before the init runs, and the address the card is given is the
+ * identity map of them (ADR 0032 §1).
+ */
+#define E1000_RING_ALIGNMENT 128u
 
-    if (raw == NULL) {
-        return NULL;
-    }
-
-    address = ((k_u64_t)(uintptr_t)raw + (k_u64_t)alignment - 1u) & ~((k_u64_t)alignment - 1u);
-
-    memset((void *)(uintptr_t)address, 0, size);
-
-    return (void *)(uintptr_t)address;
-}
+static struct e1000_rx_desc g_rx_descriptors[E1000_RX_DESCRIPTORS]
+    __attribute__((aligned(E1000_RING_ALIGNMENT)));
+static struct e1000_tx_desc g_tx_descriptors[E1000_TX_DESCRIPTORS]
+    __attribute__((aligned(E1000_RING_ALIGNMENT)));
+static k_u8_t g_rx_buffer_memory[E1000_RX_DESCRIPTORS * E1000_BUFFER_SIZE]
+    __attribute__((aligned(16)));
+static k_u8_t g_tx_buffer_memory[E1000_BUFFER_SIZE] __attribute__((aligned(16)));
 
 static bool e1000_rings_alloc(void)
 {
     k_size_t i;
 
-    g_rx_ring = (struct e1000_rx_desc *)e1000_alloc(
-        (k_size_t)E1000_RX_DESCRIPTORS * sizeof(struct e1000_rx_desc), 128u);
-    g_tx_ring = (struct e1000_tx_desc *)e1000_alloc(
-        (k_size_t)E1000_TX_DESCRIPTORS * sizeof(struct e1000_tx_desc), 128u);
-    g_rx_buffers = (k_u8_t *)e1000_alloc((k_size_t)E1000_RX_DESCRIPTORS * E1000_BUFFER_SIZE, 16u);
-    g_tx_buffer = (k_u8_t *)e1000_alloc(E1000_BUFFER_SIZE, 16u);
+    g_rx_ring = g_rx_descriptors;
+    g_tx_ring = g_tx_descriptors;
+    g_rx_buffers = g_rx_buffer_memory;
+    g_tx_buffer = g_tx_buffer_memory;
 
-    if (g_rx_ring == NULL || g_tx_ring == NULL || g_rx_buffers == NULL || g_tx_buffer == NULL) {
-        kerror("e1000e0: no memory for the rings");
-        return false;
-    }
+    memset(g_rx_ring, 0, sizeof(g_rx_descriptors));
+    memset(g_tx_ring, 0, sizeof(g_tx_descriptors));
+    memset(g_rx_buffers, 0, sizeof(g_rx_buffer_memory));
+    memset(g_tx_buffer, 0, sizeof(g_tx_buffer_memory));
 
     for (i = 0; i < E1000_RX_DESCRIPTORS; i++) {
         g_rx_ring[i].address = port_x86_64_bus_phys(g_rx_buffers + i * (k_size_t)E1000_BUFFER_SIZE);
@@ -359,6 +558,64 @@ static void e1000_rings_start(void)
     e1000_write(E1000_TDLEN, E1000_TX_DESCRIPTORS * (k_u32_t)sizeof(struct e1000_tx_desc));
     e1000_write(E1000_TDH, 0u);
     e1000_write(E1000_TDT, 0u);
+}
+
+/* --- the power state of the card ------------------------------------------ */
+
+/*
+ * A function of the bus that the firmware left in D3hot does not decode its
+ * window of memory: a read of a register of it answers all ones (or hangs the
+ * root port of a machine whose link is off), and the reset of a card that is
+ * asleep wakes nothing. A driver of a laptop therefore puts the card back into
+ * D0 through the power management capability before it touches a register,
+ * and every machine of QEMU answers the same walk: the list is absent on a
+ * function without the capability, and the card is D0 already.
+ */
+static void e1000_power_d0(const struct port_x86_64_pci_device *card)
+{
+    k_u16_t status = port_x86_64_pci_read16(card, PCI_STATUS_REG);
+    k_u8_t pointer;
+    k_u8_t guard;
+
+    if ((status & PCI_STATUS_CAP_LIST) == 0u) {
+        kinfo("e1000e: the card has no list of capabilities, the power state is the firmware's");
+        return;
+    }
+
+    pointer = (k_u8_t)(port_x86_64_pci_read32(card, PCI_CAP_POINTER) & 0xFCu);
+
+    for (guard = 0; guard < PCI_CAP_GUARD && pointer >= 0x40u; guard++) {
+        k_u32_t head = port_x86_64_pci_read32(card, pointer);
+
+        if ((k_u8_t)(head & 0xFFu) == PCI_CAP_ID_POWER) {
+            k_u8_t csr_offset = (k_u8_t)(pointer + 4u);
+            k_u16_t csr = port_x86_64_pci_read16(card, csr_offset);
+            k_u16_t state = (k_u16_t)(csr & PCI_PM_CSR_POWER_MASK);
+
+            if (state != PCI_PM_CSR_D0) {
+                /* A card of a laptop that the firmware left asleep does not
+                 * decode its window of memory, and its reset wakes nothing.
+                 * The write of a state leaves the other bits of the word
+                 * alone; a device that was in D3hot wants ten milliseconds of
+                 * the silicon before its window answers again (PCI PM 1.2
+                 * §5.6.1). */
+                kinfo("e1000e: the firmware left the card in D%u (PMCSR 0x%04x)", (unsigned)state,
+                      (unsigned)csr);
+
+                port_x86_64_pci_write16(card, csr_offset, (k_u16_t)(csr & ~PCI_PM_CSR_POWER_MASK));
+                e1000_delay_ms(10);
+                csr = port_x86_64_pci_read16(card, csr_offset);
+            }
+
+            kinfo("e1000e: the power state of the card is D%u (PMCSR 0x%04x)",
+                  (unsigned)(csr & PCI_PM_CSR_POWER_MASK), (unsigned)csr);
+            return;
+        }
+
+        pointer = (k_u8_t)((head >> 8) & 0xFCu);
+    }
+
+    kinfo("e1000e: the list of capabilities names no power capability");
 }
 
 /* --- the init of the card ------------------------------------------------- */
@@ -445,21 +702,69 @@ static bool e1000_map(const struct port_x86_64_pci_device *card)
     return true;
 }
 
-static bool e1000_reset(void)
+/*
+ * The card stops being the master of the bus before it is reset, and that is
+ * not a courtesy. The datasheet of this family - the 82574 of QEMU and every
+ * ICH and PCH part after it - is explicit about the price of skipping the
+ * step: "Prevent the PCI-E bus from sticking if there is no TLP connection on
+ * the last TLP read/write transaction when MAC is reset". A card that the
+ * firmware of a laptop left receiving frames is a card with a transaction in
+ * flight, and a reset in the middle of it is a bus of the root port that
+ * never completes another cycle: the next read of the register file never
+ * returns, and the machine stays on with the last line of the log and no
+ * panic. That is the shape of the report from the laptop, and this is the
+ * step its boot was missing.
+ *
+ * The master bit of the command register goes first (the function stops
+ * beginning transactions of its own), then the GIO master of the card, and
+ * the status register says when the last one is gone. The wait is bounded
+ * like every other wait of this file, and a card that keeps the bit up is a
+ * line of the log and a reset that is attempted anyway: a firmware that does
+ * not implement the bit leaves the machine where an older driver left it.
+ */
+static void e1000_master_off(const struct port_x86_64_pci_device *card)
 {
-    k_u32_t count = E1000_WAIT_COUNT;
+    k_u32_t status = 0u;
+    k_u32_t spent = 0u;
+
+    port_x86_64_pci_write16(
+        card, PCI_COMMAND,
+        (k_u16_t)(port_x86_64_pci_read16(card, PCI_COMMAND) & ~PCI_COMMAND_BUS_MASTER));
+
+    e1000_write(E1000_CTRL, e1000_read(E1000_CTRL) | E1000_CTRL_GIO_MASTER_DISABLE);
+
+    if (e1000_wait_clear(E1000_STATUS, E1000_STATUS_GIO_ENABLE, E1000_MASTER_WAIT_MS, &status,
+                         &spent)) {
+        kinfo("e1000e: the master of the bus is off in %u ms (STATUS 0x%08x)", (unsigned)spent,
+              (unsigned)status);
+    } else {
+        kwarn("e1000e: the master of the bus did not go off in %u ms (STATUS 0x%08x), reset anyway",
+              (unsigned)E1000_MASTER_WAIT_MS, (unsigned)status);
+    }
+}
+
+static bool e1000_reset(k_u32_t *spent_ms)
+{
+    k_u32_t ctrl = 0u;
 
     e1000_write(E1000_IMC, 0xFFFFFFFFu);
 
     e1000_write(E1000_CTRL, e1000_read(E1000_CTRL) | E1000_CTRL_RST);
 
-    while ((e1000_read(E1000_CTRL) & E1000_CTRL_RST) != 0u) {
-        if (count-- == 0u) {
-            kerror("e1000e0: the card did not come out of its reset");
-            return false;
-        }
+    /*
+     * The reset of a card of this family is milliseconds of the silicon, and
+     * a read of the register file while it runs is a read of a device that is
+     * not answering yet: the driver of Linux sleeps here for the same reason.
+     * The delay is a real time and not a count of pauses, because a count of
+     * pauses is a different length on every processor and on a card that is
+     * behind the management engine it is far too short.
+     */
+    e1000_delay_ms(10);
 
-        __asm__ volatile("pause");
+    if (!e1000_wait_clear(E1000_CTRL, E1000_CTRL_RST, E1000_WAIT_MS, &ctrl, spent_ms)) {
+        kerror("e1000e0: the card did not come out of its reset in %u ms (CTRL 0x%08x)",
+               (unsigned)E1000_WAIT_MS, (unsigned)ctrl);
+        return false;
     }
 
     /* The link is forced up and the receive and transmit halves stay off
@@ -505,32 +810,81 @@ static void e1000_start(void)
     (void)e1000_read(E1000_ICR);
 }
 
+/*
+ * The init of the card, one step and one line of the log at a time. Every
+ * line names the step that the line before it left behind, so a boot that
+ * stops on this card says on its screen which register it was asking, and a
+ * step that runs out of its budget returns: the wire is unavailable and the
+ * machine goes on to its shell.
+ */
 void port_x86_64_e1000e_init(void)
 {
     struct port_x86_64_pci_device card;
+    k_u32_t spent = 0u;
+    k_u32_t ctrl = 0u;
+    k_u32_t status = 0u;
 
     if (!e1000_probe(&card)) {
+        kinfo("e1000e: no card of the family on the PCI bus");
         return;
     }
 
+    kinfo("e1000e: the card is at %02x:%02x.%x", (unsigned)card.bus, (unsigned)card.slot,
+          (unsigned)card.function);
+
+    e1000_power_d0(&card);
+
     port_x86_64_pci_enable(&card, PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER);
+
+    kinfo("e1000e: the command register is 0x%04x",
+          (unsigned)port_x86_64_pci_read16(&card, PCI_COMMAND));
 
     if (!e1000_map(&card)) {
         return;
     }
 
-    if (!e1000_reset()) {
+    status = e1000_read(E1000_STATUS);
+    ctrl = e1000_read(E1000_CTRL);
+
+    kinfo("e1000e: the card before the reset: STATUS 0x%08x, CTRL 0x%08x", (unsigned)status,
+          (unsigned)ctrl);
+
+    e1000_master_off(&card);
+
+    if (!e1000_reset(&spent)) {
         return;
     }
 
-    if (!e1000_read_mac(g_mac)) {
-        kerror("e1000e0: the NVM of the card does not name a MAC");
-        return;
+    /* The reset of the MAC leaves the command register alone, and the master
+     * of the bus is the one the rings of this driver are given back. */
+    port_x86_64_pci_enable(&card, PCI_COMMAND_MEMORY | PCI_COMMAND_BUS_MASTER);
+
+    kinfo("e1000e: reset ok in %u ms, CTRL 0x%08x", (unsigned)spent,
+          (unsigned)e1000_read(E1000_CTRL));
+
+    if (!e1000_read_mac_nvm(g_mac)) {
+        /* The NVM did not name the station. The filter the reset loaded is
+         * the card's own copy of it, and a card that answers there is a card
+         * of a wire; a card that answers nowhere is a line of the log and a
+         * machine that goes on without it. */
+        if (!e1000_read_mac_filter(g_mac)) {
+            kerror("e1000e0: the NVM and the filter of the card name no MAC");
+            return;
+        }
+
+        kwarn("e1000e0: the NVM of the card did not answer, the MAC is the one of its filter");
     }
+
+    kinfo("e1000e: mac ok, %02x:%02x:%02x:%02x:%02x:%02x", (unsigned)g_mac[0], (unsigned)g_mac[1],
+          (unsigned)g_mac[2], (unsigned)g_mac[3], (unsigned)g_mac[4], (unsigned)g_mac[5]);
 
     if (!e1000_rings_alloc()) {
         return;
     }
+
+    kinfo("e1000e: rings ok, the receive ring at 0x%08x (phys 0x%08x), %u descriptors",
+          (unsigned)(uintptr_t)g_rx_ring, (unsigned)port_x86_64_bus_phys(g_rx_ring),
+          (unsigned)E1000_RX_DESCRIPTORS);
 
     e1000_filter_set();
     e1000_rings_start();
@@ -538,6 +892,10 @@ void port_x86_64_e1000e_init(void)
 
     g_link = (e1000_read(E1000_STATUS) & E1000_STATUS_LU) != 0u;
     g_present = true;
+
+    kinfo("e1000e: start ok, RCTL 0x%08x, TCTL 0x%08x, STATUS 0x%08x",
+          (unsigned)e1000_read(E1000_RCTL), (unsigned)e1000_read(E1000_TCTL),
+          (unsigned)e1000_read(E1000_STATUS));
 
     kinfo("e1000e0: %02x:%02x:%02x:%02x:%02x:%02x, %s", (unsigned)g_mac[0], (unsigned)g_mac[1],
           (unsigned)g_mac[2], (unsigned)g_mac[3], (unsigned)g_mac[4], (unsigned)g_mac[5],

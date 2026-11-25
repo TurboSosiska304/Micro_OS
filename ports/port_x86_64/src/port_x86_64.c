@@ -34,6 +34,7 @@
 #include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
 #include "port_x86_64_e1000e.h"
+#include "port_x86_64_net.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_xhci.h"
 
@@ -2704,6 +2705,13 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
      */
     port_x86_64_e1000e_init();
     port_x86_64_net_init();
+
+    /* One line after the two drivers of the wire: a boot that stops in the
+     * network of a machine says on its screen whether the card came up or
+     * the stack did not, and a machine without a card says that the shell is
+     * the whole of its network. */
+    kinfo("x86-64: the wire is %s",
+          port_x86_64_nic_name() != NULL ? port_x86_64_nic_name() : "none, the shell is local");
 
     /* Last, because it is the point of no return: from here the timer fires
      * every millisecond and the kernel has to be able to take it. */

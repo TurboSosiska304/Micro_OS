@@ -266,9 +266,22 @@ static const struct port_x86_64_nic_ops g_vio_ops;
 
 void port_x86_64_net_init(void)
 {
+    kinfo("net: the boot asks the bus for the card of this machine");
+
+    if (port_x86_64_nic_present()) {
+        /* The card of the laptop took the wire before this call (the e1000e
+         * is probed first, src/port_x86_64.c), and the first registration is
+         * the one the stack reads: the card of virtio is of another machine
+         * and asking for it would only be a walk of the bus that cannot
+         * change the answer. */
+        kinfo("net: the wire is %s, the card of virtio is not asked", port_x86_64_nic_name());
+        return;
+    }
+
     if (!vio_probe()) {
         /* No card: the boot goes on. The stack asks this file for a frame
          * and gets "no", which is the network of a machine without one. */
+        kinfo("net: no card of virtio on the bus, the machine has no wire");
         return;
     }
 
@@ -283,6 +296,8 @@ void port_x86_64_net_init(void)
           (unsigned)g_vio_mac[4], (unsigned)g_vio_mac[5], g_vio_link ? "link up" : "no link");
 
     port_x86_64_nic_register(&g_vio_ops);
+
+    kinfo("net: the wire is %s", port_x86_64_nic_name());
 }
 
 /* --- the frames ----------------------------------------------------------- */
