@@ -12,6 +12,8 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-25
+
 ### The release
 
 - 2.0.0 "Composition": the machine of its user (`docs/plan-2.0.md`) - the policy

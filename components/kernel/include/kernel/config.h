@@ -19,8 +19,8 @@
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
  * the tag is vX.Y.Z or vX.Y.Z-suffix, and the integrity check of a release
- * compares the three numbers with the tag. */
-#define KERNEL_VERSION_SUFFIX "-rc1"
+ * compares the three numbers with the tag. 2.0.0 has dropped it. */
+#define KERNEL_VERSION_SUFFIX ""
 
 /* Size of the in-kernel log ring buffer (number of retained messages). */
 #ifndef KERNEL_LOG_LINES
