@@ -385,8 +385,8 @@ The honest list, with the place each item is tracked:
 * **Wi-Fi** is in neither build: the wire is the network of this release
   ([`docs/plan-wifi.md`](plan-wifi.md));
 * **the network** is in the complete build and not in the image of this page
-  (section 6), and its certificate store is the bundle of `/etc/ca` of that
-  build ([`docs/wiki/network.md`](wiki/network.md));
+  (section 6), and its certificate store is `/etc/ssl/certs.pem` of that build
+  ([`docs/wiki/network.md`](wiki/network.md));
 * **the second partition is the root**: no installer adds a partition beside
   the files of a stick, and the image erases the stick it is written to
   ([ADR 0056](adr/0056-the-stick-of-a-person-is-a-disk.md), K12);
