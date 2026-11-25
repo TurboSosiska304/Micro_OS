@@ -166,6 +166,21 @@ root volume.
 * The size is bounded: a rotation at 64 KiB per file, two files, and a line
   that says a file was rotated.
 
+## 10b. The language of the tree moves to C23 (2.1)
+
+Measured on 26 November 2026, not estimated: the host build (GCC 16.2.1) and the
+x86-64 port (clang 23.1.5) **compile with `-std=c23` and
+`CMAKE_C_EXTENSIONS=OFF` and answer zero errors**, so the tree is already C23
+clean. The change is `CMAKE_C_STANDARD 23` in the two CMakeLists and a gate;
+the board stays on the dialect of ESP-IDF 5.3 (its Xtensa GCC knows C23 only as
+`-std=c2x`) and that is written down as the reason.
+
+It belongs to 2.1 and not to 2.0.2 on purpose: a release that fixes the desk
+and the shutdown of a real laptop must not also change the dialect of every
+translation unit. What C23 buys the tree: `#embed` (the font and the tables
+without a generator), `[[noreturn]]`/`[[fallthrough]]`, `nullptr`,
+`constexpr`, `typeof`, `stdbit.h`, and `0b1010`.
+
 ## 11. The packages of a person (promised to 3.0)
 
 The person who uses 3.0 must be able to install **base applications from the

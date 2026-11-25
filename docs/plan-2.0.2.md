@@ -74,3 +74,9 @@ the build, `RAMFS_RESERVE_KB`) is not given to a write, which answers
 A deletion returns its memory at once, `unlink` of an open file keeps the
 blocks until the last descriptor closes, a read past the end of a file answers
 zero, and `truncate` frees the tail. The board does not build the filesystem.
+## What is not in this release
+
+**C23.** Measured on 26 November: the host and the x86-64 port compile with
+`-std=c23` and no GNU extensions with zero errors, so the move is one flag - but
+it is a move of 2.1, not of a release whose job is the desk and the shutdown of
+a laptop that hangs today (`docs/roadmap-to-3.0.md`, 10b).
