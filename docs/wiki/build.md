@@ -158,9 +158,10 @@ Torito catalogue and asks `grub-mkrescue` (or `limine` when the machine has
 no GRUB) for the boot record. The image is `build-x86-iso/microos.iso`;
 the root image is the second module of the boot, the port mounts its first
 partition as a read-only `/`, and `make x86-iso-smoke` boots it with
-`-cdrom` and no `-kernel`. The tools the build needs and the gaps (UEFI, a
-USB stick, a writable root) are in
-[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md).
+`-cdrom` and no `-kernel`. The tools the build needs are in
+[`docs/ports/x86_64/iso.md`](../ports/x86_64/iso.md); the root of that medium
+is read-only, and the stick of [install.md](install.md) is the one that keeps a
+file.
 
 ## The ESP32 build
 
