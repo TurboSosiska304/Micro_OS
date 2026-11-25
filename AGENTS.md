@@ -247,6 +247,14 @@ Open items from `docs/roadmap.md`:
   APIC, the wake IPI of the scheduler, the FPU state, a guard page - is the
   K8 table of `docs/debts.md`; the decision is ADR 0012.
 
+## Subagents
+
+A subagent runs on a **free model of the tariff** (`opencode-go/*-free`), with
+two exceptions only: the owner assigned a model to that agent, or the owner
+asked for the model of the main session. The brief names the files, the
+constraints and the command that decides "done"; the answer is a report, not a
+transcript.
+
 ## Tool economy (measured, 24 November 2026)
 
 A day of the autopilot, 171 agent sessions: 38 093 tool calls and **69 MB of
