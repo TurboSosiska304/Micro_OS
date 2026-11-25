@@ -1386,8 +1386,10 @@ static void test_mount(void)
 
     port_host_set_sink(NULL);
 
-    /* The list, the mount and the line it printed. */
-    KT_CHECK(strstr(buf, "/\n") != NULL);
+    /* The list, the mount and the line it printed: a line per mount, with the
+     * device, the point and the mode (the list of /proc/mounts). */
+    KT_CHECK(strstr(buf, " on / type ") != NULL);
+    KT_CHECK(strstr(buf, "(rw)") != NULL || strstr(buf, "(ro)") != NULL);
     KT_CHECK(strstr(buf, "mount: fake0 is mounted at /mnt/dev") != NULL);
 
     /* Every refusal names the point and the reason in words. */

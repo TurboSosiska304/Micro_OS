@@ -1623,8 +1623,20 @@ static int cmd_mount(int argc, char **argv)
             return KSHELL_OK;
         }
 
+        /*
+         * The list is the one a person reads and not the one of a directory:
+         * the device, the point, the type and the mode, as /proc/mounts says
+         * it (and as `mount` says it on Linux). A point alone cannot answer
+         * "is the stick written or read-only?", which is the first question
+         * after a boot (docs/install.md, ADR 0041).
+         */
         for (i = 0; i < count; i++) {
-            kshell_printf("%s\n", vfs_mount_name(i));
+            const char *device = vfs_mount_device(i);
+            const char *type = vfs_mount_type_name(i);
+
+            kshell_printf("%s on %s type %s (%s)\n", device != NULL ? device : "none",
+                          vfs_mount_name(i), type != NULL ? type : "none",
+                          vfs_mount_is_read_only(i) ? "ro" : "rw");
         }
 
         return KSHELL_OK;
@@ -1650,6 +1662,51 @@ static int cmd_mount(int argc, char **argv)
     }
 
     kshell_printf("mount: %s is mounted at %s\n", args.argv[0], args.argv[1]);
+
+    return KSHELL_OK;
+}
+
+/*
+ * `lsblk` — the block devices the kernel has: the name, the size and the
+ * sector, which is what a person asks before `mount`. The list is short by
+ * design: the table of the block layer is the machine (eight slots), and a
+ * device that is not in it is not there (docs/debts.md, the rule of ADR 0041).
+ */
+static int cmd_lsblk(int argc, char **argv)
+{
+    struct kshell_args args;
+    k_size_t count;
+    k_size_t i;
+    int rc;
+
+    rc = kshell_options(argc, argv, NULL, 0, "lsblk", &args);
+    if (rc == KSHELL_OPTIONS_HELP) {
+        return kshell_help_show(argv[0]);
+    }
+    if (rc != KSHELL_OPTIONS_OK) {
+        return KSHELL_USAGE;
+    }
+
+    count = k_blockdev_count();
+
+    if (count == 0) {
+        kshell_printf("lsblk: there is no block device\n");
+        return KSHELL_OK;
+    }
+
+    kshell_printf("%-10s %-10s %-8s %s\n", "NAME", "SIZE", "SECTOR", "SECTORS");
+
+    for (i = 0; i < count; i++) {
+        const struct k_blockdev *dev = k_blockdev_at(i);
+
+        if (dev == NULL) {
+            continue;
+        }
+
+        kshell_printf("%-10s %-10u %-8u %u\n", dev->name,
+                      (unsigned)(((k_u64_t)dev->sectors * dev->sector_size) / 1024u),
+                      (unsigned)dev->sector_size, (unsigned)dev->sectors);
+    }
 
     return KSHELL_OK;
 }
@@ -2695,10 +2752,17 @@ static const struct file_command {
                 "Here -h is the sizes, as in df of Linux: --help prints this.\n",
       .owns_short_h = true},
      cmd_df},
+    {"lsblk",
+     {.summary = "list the block devices: name, size, sector",
+      .usage = "lsblk",
+      .detail = "The devices the block layer has, as `mount` needs them: the name\n"
+                "is what `mount <device> <point> <type>` takes.\n"},
+     cmd_lsblk},
     {"mount",
      {.summary = "list, mount or unmount the filesystems",
       .usage = "mount [-a] [<device> <point> <type>]",
-      .detail = "Without a word the mounted filesystems are listed, one point per line.\n"
+      .detail = "Without a word the mounted filesystems are listed: device, point,\n"
+                "type and rw or ro, as /proc/mounts says it.\n"
                 "  -a  mount every volume of " VFS_FSTAB_PATH "\n"
                 "The words are `device point type`, as in the table and in Linux.\n"},
      cmd_mount},
