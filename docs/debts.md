@@ -575,3 +575,18 @@ shell for `mount` and reads the line the shell prints itself (` on /bin type `)
 instead of a line of the boot. The cure is one lock around the whole buffer in
 `k_port_write()` of the ESP32, and it waits for a machine whose callers are
 known: the kernel logs from paths where it cannot block.
+
+## K23 - The medium of a release that the runner cannot build
+
+The release of `v2.0.0` was published with the tar, the images of the board and
+the checksums - and without the ISO and the stick. The job of the medium says
+`make x86-iso || echo "the image is not in this bundle"` and the runner of
+GitHub has no `limine` in its repositories (`E: Unable to locate package
+limine`), so the line was a warning in a run that ended green, and nobody read
+it: a release of the x86-64 machine without the machine on a stick.
+
+Both media were built from the tag on this machine and uploaded by hand, after
+`make x86-iso-smoke` (14 checks) and `make uefi-stick-smoke` (21) said they
+boot. The workflow has to fail on a missing medium, or the medium has to be
+built from a `limine` that the workflow installs itself; until then a release
+is not done when the run is green, and the assets are read one by one.
