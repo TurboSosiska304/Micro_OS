@@ -2318,28 +2318,52 @@ static int cmd_netinfo(int argc, char **argv)
                       (unsigned)mac[2], (unsigned)mac[3], (unsigned)mac[4], (unsigned)mac[5]);
     }
 
-    kshell_printf("  ip ");
-    print_ip(g_ip);
-    kshell_printf("/%u, gateway ", (unsigned)net_prefix(g_mask));
-    print_ip(g_gateway);
-    kshell_printf(", dns ");
-    print_ip(g_dns);
-    kshell_printf("\n");
+    /*
+     * One line, one call. The console is one device and the machine has
+     * tasks: the door of telnet prints a line of its own when it comes up,
+     * and a line assembled from four calls of `kshell_printf` had that line
+     * in the middle of it - "server net: listening on port 23" and the
+     * address on the next row (the report of `make x86-net-smoke`).
+     */
+    {
+        char line[96];
+        int used = snprintf(
+            line, sizeof(line), "  ip %u.%u.%u.%u/%u, gateway %u.%u.%u.%u, dns %u.%u.%u.%u\n",
+            (unsigned)(g_ip >> 24), (unsigned)((g_ip >> 16) & 0xFFu),
+            (unsigned)((g_ip >> 8) & 0xFFu), (unsigned)(g_ip & 0xFFu), (unsigned)net_prefix(g_mask),
+            (unsigned)(g_gateway >> 24), (unsigned)((g_gateway >> 16) & 0xFFu),
+            (unsigned)((g_gateway >> 8) & 0xFFu), (unsigned)(g_gateway & 0xFFu),
+            (unsigned)(g_dns >> 24), (unsigned)((g_dns >> 16) & 0xFFu),
+            (unsigned)((g_dns >> 8) & 0xFFu), (unsigned)(g_dns & 0xFFu));
+
+        if (used > 0) {
+            kshell_printf("%s", line);
+        }
+    }
 
     if (g_address == NET_ADDRESS_LEASE) {
+        char line[128];
         k_u32_t left = g_lease.lease_s;
         k_u32_t spent = 0;
+        int used;
 
         if (g_lease.lease_s != 0u) {
             spent = (k_u32_t)((k_port_uptime_ms() - g_lease.obtained_ms) / 1000u);
             left = spent < g_lease.lease_s ? g_lease.lease_s - spent : 0u;
         }
 
-        kshell_printf("  dhcp: leased for %u s, %u s left (t1 %u, t2 %u), server ",
-                      (unsigned)g_lease.lease_s, (unsigned)left, (unsigned)dhcp_t1(&g_lease),
-                      (unsigned)dhcp_t2(&g_lease));
-        print_ip(g_lease.server);
-        kshell_printf("\n");
+        used =
+            snprintf(line, sizeof(line),
+                     "  dhcp: leased for %u s, %u s left (t1 %u, t2 %u), server "
+                     "%u.%u.%u.%u\n",
+                     (unsigned)g_lease.lease_s, (unsigned)left, (unsigned)dhcp_t1(&g_lease),
+                     (unsigned)dhcp_t2(&g_lease), (unsigned)(g_lease.server >> 24),
+                     (unsigned)((g_lease.server >> 16) & 0xFFu),
+                     (unsigned)((g_lease.server >> 8) & 0xFFu), (unsigned)(g_lease.server & 0xFFu));
+
+        if (used > 0) {
+            kshell_printf("%s", line);
+        }
     } else if (g_file_static) {
         kshell_printf("  dhcp: off, /etc/network names the address\n");
     } else {

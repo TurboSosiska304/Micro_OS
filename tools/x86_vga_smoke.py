@@ -2318,6 +2318,22 @@ def run_desktop(
 
         time.sleep(0.15)
 
+    def wait_new(machine, needle: str, after: int, timeout: float) -> bool:
+        """Wait for the (after+1)-th line of the transcript.
+
+        The transcript is one stream and the second desktop of the run prints
+        the same words as the first one: a search of the whole transcript
+        answers with the line of the first desktop and the check passes before
+        the second one has said a word. The count taken before the command is
+        the mark, as it is for the prompt of the shell.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if machine.read_serial().count(needle) > after:
+                return True
+            time.sleep(0.05)
+        return False
+
     def click(machine) -> None:
         machine.monitor_command("mouse_button 1")
         time.sleep(0.15)
@@ -2372,6 +2388,7 @@ def run_desktop(
                 and title_at(seen, WM_EDIT_RECT)
                 and seen.text_at(WM_FM_RECT[0] + UI_FRAME_PAD, WM_FM_RECT[1] + UI_TITLE_Y,
                                  "fm - /", FM_TITLE_INK_RGB, FM_BAR_RGB),
+                seconds=10.0,
             )
             expect("the picture of the desktop is drawn", picture is not None,
                    "screendump wrote no PPM")
@@ -3061,6 +3078,7 @@ def run_desktop(
                 "config did not answer for the light theme",
             )
 
+            up_before = machine.read_serial().count("wm: the desktop is up")
             machine.type_line("exec /bin/wm")
             expect(
                 "the desktop of the light theme starts",
@@ -3069,7 +3087,7 @@ def run_desktop(
             )
             expect(
                 "the windows of the light desktop are up",
-                machine.wait_serial("wm: the desktop is up", timeout),
+                wait_new(machine, "wm: the desktop is up", up_before, timeout),
                 "the server never said that its windows were up in the light theme",
             )
 
@@ -3079,6 +3097,7 @@ def run_desktop(
                 lambda seen: seen.pixel(4, 4) == WALL_TOP_LIGHT_RGB
                 and seen.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
                 == palette_rgb(255, 255, 255),
+                seconds=10.0,
             )
             expect(
                 "the light theme is the gradient of the desk",
@@ -3114,17 +3133,26 @@ def run_desktop(
                 f"the body of the editor of the light theme is white in "
                 f"{body_white} of {body_total} sample(s)",
             )
+            expect(
+                "the pointer of the light theme is seen on the white sheet",
+                picture is not None
+                and picture.pixel(VBE_WIDTH // 2 - 1, VBE_HEIGHT // 2 + 2) == WM_CURSOR_EDGE_RGB
+                and picture.pixel(VBE_WIDTH // 2, VBE_HEIGHT // 2) != WM_CURSOR_EDGE_RGB,
+                "the pointer of the light theme has no outline of the edge colour",
+            )
 
+            close_before = machine.read_serial().count("wm: close fm - /")
             machine.keys(["alt-f4"])
             expect(
                 "the light desktop closes a window",
-                machine.wait_serial("wm: close fm - /", timeout),
+                wait_new(machine, "wm: close fm - /", close_before, timeout),
                 "the file manager of the light theme did not close",
             )
+            closed_before = machine.read_serial().count("wm: the desktop is closed")
             machine.keys(["alt-f4"])
             expect(
                 "the light desktop closes its last window",
-                machine.wait_serial("wm: the desktop is closed", timeout),
+                wait_new(machine, "wm: the desktop is closed", closed_before, timeout),
                 "the desktop of the light theme did not end",
             )
             expect(
