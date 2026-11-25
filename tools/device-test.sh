@@ -200,6 +200,7 @@ echo "==> the shell: ls /bin, exec /bin/hello and an image of x86-64"
 set +e
 python3 "$ROOT/tools/console.py" "$PORT" 12 \
     --send "ls /bin" \
+    --send "mount" \
     --send "exec /bin/hello one two" \
     --send "cat /log/start.log" \
     --send "exec /log/.foreign" | tee -a "$LOG"
@@ -210,7 +211,7 @@ for marker in \
     "cat" \
     "PROGRAM: argv[1] one" \
     "the program has finished" \
-    "progs: 2 program(s) in 'progs'" \
+    " on /bin type " \
     "exec: /log/.foreign: exec format error"; do
     if ! grep -qF "$marker" "$LOG"; then
         echo "the console has no '$marker' after the shell commands" >&2

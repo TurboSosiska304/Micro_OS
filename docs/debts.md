@@ -560,3 +560,18 @@ order that keeps the volume clean, and the port owns the last step:
 * **The translations.** `docs/ru/roadmap_ru.md` and the other Russian files
   carry the banner that says they may lag; this document has no translation
   yet, and `docs/ru/README.md` says so.
+
+## K22 - A line of the board's console under two tasks
+
+The second run of the device test in the gate of `2.0.0` lost four bytes: the
+line `progs: 2 program(s) in 'progs'` reached the port as `prog`, then a whole
+line of the loader (`esp32: the program is in the text at 0x4009e000...`), then
+`s: 2 program(s) in 'progs'`. Two tasks logged at the same moment. The kernel
+gives one line to one `k_console_write()`, and the port hands the buffer to
+`write(1, ...)`, whose UART driver takes its lock per chunk and not per call.
+
+The text of a console is cosmetic (L4), and `2.0.0` keeps it: the test asks the
+shell for `mount` and reads the line the shell prints itself (` on /bin type `)
+instead of a line of the boot. The cure is one lock around the whole buffer in
+`k_port_write()` of the ESP32, and it waits for a machine whose callers are
+known: the kernel logs from paths where it cannot block.
