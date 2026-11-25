@@ -1,0 +1,1030 @@
+<!doctype html><html lang="en" data-version="1.9.0-rc1" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.9.0-rc1/shell/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Shell — Micro OS wiki 1.9.0-rc1</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.9.0-rc1</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <span aria-current="true">1.9.0-rc1</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="../network/">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#the-shell">The shell</a><ul>
+  <li><a href="#the-line">The line</a>
+  </li>
+  <li><a href="#pipes-and-redirections">Pipes and redirections</a>
+  </li>
+  <li><a href="#help">help</a>
+  </li>
+  <li><a href="#options-and-h-help">Options and -h / --help</a>
+  </li>
+  <li><a href="#the-commands">The commands</a>
+  </li>
+  <li><a href="#the-clock-and-the-memory">The clock and the memory</a>
+  </li>
+  <li><a href="#path-and-exec">PATH and exec</a>
+  </li>
+  <li><a href="#kill-ctrlc-and-no-job-control">kill, Ctrl+C and no job control</a>
+  </li>
+  <li><a href="#ls-and-tree">ls and tree</a>
+  </li>
+  <li><a href="#stat-chmod-and-chown">stat, chmod and chown</a>
+  </li>
+  <li><a href="#fsck-and-mkfs">fsck and mkfs</a>
+  </li>
+  <li><a href="#httpd-the-page-of-the-state">httpd: the page of the state</a>
+  </li>
+  <li><a href="#mqtt-one-message">mqtt: one message</a>
+  </li>
+  <li><a href="#telnet-and-config">telnet and config</a>
+  </li>
+  <li><a href="#the-commands-of-a-script">The commands of a script</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Shell</div>
+    <div class="banner">
+      You are reading <b>1.9.0-rc1</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+      The newest documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+    </div>
+
+    <h1 id="the-shell">The shell<a class="headerlink" href="#the-shell" title="Permanent link">&para;</a></h1>
+<p>Every boot ends at a prompt:</p>
+<div class="highlight"><pre><span></span><code>MicroOS shell ready. Type 'help' for the list of commands.
+microos&gt;
+</code></pre></div>
+
+<p>The shell is <code>components/kshell</code>, part of the kernel: the same interpreter and
+the same commands on the board, in the simulator and on x86-64. A port or a
+driver adds commands of its own by registering them by name, which is why the
+list is not the same on every machine.</p>
+<h2 id="the-line">The line<a class="headerlink" href="#the-line" title="Permanent link">&para;</a></h2>
+<p>The line is split on spaces and tabs, and a word may be quoted or escaped:</p>
+<ul>
+<li><code>'...'</code> is a literal: every character inside it is itself, even a space,
+  a <code>|</code>, a <code>&gt;</code> or a backslash;</li>
+<li><code>"..."</code> groups the spaces and the operators, and inside it a backslash
+  escapes <code>"</code> and <code>\</code> only: <code>"a\"b"</code> is <code>a"b</code>, and <code>"a\nb"</code> is the four
+  characters;</li>
+<li>outside the quotes a backslash takes the character after it, so <code>a\ b</code> is
+  one word and <code>\|</code> is a bar. A backslash at the end of the line is refused:
+  there is no continuation of a line.</li>
+</ul>
+<p>An empty word is a word: <code>echo ""</code> prints an empty line, and a command that
+sees <code>argv[i] == ""</code> sees an empty argument (<code>path ""</code> still refuses it). A
+quote that is not closed refuses the whole line with <code>unterminated quote</code>;
+the shell never guesses where the word was meant to end.</p>
+<p>A line is at most 127 characters and at most 8 words per stage. Backspace
+erases, Ctrl+C throws the line away, and a line that did not fit is <strong>not</strong>
+executed (the shell says <code>line too long, it was not executed</code>), because a cut
+line is a different command. While a program or a pipe runs, Ctrl+C is not a
+line: the shell reads it and sends <code>SIGINT</code> to the program or to every stage
+of the chain (see <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs/kernel-abi#signals">kernel-abi.md</a>).</p>
+<p>A name that is not registered answers <code>&lt;name&gt;: command not found</code>. A command
+that is given the wrong arguments answers with its own <code>usage:</code> line and does
+nothing.</p>
+<h2 id="pipes-and-redirections">Pipes and redirections<a class="headerlink" href="#pipes-and-redirections" title="Permanent link">&para;</a></h2>
+<p><code>|</code> joins two or more stages, and <code>&gt;</code>, <code>&gt;&gt;</code>, <code>&lt;</code>, <code>2&gt;</code> and <code>2&gt;&gt;</code> send a
+descriptor of a stage to a file. The operators are words of their own, with a
+space around them, and they are read after the quotes are taken off the line:
+a <code>|</code> or a <code>&gt;</code> inside quotes is an ordinary character of the argument. They
+may stand before or after the arguments of a stage:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; ls /etc | cat
+microos&gt; echo one | cat | cat
+microos&gt; cat /etc/setting &gt; /tmp/f
+microos&gt; cat /etc/setting &gt;&gt; /tmp/f
+microos&gt; cat &lt; /etc/setting
+microos&gt; cat /etc/setting 2&gt; /tmp/errors
+microos&gt; /bin/cat /etc/setting | wc -l
+microos&gt; echo 'a | b' &gt; /tmp/q
+microos&gt; grep 'a b' /tmp/q
+microos&gt; sed 's/a b/c d/' /tmp/q
+</code></pre></div>
+
+<p>A stage that is a command of the shell (<code>echo</code>, <code>df</code>, <code>tree</code>, ...) runs in a
+task of its own and writes descriptor 1, so a redirect or a pipe carries its
+output exactly as it carries a program's. A name that is not a command is
+looked up in <code>PATH</code> and started with <code>execve</code>; on x86-64 that program
+inherits the three descriptors of the stage, which is what makes
+<code>echo one | /bin/cat</code> and <code>ls /bin | wc -l</code> work.</p>
+<p>The ten commands of sbase (<code>ls</code>, <code>cat</code>, <code>grep</code>, <code>head</code>, <code>tail</code>, <code>wc</code>, <code>sort</code>,
+<code>find</code>, <code>sed</code>, <code>xargs</code>) are programs of the x86-64 disk, and the shell looks
+their bare name in <code>PATH</code> <strong>before</strong> its own table: <code>ls /etc</code> at the prompt is
+<code>/bin/ls</code>, the same file <code>exec /bin/ls /etc</code> runs. The port is asked first
+(<code>k_port_exec_supported()</code>): the simulator cannot enter an image and keeps
+the command of the shell, and the board has no <code>ls</code> of sbase in its <code>/bin</code>
+and falls back the same way. A file that exists but cannot run is an error
+and not a silent fallback.</p>
+<p>What the line does <strong>not</strong> do:</p>
+<ul>
+<li>no <code>&amp;&amp;</code>, <code>||</code>, <code>;</code> or <code>&amp;</code>: they are refused by name, not run as arguments;</li>
+<li>no <code>2&gt;&amp;1</code>, no <code>&gt;&amp;</code>, no file-descriptor juggling beyond <code>0</code>, <code>1</code> and <code>2</code>;</li>
+<li>no globs or variables: <code>*</code> is a word and not a pattern, <code>$x</code> is the two
+  characters;</li>
+<li>no attached forms: <code>a|b</code> and <code>&gt;file</code> are arguments; write <code>a | b</code>, <code>&gt; file</code>;</li>
+<li>at most sixteen stages: the parser keeps sixteen and a line of 32 words
+  cannot hold more. The pipes are made one boundary at a time as the stages
+  are forked - the shell keeps the reading end between two forks and closes
+  the boundary behind it - so its table holds two pipe ends and not
+  eighteen; the system has sixteen pipes and forty open-file descriptions;</li>
+<li>but the task table is the real bound of a chain of programs. A stage that
+  runs a program is two tasks of the kernel - the stage, which waits, and the
+  program, which <code>execve</code> starts in a task of its own - and a stage that is a
+  command of the shell is one; <code>init</code> and the shell are two more of the 32
+  slots. On x86-64, where every stage of sbase is a program, <strong>fifteen</strong> stages
+  fit (2·15 + 2 = 32) and sixteen do not (2·16 + 2 = 34); sixteen stages of
+  commands of the shell fit. The shell counts the slots before it makes the
+  first pipe and refuses a chain that does not fit with the numbers in the
+  sentence, so no part of a line is started and then lost;</li>
+<li>no background job, no <code>jobs</code>, no <code>fg</code> or <code>bg</code>;</li>
+<li>a command that changes the task of the shell (<code>cd</code>, <code>path</code>) cannot be a
+  stage or carry a redirection: it is refused with a sentence instead of
+  changing a copy nobody sees.</li>
+</ul>
+<p>The status of a line is the status of its last stage. A program that is the
+last stage answers 0 when it ran and 1 when it could not start; its own code
+is the status its parent reads with <code>waitpid</code>, and a stage is a task of its
+own that waits for the program it started.</p>
+<h2 id="help"><code>help</code><a class="headerlink" href="#help" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; help
+command   what it does
+mkfs      format the volume: mkfs -y
+...
+programs in PATH:
+  hello crash fork badptr signals cat echo ls mkdir mv edit kilo ...
+microos&gt; help exec
+usage: exec &lt;program&gt; [arguments...]
+run a program
+</code></pre></div>
+
+<p><code>help</code> with no argument is the list of the commands of the shell, and below it
+<strong>every</strong> program found in <code>PATH</code>: the executable files of the directories,
+read from the directories themselves and not from a table. The list used to
+stop at twenty-four names and a <code>...</code> for the screen of a small board, which
+made the rest of the machine a secret of the repository (<code>/bin/edit</code> was never
+named); the whole of it is printed now, and <code>make x86-smoke</code> reads <code>/bin</code> with
+the shell and asks <code>help</code> for every name of it, so the two cannot drift apart.
+A program is not a command of the shell and was missing from this list before
+1.2.1.</p>
+<p><code>help NAME</code> answers with the command of the shell, the program, or both. A
+name that is only a program says where it is:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; help hello
+hello is a program at /bin/hello (type hello --help)
+microos&gt; help ls
+ls is a program: /bin/ls
+the builtin:
+usage: ls [-la] [--color[=always|never|auto]] [path]
+...
+</code></pre></div>
+
+<p>The first line names the file that runs at the prompt; the block below it is
+the command of the shell, which answers on a machine whose <code>/bin</code> has no <code>ls</code>.
+<code>help --help</code> explains <code>help</code> itself.</p>
+<h2 id="options-and-h-help">Options and <code>-h</code> / <code>--help</code><a class="headerlink" href="#options-and-h-help" title="Permanent link">&para;</a></h2>
+<p>Every command answers <code>-h</code> and <code>--help</code> without running: a <code>usage:</code> line, the
+summary from the table of the commands and the notes of the command. The flag
+has to be the first word of the line; a <code>-h</code> deeper in the arguments is a
+character the command sees. <code>--</code> ends the options, so a name that starts with
+<code>-</code> can still be passed.</p>
+<p>A command that does not have a flag refuses it: <code>ls -z</code> prints
+<code>ls: unknown option: -z</code> and the usage line. <code>df -h</code> is the one GNU-shaped
+exception: <code>-h</code> asks for human sizes, so the help of <code>df</code> is <code>df --help</code>.</p>
+<h2 id="the-commands">The commands<a class="headerlink" href="#the-commands" title="Permanent link">&para;</a></h2>
+<p>The core of the kernel, on every machine:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>help [command]</code></td>
+<td>the list of commands, or the full help of one</td>
+</tr>
+<tr>
+<td><code>uname</code></td>
+<td>the name, the version, the architecture and the build id</td>
+</tr>
+<tr>
+<td><code>uptime</code></td>
+<td>the seconds since the boot, the scheduler ticks and the task count</td>
+</tr>
+<tr>
+<td><code>ps</code></td>
+<td>the tasks: pid, priority, state, name</td>
+</tr>
+<tr>
+<td><code>free</code></td>
+<td>the memory of the heap and of the PSRAM</td>
+</tr>
+<tr>
+<td><code>dmesg</code></td>
+<td>the log of the boot, from the ring buffer of the kernel</td>
+</tr>
+<tr>
+<td><code>echo &lt;words&gt;</code></td>
+<td>print the words</td>
+</tr>
+<tr>
+<td><code>sleep &lt;milliseconds&gt;</code></td>
+<td>wait, up to 60000</td>
+</tr>
+<tr>
+<td><code>clear</code></td>
+<td>clear the screen (the escape sequence the panel and the VGA read)</td>
+</tr>
+<tr>
+<td><code>modules</code></td>
+<td>run the hardware doctor and print its report</td>
+</tr>
+<tr>
+<td><code>abi</code></td>
+<td>the table of the system calls</td>
+</tr>
+<tr>
+<td><code>ulimit [-m bytes \| -c ms \| -n fds]</code></td>
+<td>the limits of the shell, or lower one of them</td>
+</tr>
+<tr>
+<td><code>memtest [kilobytes]</code></td>
+<td>measure the memory and its speed</td>
+</tr>
+<tr>
+<td><code>mfetch [color]</code></td>
+<td>the system report with a logo</td>
+</tr>
+<tr>
+<td><code>shutdown [-f] [off\|halt\|reboot]</code></td>
+<td>the clean end: no new session, the tasks end, the volumes are synced, the disks flushed, the mounts leave, then the state asked for</td>
+</tr>
+<tr>
+<td><code>poweroff [-f]</code>, <code>halt [-f]</code>, <code>reboot [-f]</code></td>
+<td>the same end with the power off, the processor stopped or the machine reset</td>
+</tr>
+</tbody>
+</table>
+<p>The files, on every machine:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pwd</code>, <code>cd &lt;dir&gt;</code></td>
+<td>the current directory</td>
+</tr>
+<tr>
+<td><code>ls [-la] [--color[=when]] [path]</code></td>
+<td>the names of a directory, one per line; <code>-l</code> adds the mode, the owner, the size and the date, <code>-a</code> puts <code>.</code> and <code>..</code> first</td>
+</tr>
+<tr>
+<td><code>tree [-ad] [path]</code></td>
+<td>the levels below a path, with <code>`--</code> branches; <code>-d</code> keeps the directories only</td>
+</tr>
+<tr>
+<td><code>cat [-n] [file]</code></td>
+<td>the content of a file, or of the standard input; <code>-n</code> numbers the lines (the command of the shell; on x86-64 the <code>cat</code> of <code>/bin</code> runs at the prompt and takes <code>-u</code>)</td>
+</tr>
+<tr>
+<td><code>write &lt;file&gt; &lt;text&gt;</code></td>
+<td>create or replace a file with one line (at most 127 bytes)</td>
+</tr>
+<tr>
+<td><code>mkdir &lt;dir&gt;...</code>, <code>rm [-r] &lt;file&gt;</code></td>
+<td>every word is a directory; a file; a directory needs <code>-r</code></td>
+</tr>
+<tr>
+<td><code>df [-h] [path]</code></td>
+<td>the free blocks and inodes; <code>-h</code> in KB/MB. The block is the unit of the volume and says so (<code>1 KB each</code>, <code>512 bytes each</code>), and a volume that keeps no inodes (FAT32) says <code>not kept by this volume</code></td>
+</tr>
+<tr>
+<td><code>mount</code></td>
+<td>the mounted filesystems</td>
+</tr>
+<tr>
+<td><code>fsck [-y] [fat &lt;point\|device&gt;] [ext2 &lt;point&gt;]</code></td>
+<td>check a volume: MicroFS, the FAT volume at a point or on a device, or the ext2 volume at a point; <code>-y</code> repairs it</td>
+</tr>
+<tr>
+<td><code>stat &lt;path&gt;</code></td>
+<td>the type, the mode, the owner and the size</td>
+</tr>
+<tr>
+<td><code>chmod &lt;mode&gt; &lt;path&gt;</code>, <code>chown &lt;uid&gt; &lt;path&gt;</code></td>
+<td>the mode (octal) and the owner (0..32767)</td>
+</tr>
+<tr>
+<td><code>path [directories]</code></td>
+<td>show or set <code>PATH</code></td>
+</tr>
+<tr>
+<td><code>exec &lt;program&gt; [args...]</code></td>
+<td>run a program, by a path or found in <code>PATH</code></td>
+</tr>
+<tr>
+<td><code>kill [-signal] &lt;pid&gt;</code></td>
+<td>send <code>INT</code>, <code>TERM</code>, <code>CHLD</code> or <code>PIPE</code> to a task; TERM by default. <code>init</code> and the console itself are refused with a sentence: there is no <code>getty</code>, so a signal to the shell would leave the machine without one</td>
+</tr>
+<tr>
+<td><code>login [name]</code></td>
+<td>open a session as a user of <code>/etc/passwd</code>: the name and the password, three attempts, the uid, the gid and the home of the account (ADR 0033)</td>
+</tr>
+<tr>
+<td><code>su [-l] [name]</code></td>
+<td>become another user: root without a password, a user with the password of the account; <code>-l</code> enters the home</td>
+</tr>
+<tr>
+<td><code>logout</code></td>
+<td>end the session of this terminal: the console starts another one as root, a client of telnet is disconnected</td>
+</tr>
+<tr>
+<td><code>who</code></td>
+<td>the sessions that are in: the name of <code>/etc/passwd</code>, the terminal and the pid (<code>/proc/sessions</code>)</td>
+</tr>
+<tr>
+<td><code>whoami</code></td>
+<td>the name of the account of the shell</td>
+</tr>
+<tr>
+<td><code>id</code></td>
+<td>the uid, the gid and the account of the shell</td>
+</tr>
+</tbody>
+</table>
+<p>The services, where the port registers them:</p>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it does</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config</code>, <code>config sync</code></td>
+<td>list the store of <code>/etc</code>, restore and save it</td>
+<td>board, simulator; x86-64 has no store</td>
+</tr>
+<tr>
+<td><code>mkfs -y</code></td>
+<td>format the volume (erases everything)</td>
+<td>board, simulator</td>
+</tr>
+<tr>
+<td><code>http get &lt;url&gt;</code></td>
+<td>one HTTP request; prints the status and the body</td>
+<td>board, x86-64</td>
+</tr>
+<tr>
+<td><code>wget &lt;url&gt; &lt;file&gt;</code></td>
+<td>download a URL into a file; a second run continues it</td>
+<td>board, x86-64</td>
+</tr>
+<tr>
+<td><code>pkg &lt;operation&gt; [flags] [name...]</code></td>
+<td>the installer: <code>-Syu</code>, <code>-S NAME</code>, <code>-U FILE</code>, <code>-R NAME</code>, <code>-Q</code></td>
+<td>x86-64</td>
+</tr>
+<tr>
+<td><code>ntp [server]</code></td>
+<td>set the clock from NTP (UTC), default <code>pool.ntp.org</code></td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>httpd [port\|off]</code></td>
+<td>the page of the state over HTTP, default port 80</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>mqtt &lt;host&gt; &lt;port&gt; &lt;topic&gt; &lt;message&gt;</code></td>
+<td>publish one message at QoS 0</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>telnet [on\|off]</code></td>
+<td>the shell on port 23</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>date</code>, <code>date set &lt;YYYY-MM-DD&gt; &lt;HH:MM:SS&gt;</code></td>
+<td>the RTC, or the clock of the host</td>
+<td>board, simulator</td>
+</tr>
+<tr>
+<td><code>battery</code>, <code>beep [frequency] [ms]</code>, <code>led on\|off\|heart\|dance</code></td>
+<td>the power cell, the buzzer, the LED</td>
+<td>board, simulator (stubs)</td>
+</tr>
+<tr>
+<td><code>input [seconds]</code></td>
+<td>watch the buttons</td>
+<td>board, simulator (stubs)</td>
+</tr>
+<tr>
+<td><code>wifi [status\|scan\|connect &lt;ssid&gt; [key]\|join\|disconnect\|forget]</code></td>
+<td>the WiFi station</td>
+<td>board, simulator (stub)</td>
+</tr>
+<tr>
+<td><code>display [&lt;x&gt; &lt;y&gt;] \| rotate &lt;0\|90\|180\|270&gt; \| invert [on\|off] \| draw [seconds]</code></td>
+<td>the panel</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>i2c</code></td>
+<td>scan the I2C bus</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>mic</code></td>
+<td>the level of the microphone</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>rtc alarm [HH:MM\|+&lt;seconds&gt;\|day &lt;1-31&gt; HH:MM\|clear]</code></td>
+<td>the alarm of the BM8563 and its flag</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>power [sleep &lt;seconds&gt;\|off]</code></td>
+<td>deep sleep with the timer or button C, or the clean end and a deep sleep woken by button C</td>
+<td>board</td>
+</tr>
+<tr>
+<td><code>factory reset -y</code></td>
+<td>erase MicroFS and the NVS, then restart; without <code>-y</code> it only explains</td>
+<td>board</td>
+</tr>
+</tbody>
+</table>
+<p>The simulator has no network and no drivers: <code>http</code>, <code>wget</code>, <code>pkg</code>, <code>ntp</code>,
+<code>httpd</code>, <code>mqtt</code> and <code>telnet</code> are not registered there at all, and the driver
+commands of the board are stubs that answer something sensible. The x86-64
+port registers the core and the files, and the services of its image: the
+network of K6 (<code>http</code>, <code>wget</code>, <code>httpd</code>, <code>ntp</code>) and the installer (<code>pkg</code>)
+arrive with <code>make x86-net-build</code>; an image without the network has none of
+them. This is the port boundary doing its job, not a bug; <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs/ports">ports.md</a>
+has the whole matrix.</p>
+<h2 id="the-clock-and-the-memory">The clock and the memory<a class="headerlink" href="#the-clock-and-the-memory" title="Permanent link">&para;</a></h2>
+<p>The time of this system has one style: seconds since the boot, then the ticks
+of the scheduler, and a word that matches the number. A tick is the period of
+the scheduler, one millisecond; the seconds come from the microsecond clock of
+the port and are the truth when a busy kernel misses a tick. <code>free</code> is the
+memory and nothing else.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; uptime
+up 93 s, 93207 ticks, 5 tasks
+microos&gt; cat /proc/uptime
+up 93 s, 93207 ticks
+</code></pre></div>
+
+<p><code>memtest [kilobytes]</code> fills a block, sums it and copies it, for the internal
+heap and the PSRAM one after the other. A single memset of 32 KB is shorter
+than a tick of the x86-64 clock, so each operation is repeated until the clock
+has moved at least a millisecond and the speed is the total bytes over the
+total time. A clock that still cannot resolve the work says <code>too fast to
+measure</code> instead of dividing by one microsecond:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; memtest
+memory test, block of 32 KB
+internal heap: 318 KB total, 201 KB free, 117 KB used
+  32 KB block: fill 65536 KB/s, sum 32768 KB/s, copy 65536 KB/s, data ok
+psram: not available on this platform
+</code></pre></div>
+
+<h2 id="path-and-exec"><code>PATH</code> and <code>exec</code><a class="headerlink" href="#path-and-exec" title="Permanent link">&para;</a></h2>
+<p><code>PATH</code> starts at <code>/bin:/usr/bin</code> and belongs to the shell: it is not a file of
+<code>/etc</code>, and a program does not inherit it yet. The commands of the shell that
+change its state (<code>cd</code>, <code>path</code>) and the ones that have no program (<code>help</code>,
+<code>uname</code>, <code>ps</code>, <code>df</code>, <code>mount</code>, <code>config</code>, <code>stat</code>, <code>write</code>, <code>tree</code>, <code>kill</code>, ...)
+are always the shell's own. The ten names of sbase are the other way round:
+the file wins, and the command is the fallback.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; path
+/bin:/usr/bin
+microos&gt; path /bin
+microos&gt; path ""
+path: an empty value is not a list of directories
+</code></pre></div>
+
+<p>A path is normalized before the call: <code>.</code> is the directory itself, <code>..</code> is
+its parent, a run of slashes is one slash, and a trailing slash names the same
+entry. <code>cd ..</code> from <code>/</code> stays at <code>/</code>, and <code>ls ..</code> is the parent of the current
+directory; the filesystem of this system never sees a <code>..</code> in a path.</p>
+<p>A name with a slash is a path and is used as it is. A name without one is
+looked up in <code>PATH</code>, and the first regular file with an execute bit wins; a
+file without the bit is passed over, as in Linux. A search that found nothing
+says where it looked:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; exec hello
+exec: hello: not found in /bin:/usr/bin
+</code></pre></div>
+
+<p>On the board and in the simulator there is no program to run: a fresh volume
+has no <code>/bin</code>, and <code>execve</code> answers <code>ENOSYS</code> even for a file that is there. The
+x86-64 port has <code>/bin</code> in the MicroFS volume of its disk image
+(<code>make x86-disk</code>): <code>hello</code>, <code>crash</code>, <code>fork</code>, <code>badptr</code>, <code>signals</code>, <code>nx</code>,
+<code>cat</code>, <code>echo</code>, <code>grep</code>, <code>head</code>, <code>ls</code>, <code>tail</code>, <code>wc</code>, <code>sort</code>, <code>find</code>, <code>xargs</code>,
+<code>sed</code>, <code>mkdir</code>, <code>rm</code>, <code>pwd</code>, <code>spawn</code> and <code>zcat</code> are files with the mode 0755,
+and the boot and the shell run them as programs of ring 3. The library programs inherit the descriptors of the shell, so a
+pipeline can end in one of them. <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs/programs">programs.md</a> explains what a
+program is.</p>
+<h2 id="kill-ctrlc-and-no-job-control"><code>kill</code>, Ctrl+C and no job control<a class="headerlink" href="#kill-ctrlc-and-no-job-control" title="Permanent link">&para;</a></h2>
+<p>There is no job control: no <code>&amp;</code>, no <code>fg</code>, no <code>bg</code>, no groups of processes and
+no <code>SIGSTOP</code>. A program runs in the foreground until it ends, and the shell
+waits for it. What a person has instead is two ways to stop one:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; ps
+  pid  prio  state     name
+   12     5  running   shell
+   13     5  sleeping  program
+microos&gt; kill 13
+microos&gt; kill -INT 13
+</code></pre></div>
+
+<p><code>kill</code> takes a positive pid from <code>ps</code> and sends <code>TERM</code> unless a signal is
+named: <code>-INT</code>, <code>-TERM</code>, <code>-CHLD</code>, <code>-PIPE</code> or the number. A pid that names no
+task answers <code>kill: 42: no such process</code>; a signal outside the four is
+refused. During an <code>exec</code>, Ctrl+C of the console sends <code>SIGINT</code> to the
+program; during a pipeline it goes to every stage and the programs they
+started, because they share one job (ADR 0017). A program that ignores it
+keeps running: there is no <code>-9</code> to fall back on (a number outside the table
+is <code>EINVAL</code>), and the machine is restarted with <code>reboot</code> if a program really
+hangs.</p>
+<h2 id="ls-and-tree"><code>ls</code> and <code>tree</code><a class="headerlink" href="#ls-and-tree" title="Permanent link">&para;</a></h2>
+<p>On x86-64 a bare <code>ls</code> is <code>/bin/ls</code> of sbase: the names of a directory, one per
+line and sorted, without a slash at the end of a directory. <code>-l</code> adds the
+kind and the nine bits of the mode, the owner, the group, the size and the
+moment; <code>-a</code> puts <code>.</code> and <code>..</code> first; <code>--color[=always|never|auto]</code> paints a
+directory blue and an executable green (<code>--color</code> is always, <code>auto</code> asks
+<code>isatty</code>, which is 0 on this console). The path itself is not a line of the
+answer — <code>tree</code> is the command that draws the levels.</p>
+<p>The shell has an <code>ls</code> of its own for the machines without a program (the
+simulator and the board): it prints the names one per line in the order of the
+filesystem, a directory with a slash at its end, and its <code>-l</code> is a line per
+entry with the mode, the owner, the size and the date. The listing has no
+fixed table and no limit: every name is printed as it is read, and <code>-a</code> puts
+<code>.</code> and <code>..</code> first. It takes <code>--color</code> too, with the same three colours and
+the same sequences. The two are different commands on purpose: one is a
+program of the disk, the other is the shell of the kernel.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; ls /etc
+fstab
+init.d/
+setting
+microos&gt; ls -l /etc
+drwxr-xr-x root        14 21 Nov 19:03 init.d/
+-rw-r--r-- root         6 21 Nov 19:03 setting
+</code></pre></div>
+
+<p><code>--color</code> writes a directory in blue and a file with an execute bit in green;
+the colours are the SGR sequences of a terminal, so a screen shows them and
+the serial copy of the console does not. <code>--color=always</code> is the flag itself,
+<code>--color=never</code> is the plain listing and <code>--color=auto</code> is the plain listing
+as well, because this shell has no terminal to ask about. Without the flag the
+names are plain, as they always were. A person reads the result on the screen
+of x86-64: <code>make x86-vga-smoke</code> checks the colour of the cell of a directory
+and of an executable out of the picture.</p>
+<p>The owner 0 is written <code>root</code>, a greater uid as a number. A record without a
+mode prints <code>?---------</code>; a record without a moment prints <code>-</code> in the date
+column. A file is its name as it was given: <code>ls hello</code> answers <code>hello</code>.</p>
+<p><code>tree [-ad] [path]</code> draws the levels below a path with <code>|--</code> and <code>`--</code>
+branches and ends with the count of the entries. <code>-d</code> keeps the directories in
+the drawing; the files are still counted, because the summary is the content
+of the tree and not the branches that were drawn. <code>-a</code> is accepted for the
+hidden names, of which this system has none yet. The walk stops at the sixth
+level with <code>... (deeper)</code>, and a directory that cannot be read is skipped.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; tree /etc
+/etc
+|-- init.d/
+|   `-- clock
+`-- setting
+1 directory, 2 files
+microos&gt; tree -d /etc
+/etc
+`-- init.d/
+1 directory, 2 files
+</code></pre></div>
+
+<p>The simulator has a script in <code>/etc/init.d</code> (<code>clock</code>); the x86-64 image
+ships the directory empty and the same <code>/etc/setting</code>.</p>
+<p>A path that does not exist is a sentence with the error of the filesystem and
+the status of the command is not 0: <code>ls: /nope: no such file or directory</code>.</p>
+<h2 id="stat-chmod-and-chown"><code>stat</code>, <code>chmod</code> and <code>chown</code><a class="headerlink" href="#stat-chmod-and-chown" title="Permanent link">&para;</a></h2>
+<p>Every object has a mode of nine bits and an owner, a uid of fifteen bits. A new
+file is <code>0644</code>, a new directory <code>0755</code>, and the owner is 0. <code>stat</code> prints the
+line of <code>ls -l</code> first and then the same numbers as fields:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; stat /etc
+drwxr-xr-x 0 14 /etc
+type: directory
+mode: 0755
+owner: 0
+size: 14
+</code></pre></div>
+
+<p>An object of a filesystem that keeps no modes (<code>/proc</code>, <code>/dev</code>, or a volume
+written by an older release) prints <code>mode: (not set)</code> and no <code>ls</code> line: nine
+dashes would read as <code>0000</code>, which is a statement the record does not make.</p>
+<p><code>chmod</code> takes an octal mode, <code>chown</code> a uid:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; chmod 0700 /etc/init.d
+microos&gt; chown 0 /etc/setting
+microos&gt; chmod 0755 /bin/hello
+</code></pre></div>
+
+<p>A mode that is not octal (<code>0999</code>), a uid above 32767 and a missing path are
+refused with a sentence. <code>chmod 000</code> is not a way to lock a file: the
+filesystem keeps a zero as "this record predates the modes", so it refuses the
+call instead of storing a number it would read back as <code>0644</code>.</p>
+<h2 id="fsck-and-mkfs"><code>fsck</code> and <code>mkfs</code><a class="headerlink" href="#fsck-and-mkfs" title="Permanent link">&para;</a></h2>
+<p><code>fsck</code> reads the volume and reports. Without a flag it never repairs, and
+that is the only form MicroFS has.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; fsck
+fsck: 0 file(s), 3 directory(ies), 484 of 487 block(s) free
+fsck: the volume is consistent
+</code></pre></div>
+
+<p>A volume with a problem prints the count and the first problem and exits with
+an error. <code>fsck: no volume is mounted</code> means what it says: there is no MicroFS
+at <code>/</code> on this machine right now.</p>
+<p>The same command checks a FAT volume, by the point it is mounted at or by the
+name of the device; a device that is not mounted is mounted for the length of
+the walk and forgotten again:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; fsck fat /mnt/sd
+fsck: FAT32, 6 file(s), 2 directory(ies), 1974 of 1984 cluster(s) free
+fsck: the volume is consistent
+</code></pre></div>
+
+<p>The boot sector and the BPB, both copies of the table, the chains (a loop, a
+cross-link, a cluster outside the volume), the entries of the root and of the
+subdirectories, the checksum of the long names, the lost clusters and the
+free count are read; nothing is written. A volume with more than 65536
+clusters is refused with a message, because the map of the claimed clusters
+of the checker would not cover it.</p>
+<p>With <code>-y</code> (or <code>--repair</code>) the FAT volume is repaired and then checked again:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; fsck fat /mnt/sd -y
+fsck: FAT32, 6 file(s), 2 directory(ies), 1975 of 1984 cluster(s) free
+fsck: 1 lost cluster(s) found, 1 freed
+fsck: 1 repair(s) applied
+fsck: 0 problem(s) after the repair
+fsck: the volume is consistent
+</code></pre></div>
+
+<p>The lost clusters go back to the free map, a loop or a cluster outside the
+volume is cut, the second of two names of one cluster gives it up, a broken
+long name is removed and a size that does not match its chain is put right.</p>
+<p>An ext2 volume is checked the same way, by its point, and <code>-y</code> puts the
+counters, the two bitmaps, the link counts and the chain of the directories
+right and reconnects a record no name reaches under <code>/lost+found</code>
+(<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0-rc1/docs/adr/0029-ext2-write.md">ADR 0029</a>; <code>make x86-fs-smoke</code> compares the
+repair with the <code>e2fsck</code> of the host):</p>
+<div class="highlight"><pre><span></span><code>microos&gt; fsck ext2 /
+fsck: ext2, 12 file(s), 4 directory(ies), 12184 of 12288 block(s) free
+fsck: the volume is consistent
+</code></pre></div>
+
+<p>The boot sector, two copies of the table that differ and a directory whose
+head another chain holds are left and printed as <code>(not repaired)</code>; the wiki
+of the files has the rules (<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs/files#mkfs-and-fsck"><code>files.md</code></a>).</p>
+<p><code>mkfs -y</code> unmounts the volume, formats it and mounts it again. The <code>-y</code> is
+mandatory: everything in MicroFS is destroyed. The files of <code>/etc</code> come back
+from the store of the port at the next boot (or at <code>config sync</code>), because the
+configuration keeps a copy outside the filesystem; the rest does not come
+back. On the board <code>idf.py erase-flash</code> destroys the store as well.</p>
+<h2 id="httpd-the-page-of-the-state"><code>httpd</code>: the page of the state<a class="headerlink" href="#httpd-the-page-of-the-state" title="Permanent link">&para;</a></h2>
+<p><code>httpd</code> opens a small HTTP server on the machine. It is not started by the
+boot: a machine of this size opens a port when its owner says so, from the
+shell or from a script of <code>/etc/init.d</code>.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; httpd
+httpd: the page is on port 80
+microos&gt; httpd 8080
+httpd: already on port 80
+microos&gt; httpd off
+httpd: stopped
+</code></pre></div>
+
+<table>
+<thead>
+<tr>
+<th>Request</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /</code></td>
+<td>the name, version, architecture, uptime, memory, PSRAM and task count</td>
+</tr>
+<tr>
+<td><code>GET /health</code></td>
+<td><code>ok</code> (a page of plain text, for a script)</td>
+</tr>
+<tr>
+<td>any other path</td>
+<td><code>404 Not Found</code></td>
+</tr>
+<tr>
+<td>a method other than <code>GET</code></td>
+<td><code>405 Method Not Allowed</code></td>
+</tr>
+</tbody>
+</table>
+<p>Moving the server is <code>httpd off</code> and then <code>httpd &lt;port&gt;</code>: a second <code>httpd</code> with
+a port only says where the page already is. A port that is not ours is
+reported and the server stays off.</p>
+<h2 id="mqtt-one-message"><code>mqtt</code>: one message<a class="headerlink" href="#mqtt-one-message" title="Permanent link">&para;</a></h2>
+<p>The MQTT client is 3.1.1 at QoS 0 and 1. The shell command publishes <strong>one</strong>
+message and disconnects; it is a way to send a word to a broker from a script
+or from the console, not a client that lives in the board.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; mqtt 10.10.10.1 1883 home/board hello
+mqtt: 5 byte(s) to home/board on 10.10.10.1:1883
+</code></pre></div>
+
+<p>The limits are the ones of
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0-rc1/components/net/include/net/mqtt.h"><code>mqtt.h</code></a>: a topic of 128 bytes, a
+payload of 256, a client id of 32, a session timeout of five seconds. There is
+no TLS: the broker has to be on the network of the owner. A refused client and
+a broker that does not answer are different sentences, so the console says
+which one happened.</p>
+<h2 id="telnet-and-config"><code>telnet</code> and <code>config</code><a class="headerlink" href="#telnet-and-config" title="Permanent link">&para;</a></h2>
+<p><code>telnet</code> puts the shell on port 23 beside the UART and the panel, behind the
+accounts of <code>/etc</code>: the client is asked for a name and a password (three
+attempts, a wait and one sentence for a wrong password and for a name that
+does not exist), the session runs as that user, <code>logout</code> ends it, and the door
+never reads the UART of the machine. The server offers the echo (RFC 857) and
+repeats the bytes when the client accepts, so a password is silent on both
+sides; <code>telnet off</code> closes the door. The client sees the answers of its own
+session and not the console of the board (ADR 0044).</p>
+<p><code>config</code> lists the store of <code>/etc</code> (the key-value store of the port, NVS on the
+board), and <code>config sync</code> restores the files that are missing and saves the
+ones that are there. The file wins when the two disagree — see <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs/files">files.md</a>.</p>
+<p>A machine without a store says so instead of printing an empty list, and
+<code>config sync</code> is an error there: there is no copy to restore from or save
+into, and the files of <code>/etc</code> are the settings.</p>
+<div class="highlight"><pre><span></span><code>microos&gt; config
+config: this machine has no store; the files of /etc are the settings
+</code></pre></div>
+
+<h2 id="the-commands-of-a-script">The commands of a script<a class="headerlink" href="#the-commands-of-a-script" title="Permanent link">&para;</a></h2>
+<p>Every file of <code>/etc/init.d</code> is a script of the init process: one shell command
+per line, <code>#</code> starts a comment, and each script runs in a task of its own. This
+is how a service of the board starts without a person at the console:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; mkdir /etc/init.d
+microos&gt; write /etc/init.d/clock date
+microos&gt; reboot
+</code></pre></div>
+
+<p>The commands of the script are the commands of this page, so a script can only
+use what the machine registers. A line that fails is reported in the log and
+does not stop the other lines of the script.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0-rc1/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../build/">← Build and run</a>
+      <a class="next" href="../files/">Files →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.9.0-rc1</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0-rc1/docs/wiki/shell.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

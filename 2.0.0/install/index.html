@@ -1,0 +1,468 @@
+<!doctype html><html lang="en" data-version="2.0.0" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/2.0.0/install/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Install on a laptop — Micro OS wiki 2.0.0</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>2.0.0</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <span aria-current="true">2.0.0</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="../network/">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#install-on-a-laptop">Install on a laptop</a><ul>
+  <li><a href="#1-write-the-stick">1. Write the stick</a>
+  </li>
+  <li><a href="#2-boot-it">2. Boot it</a>
+  </li>
+  <li><a href="#3-the-first-commands">3. The first commands</a>
+  </li>
+  <li><a href="#4-a-file-that-survives-the-power">4. A file that survives the power</a>
+  </li>
+  <li><a href="#5-the-editor-and-the-programs-of-the-outside-world">5. The editor and the programs of the outside world</a>
+  </li>
+  <li><a href="#6-the-network">6. The network</a>
+  </li>
+  <li><a href="#7-two-accounts">7. Two accounts</a>
+  </li>
+  <li><a href="#when-it-does-not-come-up">When it does not come up</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Install on a laptop</div>
+
+    <h1 id="install-on-a-laptop">Install on a laptop<a class="headerlink" href="#install-on-a-laptop" title="Permanent link">&para;</a></h1>
+<p>The full page, with the log of a real boot and the report of a machine that
+does not come up, is <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v2.0.0/docs/install.md"><code>docs/install.md</code></a>. This page is the same
+ten minutes in the short form: the stick, the firmware, the first boot, the
+file that survives the power.</p>
+<p>Micro OS boots on an <strong>x86-64 laptop with UEFI</strong>: the firmware reads a FAT
+partition of a USB stick, the loader starts the kernel, and the disk of the
+machine is the <strong>second partition of the same stick</strong> - a MicroFS volume of
+24 MB that the kernel mounts read-write through its own USB driver
+(<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v2.0.0/docs/adr/0056-the-stick-of-a-person-is-a-disk.md">ADR 0056</a>). A file written
+there is a sector of the stick and survives the power; a machine whose USB
+controller does not come up boots a read-only copy of the disk that travels in
+the ESP and forgets everything.</p>
+<h2 id="1-write-the-stick">1. Write the stick<a class="headerlink" href="#1-write-the-stick" title="Permanent link">&para;</a></h2>
+<p>You need one USB stick of 128 MB or more (<strong>everything on it is erased</strong>) and
+<code>MicroOS-&lt;version&gt;-uefi.img</code>, 90 MB: from the release, or <code>make uefi-stick</code> of
+your own tree (<code>build-uefi/stick.img</code>). The image is a whole disk - a table and
+two partitions - so there is no formatting step and no unpacking.</p>
+<div class="highlight"><pre><span></span><code>lsblk<span class="w"> </span>-o<span class="w"> </span>NAME,SIZE,MODEL,TRAN<span class="w">      </span><span class="c1"># /dev/sdX is the stick; erasing it is the next line</span>
+sudo<span class="w"> </span>dd<span class="w"> </span><span class="k">if</span><span class="o">=</span>MicroOS-2.0.0-uefi.img<span class="w"> </span><span class="nv">of</span><span class="o">=</span>/dev/sdX<span class="w"> </span><span class="nv">bs</span><span class="o">=</span>4M<span class="w"> </span><span class="nv">conv</span><span class="o">=</span>fsync<span class="w"> </span><span class="nv">status</span><span class="o">=</span>progress
+sync
+</code></pre></div>
+
+<h2 id="2-boot-it">2. Boot it<a class="headerlink" href="#2-boot-it" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Boot menu of the firmware (<code>F12</code>, <code>F9</code>, <code>F11</code> or <code>Esc</code> at the logo).</li>
+<li>The entry that says <strong>UEFI</strong> and the name of the stick, not the one without
+   the word (that is the BIOS path, and this is a UEFI image).</li>
+<li><strong>Secure Boot off</strong>: the loader of this system is signed by the project and
+   not by Microsoft, so a firmware that only runs Microsoft's keys refuses it.</li>
+</ol>
+<p>A healthy boot says, in this order:</p>
+<div class="highlight"><pre><span></span><code>BdsDxe: starting Boot0002 "UEFI ... USB HARDDRIVE ..."
+uefi: Micro OS, the loader of a firmware machine
+uefi: the picture is 1920x1080, mode 22 of 30, 32 bpp bgrx
+x86-64: the boot is uefi, the image at 0x600000
+usb0: usb0p2: a volume of this system (mfs), read-only
+root: the root is mfs on usb0p2
+root: usb0p2 is mounted read-write, the volume is named in /etc/volumes
+MicroOS shell ready. Type 'help' for the list of commands.
+
+microos&gt;
+</code></pre></div>
+
+<p><code>root: the root is mfs on usb0p2</code> is the line that says your stick is the disk
+of the machine. <code>root: the root is mfs on boot0p1</code> with <code>read-only</code> is the
+other boot: the machine works on the copy of the ESP and forgets at the power.
+The same lines go to COM1 (115200 8N1) for a machine that has a serial port;
+a laptop usually has none, and its screen is the console.</p>
+<h2 id="3-the-first-commands">3. The first commands<a class="headerlink" href="#3-the-first-commands" title="Permanent link">&para;</a></h2>
+<p>The console is a shell and it starts as root: the person in front of the
+machine is the machine (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v2.0.0/docs/adr/0044-a-session-and-the-group.md">ADR 0044</a>).</p>
+<div class="highlight"><pre><span></span><code>microos&gt; uname
+MicroOS 1.9.0 x86_64 (build ...)
+microos&gt; date
+2026-11-25 03:47:39
+microos&gt; df /
+blocks: 15556 of 24510 free (1 KB each)
+microos&gt; help
+</code></pre></div>
+
+<p><code>date</code> is the CMOS of the machine, <code>df /</code> the disk of 24 MB, <code>help</code> the
+commands and then the programs of <code>/bin</code>.</p>
+<h2 id="4-a-file-that-survives-the-power">4. A file that survives the power<a class="headerlink" href="#4-a-file-that-survives-the-power" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; write /notes.txt hello from my laptop
+21 bytes written to /notes.txt
+microos&gt; cat /notes.txt
+hello from my laptop
+microos&gt; fsck
+fsck: the volume is consistent
+microos&gt; shutdown
+shutdown: the clean end of the machine (off)
+...
+x86-64: the power goes off (ACPI S5, acpi)
+</code></pre></div>
+
+<p>The machine switches itself off. Boot the same stick again and read the file:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; cat /notes.txt
+hello from my laptop
+</code></pre></div>
+
+<h2 id="5-the-editor-and-the-programs-of-the-outside-world">5. The editor and the programs of the outside world<a class="headerlink" href="#5-the-editor-and-the-programs-of-the-outside-world" title="Permanent link">&para;</a></h2>
+<p><code>/bin/ports</code> is in <code>PATH</code> and carries the programs of the SDK: the editor
+<strong>kilo</strong> (BSD-2, not one line changed) and the console set of sbase
+(<code>cksum</code>, <code>tee</code>, <code>cmp</code>, <code>whoami</code>, <code>sha256sum</code>, ...).</p>
+<div class="highlight"><pre><span></span><code>microos&gt; kilo /notes.txt
+</code></pre></div>
+
+<p><code>Ctrl-S</code> saves, <code>Ctrl-Q</code> quits. The first picture of the editor takes a moment:
+the port draws through the framebuffer of the firmware
+(<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v2.0.0/docs/programs">kilo and the terminal</a>).</p>
+<h2 id="6-the-network">6. The network<a class="headerlink" href="#6-the-network" title="Permanent link">&para;</a></h2>
+<p>The image of this page is the <strong>plain machine</strong>: it has no network stack, and
+<code>netinfo</code> says <code>there is no network device</code> (<code>wget</code> is not even a command).
+The wire of 2.0 - DHCP, the Intel NIC, <code>wget</code>, <code>ping</code>, <code>telnet</code> - is in the
+complete machine of <code>make x86-all</code>, and a stick written from that build
+(<code>tools/uefi_stick.py --build build-x86-all</code>) is the same medium with the
+network. The file of the machine is <code>/etc/network</code> (<code>dhcp 0</code>, <code>address</code>,
+<code>netmask</code>, <code>gateway</code>, <code>dns</code>, one a line); Wi-Fi is in neither build.</p>
+<h2 id="7-two-accounts">7. Two accounts<a class="headerlink" href="#7-two-accounts" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; cat /etc/passwd
+root:0:0:/:/bin/sh
+guest:7:7:/home/guest:/bin/sh
+microos&gt; su - guest
+microos&gt; id
+uid=7(guest) gid=7(guest) home=/home/guest shell=/bin/sh
+microos&gt; logout
+logout: the session ends
+microos&gt; whoami
+root
+</code></pre></div>
+
+<p>Root becomes anybody without a password on the console; <code>logout</code> comes back
+to root. The files of an account are the account's, and a file of a group is
+read by the group and not written by it.</p>
+<h2 id="when-it-does-not-come-up">When it does not come up<a class="headerlink" href="#when-it-does-not-come-up" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Line of the console</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the firmware has no UEFI entry of the stick</td>
+<td>-</td>
+<td>Secure Boot off; the entry with <code>UEFI:</code>; the stick is written with <code>dd</code> of the whole image</td>
+</tr>
+<tr>
+<td>Secure Boot refuses the application</td>
+<td>-</td>
+<td>Secure Boot off in the firmware setup</td>
+</tr>
+<tr>
+<td>the screen stays black</td>
+<td><code>uefi: the picture is ...</code> on COM1</td>
+<td>send that line; the port could not draw the mode</td>
+</tr>
+<tr>
+<td><code>root: ... boot0p1</code> / <code>read-only</code></td>
+<td>no <code>usb0:</code> line, or <code>another system</code></td>
+<td>the USB controller or the image: the machine is read-only, rewrite the stick</td>
+</tr>
+<tr>
+<td><code>write: /x.txt: input/output error</code></td>
+<td><code>root: boot0p1 ... read-only</code></td>
+<td>same: the root is the copy in the ESP</td>
+</tr>
+<tr>
+<td>typing does nothing</td>
+<td><code>ps2: the keyboard speaks set 2</code> / <code>usb: keyboard ...</code></td>
+<td>a laptop's keyboard is PS/2 through the EC; an external one must be USB; neither line = no keyboard found</td>
+</tr>
+<tr>
+<td><code>shutdown</code> does not switch off</td>
+<td><code>this machine has no software switch-off</code></td>
+<td>press the power button; the data is flushed already</td>
+</tr>
+<tr>
+<td>a file is gone after the power</td>
+<td><code>root: ... boot0p1</code></td>
+<td>the machine booted the image of the ESP, not your stick</td>
+</tr>
+<tr>
+<td><code>kilo: not found in /bin:/bin/ports:/usr/bin</code></td>
+<td>-</td>
+<td>an image older than 1.9; use a 1.9+ release</td>
+</tr>
+<tr>
+<td><code>netinfo: there is no network device</code></td>
+<td>that line</td>
+<td>this image has no network stack; the complete machine of <code>make x86-all</code> has it</td>
+</tr>
+<tr>
+<td><code>netinfo: e1000e0, link down</code></td>
+<td>that line</td>
+<td>the cable, or the PHY of the port; Wi-Fi is not supported</td>
+</tr>
+<tr>
+<td><code>dhcp: no server, the fixed address of 1.8</code></td>
+<td>that line</td>
+<td>the LAN has no DHCP server: <code>kilo /etc/network</code> with <code>dhcp 0</code> and the address</td>
+</tr>
+</tbody>
+</table>
+<p>The full page has the report of a walk through all of this, and
+<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v2.0.0/docs/troubleshooting">troubleshooting.md</a> has the rest of the system.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v2.0.0/docs">Back to the wiki index</a></p>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 2.0.0</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v2.0.0/docs/wiki/install.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

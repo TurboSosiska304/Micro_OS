@@ -1,0 +1,638 @@
+<!doctype html><html lang="en" data-version="1.8.0-rc2" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.8.0-rc2/troubleshooting/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Troubleshooting — Micro OS wiki 1.8.0-rc2</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.8.0-rc2</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <span aria-current="true">1.8.0-rc2</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="../network/">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#troubleshooting">Troubleshooting</a><ul>
+  <li><a href="#the-host-build">The host build</a>
+  </li>
+  <li><a href="#the-x86-64-machine">The x86-64 machine</a>
+  </li>
+  <li><a href="#the-board">The board</a>
+  </li>
+  <li><a href="#the-shell">The shell</a>
+  </li>
+  <li><a href="#files-and-etc">Files and /etc</a>
+  </li>
+  <li><a href="#programs">Programs</a>
+  </li>
+  <li><a href="#network-commands">Network commands</a>
+  </li>
+  <li><a href="#the-checks-and-the-tools">The checks and the tools</a>
+  </li>
+  <li><a href="#when-nothing-here-fits">When nothing here fits</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Troubleshooting</div>
+    <div class="banner">
+      You are reading <b>1.8.0-rc2</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+      The newest documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+    </div>
+
+    <h1 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h1>
+<p>The table is ordered by where the trouble shows up: the build, the x86-64
+machine, the board, the shell, the files, the network commands, the checks and
+the tools. A row names the sentence you see, the cause and the move.</p>
+<h2 id="the-host-build">The host build<a class="headerlink" href="#the-host-build" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CMake Error ... No such file</code> after a move</td>
+<td>a build tree with the old paths</td>
+<td><code>make clean</code>, then <code>make test</code></td>
+</tr>
+<tr>
+<td><code>ninja: command not found</code></td>
+<td>ninja is not installed</td>
+<td><code>pacman -S ninja</code> / <code>apt install ninja-build</code></td>
+</tr>
+<tr>
+<td><code>clang-format not found</code></td>
+<td>the formatter is a package of its own</td>
+<td>install <code>clang-format</code>; the check is skipped without it</td>
+</tr>
+<tr>
+<td>the tests fail, the same commit is green in CI</td>
+<td>a stale <code>build-host/</code></td>
+<td><code>make clean</code>, then <code>make test</code></td>
+</tr>
+<tr>
+<td><code>make sim</code> waits and prints nothing</td>
+<td>the simulator is interactive</td>
+<td>type a command; end stdin with Ctrl+D; <code>make smoke</code> is scripted</td>
+</tr>
+<tr>
+<td>the simulator formats its volume every boot</td>
+<td>the volume path is missing or not writable</td>
+<td>use a directory that exists, or <code>/tmp/microos-sim.img</code></td>
+</tr>
+<tr>
+<td><code>tsan: ... data race</code></td>
+<td>a race the host port cannot hide</td>
+<td>a defect of the kernel or the test, never noise</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-x86-64-machine">The x86-64 machine<a class="headerlink" href="#the-x86-64-machine" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>QEMU has no 'gtk' display</code></td>
+<td>QEMU was built without GTK</td>
+<td><code>pacman -S qemu-ui-gtk</code> / <code>apt install qemu-system-gui</code></td>
+</tr>
+<tr>
+<td>... and no package is wanted</td>
+<td>a machine without a display server</td>
+<td><code>make x86-run X86_DISPLAY=sdl</code>, or <code>make x86-run-serial</code></td>
+</tr>
+<tr>
+<td><code>qemu-system-x86_64: command not found</code></td>
+<td>QEMU is not installed</td>
+<td><code>pacman -S qemu-system-x86</code> / <code>apt install qemu-system-x86</code></td>
+</tr>
+<tr>
+<td><code>x86-smoke is skipped</code> in <code>make ci</code></td>
+<td>QEMU is not on <code>PATH</code></td>
+<td>install it; the rest of <code>make ci</code> is valid without it</td>
+</tr>
+<tr>
+<td>the window opens, typing does nothing</td>
+<td>the keys go to the window's console</td>
+<td>type into the window, or use <code>make x86-run-serial</code></td>
+</tr>
+<tr>
+<td><code>/bin/hello</code> is not found in the smoke test</td>
+<td>a stale image</td>
+<td><code>make x86-build</code> again; <code>rm -rf build-x86</code> if in doubt</td>
+</tr>
+<tr>
+<td><code>build-x86/disk.img</code> is missing</td>
+<td>the image is made on demand</td>
+<td><code>make x86-run-disk</code>, or <code>x86_disk_smoke.py --mkimage</code></td>
+</tr>
+<tr>
+<td>the disk keeps files from an old run</td>
+<td>the image is persistent by design</td>
+<td>remove <code>build-x86/disk.img</code>; the next boot formats it</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-board">The board<a class="headerlink" href="#the-board" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ESP-IDF not found: set IDF_PATH or IDF_EXPORT</code></td>
+<td>no <code>export.sh</code> was found</td>
+<td>set <code>IDF_EXPORT</code>, or use <code>../esp-idf</code> or <code>~/esp/esp-idf</code></td>
+</tr>
+<tr>
+<td><code>export.sh</code>: "no installed versions"</td>
+<td>the registry does not know this checkout</td>
+<td>run <code>esp-idf/install.sh esp32</code> once</td>
+</tr>
+<tr>
+<td><code>/dev/ttyACM0: Permission denied</code></td>
+<td>the port belongs to <code>uucp</code></td>
+<td><code>gpasswd -a $USER uucp</code>, then log out and back in</td>
+</tr>
+<tr>
+<td>the wrong board is flashed</td>
+<td>several ports are connected</td>
+<td><code>make idf-flash IDF_PORT=/dev/ttyACM0</code></td>
+</tr>
+<tr>
+<td><code>device-test.sh</code> never prints <code>RESULT: PASS</code></td>
+<td>a short console, or the port is busy</td>
+<td><code>CONSOLE_SECONDS=60</code>, close <code>idf.py monitor</code> first</td>
+</tr>
+<tr>
+<td>nothing on the serial console</td>
+<td>a charge-only cable, or no reset</td>
+<td>use a data cable, press reset, try <code>console.py --reset</code></td>
+</tr>
+<tr>
+<td>the volume is gone after a flash</td>
+<td><code>idf.py erase-flash</code> wipes MicroFS</td>
+<td>expected; restore <code>/etc</code> from the store, the rest is lost</td>
+</tr>
+<tr>
+<td><code>/etc</code> is empty after a format</td>
+<td>the store was erased too</td>
+<td><code>mkfs -y</code> keeps the store; <code>erase-flash</code> does not</td>
+</tr>
+</tbody>
+</table>
+<h2 id="the-shell">The shell<a class="headerlink" href="#the-shell" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>&lt;name&gt;: command not found</code></td>
+<td>the command is not of this port</td>
+<td>see <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.8.0-rc2/docs/shell">shell.md</a>; <code>httpd</code>, <code>mqtt</code>, <code>telnet</code> are the board's</td>
+</tr>
+<tr>
+<td><code>line too long, it was not executed</code></td>
+<td>the line is over 127 characters</td>
+<td>shorten it; a cut line is refused on purpose</td>
+</tr>
+<tr>
+<td>the last words are ignored</td>
+<td>the line is cut at 8 words</td>
+<td>split the command</td>
+</tr>
+<tr>
+<td><code>usage: ...</code> and nothing happens</td>
+<td>the wrong number of arguments</td>
+<td>the line says what it wants; <code>help &lt;command&gt;</code> repeats it</td>
+</tr>
+<tr>
+<td><code>help: no such command</code></td>
+<td>the name is not registered</td>
+<td><code>help</code> alone lists them</td>
+</tr>
+<tr>
+<td><code>-h</code> / <code>--help</code> prints nothing</td>
+<td>the flag is not the first word of the line</td>
+<td>put it first, or use <code>help &lt;command&gt;</code>; <code>df -h</code> is sizes, so <code>df --help</code></td>
+</tr>
+</tbody>
+</table>
+<h2 id="files-and-etc">Files and <code>/etc</code><a class="headerlink" href="#files-and-etc" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fsck: no volume is mounted</code></td>
+<td><code>/</code> is not MicroFS right now</td>
+<td><code>mkfs -y</code> formats and mounts; check <code>MICROOS_VOLUME</code></td>
+</tr>
+<tr>
+<td><code>fsck</code> reports problems</td>
+<td>a volume written by a crash</td>
+<td><code>fsck -y</code> repairs what the medium proves (an orphan block, an entry nobody can reach, a loop, a shared block, a size, a counter, a record no name reaches); what it cannot prove stays <code>(not repaired)</code> - copy that off, and <code>mkfs -y</code> erases the volume</td>
+</tr>
+<tr>
+<td><code>fsck fat /mnt/sd</code> reports problems</td>
+<td>a FAT volume a crash left inconsistent</td>
+<td>copy what you can first, then <code>fsck fat /mnt/sd -y</code> repairs the safe damage; the boot sector, two table copies that differ and a directory whose head is shared stay <code>(not repaired)</code> for a person</td>
+</tr>
+<tr>
+<td><code>stat</code> prints <code>mode: (not set)</code></td>
+<td><code>/proc</code>, <code>/dev</code>, or an old volume</td>
+<td>expected: those records keep no modes</td>
+</tr>
+<tr>
+<td><code>chmod 000</code> is refused</td>
+<td>zero means "the modes predate the record"</td>
+<td>choose another mode; a real zero needs a format change</td>
+</tr>
+<tr>
+<td>"not permitted" for a file you own</td>
+<td>the task runs as a uid that is not the owner and the others bits deny it</td>
+<td><code>chmod</code> the triad you need, for example <code>0644</code>, or <code>chown</code> it back as root</td>
+</tr>
+<tr>
+<td><code>rm</code> of a directory fails</td>
+<td><code>rm</code> removes files, there is no <code>-r</code></td>
+<td>remove the children first</td>
+</tr>
+<tr>
+<td>a file of <code>/etc</code> returns after <code>mkfs -y</code></td>
+<td>the store restored it</td>
+<td>expected; change it, then <code>config sync</code></td>
+</tr>
+<tr>
+<td>writes vanish after an x86-64 reset</td>
+<td>the boot ran on the image of the build (<code>make x86-run</code>), or no disk was attached (<code>ram0</code>)</td>
+<td><code>make x86-run-disk</code> keeps <code>build-x86/disk.img</code> between runs</td>
+</tr>
+</tbody>
+</table>
+<h2 id="programs">Programs<a class="headerlink" href="#programs" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>exec: hello: not found in /bin:/usr/bin</code> — there is no <code>/bin</code> here.
+  x86-64 has <code>/bin</code> in the disk image (<code>make x86-disk</code> builds it); <code>path</code>
+  shows the search list.</li>
+<li><code>this machine cannot run a program</code> — <code>execve</code> is <code>ENOSYS</code> on this port.
+  Expected in the simulator and the null port; the board runs Xtensa <code>.mox</code>.</li>
+<li><code>not permitted: the file has no execute bit</code> — the mode has no <code>x</code> for
+  the caller. <code>chmod 0755 &lt;path&gt;</code>.</li>
+<li><code>not a MOX1 image of this system</code> — not an image, a version 1 image, or
+  another machine. Rebuild with <code>mkprog.sh</code> (version 2, the right <code>--arch</code>).</li>
+<li><code>not enough memory for the image</code> — the image does not fit the window.
+  A smaller image; 16 MiB on x86-64, 8+8 KiB on the board.</li>
+<li><code>the program faulted: vector N at 0x...</code> — the program touched memory not
+  its own. That is the report of ring 3, not a crash; the shell survives.</li>
+<li>a program gets 14 from a call — <code>EFAULT</code>: the pointer is not its memory.
+  Fix the pointer; the null and guard pages are unmapped.</li>
+</ul>
+<h2 id="network-commands">Network commands<a class="headerlink" href="#network-commands" title="Permanent link">&para;</a></h2>
+<p>The network of 1.0 is the <strong>LAN</strong>: HTTP, MQTT and telnet are plain text, there
+is no TLS/HTTPS, no certificate store, no IPv6 and no raw sockets, and
+<code>httpd</code> and <code>telnet</code> take no password. Keep the machine on the network of its
+owner; <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0-rc2/SECURITY.md">SECURITY.md</a> says what that means.</p>
+<ul>
+<li><code>httpd: the port 80 is not ours</code> — the port is held, or the stack
+  refused. Try <code>httpd 8080</code> and check <code>wifi status</code>.</li>
+<li><code>httpd: already on port 80</code> — the server is on. <code>httpd off</code>, then
+  <code>httpd &lt;port&gt;</code>.</li>
+<li><code>http: &lt;url&gt;: the connection failed</code> — no route, no DNS, or the server is
+  down. Check <code>wifi status</code>, try an address; there is no TLS.</li>
+<li><code>the URL is not one we speak</code> — the scheme is not plain HTTP, or there is
+  no host. Only <code>http://</code> with a host is understood; there is no <code>https://</code>.</li>
+<li><code>ntp: no answer from ...</code> — UDP 123 is blocked, or the server is silent.
+  Try <code>ntp time.google.com</code>.</li>
+<li><code>mqtt: no session with the broker</code> — the broker is unreachable on that
+  port. Check host and port; there is no TLS.</li>
+<li><code>mqtt: the broker refused the client</code> — the broker said no. The client id
+  is <code>microos</code>; check its rules.</li>
+<li><code>mqtt: the message is longer than 256 byte(s)</code> — the payload limit.
+  Shorten it; a topic is 128 bytes at most.</li>
+<li><code>mqtt</code> cannot reach a broker on 8883 — that is the TLS port, and 1.0 has
+  no TLS. Use 1883 on the LAN, or terminate TLS on another machine.</li>
+<li><code>telnet</code> connects but nothing happens — the door is off. <code>telnet on</code>; the
+  port is 23, no authentication.</li>
+<li><code>telnet</code> answers anyone who connects — there is no password and no TLS.
+  Keep it on the LAN and run <code>telnet off</code> when it is not needed.</li>
+</ul>
+<h2 id="the-checks-and-the-tools">The checks and the tools<a class="headerlink" href="#the-checks-and-the-tools" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Cause</th>
+<th>What to do</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make integrity</code> fails on formatting</td>
+<td>the sources are not formatted</td>
+<td><code>make format</code>, then run it again</td>
+</tr>
+<tr>
+<td>it fails on whitespace, a tab or 100 columns</td>
+<td>the rules of <code>.editorconfig</code></td>
+<td>the check names the file and the line</td>
+</tr>
+<tr>
+<td>it fails in <code>[layers]</code> or <code>[port]</code></td>
+<td>a platform header in the kernel, or a gap in a port</td>
+<td>the failure names the symbol; see <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0-rc2/docs/adr/0004-portable-boundary.md">ADR 0004</a></td>
+</tr>
+<tr>
+<td>it complains about <code>dist/</code></td>
+<td>a bundle of another version</td>
+<td><code>make bundle</code>, or remove <code>dist/</code></td>
+</tr>
+<tr>
+<td>clangd or Serena shows no symbols</td>
+<td>no firmware build, so no <code>compile_commands.json</code></td>
+<td><code>make idf-build</code> once</td>
+</tr>
+<tr>
+<td><code>console.py</code> fails on <code>serial</code></td>
+<td><code>pyserial</code> is not in that Python</td>
+<td>install it, or use the ESP-IDF Python</td>
+</tr>
+</tbody>
+</table>
+<h2 id="when-nothing-here-fits">When nothing here fits<a class="headerlink" href="#when-nothing-here-fits" title="Permanent link">&para;</a></h2>
+<p>The register of what the tree knows it does not do is
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0-rc2/docs/debts.md"><code>docs/debts.md</code></a>; the plan is <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0-rc2/docs/roadmap.md"><code>docs/roadmap.md</code></a>.
+For a build that fails in a way this page does not name, <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.8.0-rc2/docs/build"><code>build.md</code></a>
+has the commands to repeat by hand, and <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.8.0-rc2/docs/testing"><code>testing.md</code></a> has the check
+of the layer that broke.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.8.0-rc2/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../testing/">← Testing</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.8.0-rc2</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0-rc2/docs/wiki/troubleshooting.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

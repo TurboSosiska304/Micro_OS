@@ -1,0 +1,496 @@
+<!doctype html><html lang="en" data-version="1.9.0" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.9.0/ports/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Ports — Micro OS wiki 1.9.0</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.9.0</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <span aria-current="true">1.9.0</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="../network/">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#ports">Ports</a><ul>
+  <li><a href="#what-runs-where">What runs where</a>
+  </li>
+  <li><a href="#esp32-the-board">ESP32: the board</a>
+  </li>
+  <li><a href="#x86-64-bare-metal-in-qemu">x86-64: bare metal in QEMU</a>
+  </li>
+  <li><a href="#host-the-tests-and-the-simulator">host: the tests and the simulator</a>
+  </li>
+  <li><a href="#null-the-port-that-is-not-a-machine">null: the port that is not a machine</a>
+  </li>
+  <li><a href="#which-page-to-read-next">Which page to read next</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Ports</div>
+
+    <h1 id="ports">Ports<a class="headerlink" href="#ports" title="Permanent link">&para;</a></h1>
+<p>A port is a directory that implements the contract of <code>kernel/port/*.h</code> on a
+machine; a board is a description of a machine plus the drivers of its chips.
+Two of the four implementations are ports - the board and x86-64; the <strong>host</strong>
+is the substrate of the tests and the simulator, and the <strong>null</strong> is the shape
+of the contract with no machine under it (ADR 0004). The kernel
+in <code>components/kernel/</code> includes nothing of a platform, and <code>make integrity</code>
+fails when it tries. That is why the same sources build as a Linux process, as
+a bare-metal x86-64 machine and as the firmware of the board; the reasoning is
+in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/adr/0004-portable-boundary.md">ADR 0004</a>, and the recipe for a new
+machine is in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/porting.md"><code>docs/porting.md</code></a>.</p>
+<h2 id="what-runs-where">What runs where<a class="headerlink" href="#what-runs-where" title="Permanent link">&para;</a></h2>
+<p><code>yes</code> means it is there and used, <code>-</code> means it is absent, and a note in
+parentheses is the reason.</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>ESP32 (board)</th>
+<th>x86-64 (QEMU)</th>
+<th>host (simulator)</th>
+<th>null</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>shell</td>
+<td>UART and TFT</td>
+<td>VGA, PS/2, COM1</td>
+<td>stdin/stdout</td>
+<td>-</td>
+</tr>
+<tr>
+<td>MicroFS</td>
+<td>the <code>mfs</code> partition, 5.56 MiB</td>
+<td>the disk, or 512 KB of RAM</td>
+<td>a file, 512 KB</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>/proc</code>, <code>/dev</code></td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>/etc</code> and its store</td>
+<td>files, NVS behind them</td>
+<td>files, no store</td>
+<td>files, a file per key</td>
+<td>-</td>
+</tr>
+<tr>
+<td><code>execve</code></td>
+<td>Xtensa code from <code>progs</code>, no protection</td>
+<td>ring 3, own page tables</td>
+<td><code>ENOSYS</code> (a harness)</td>
+<td><code>ENOSYS</code></td>
+</tr>
+<tr>
+<td><code>fork()</code></td>
+<td>shared memory</td>
+<td>copy on write</td>
+<td>shared memory</td>
+<td>shared memory</td>
+</tr>
+<tr>
+<td>disk</td>
+<td>the internal flash</td>
+<td>ATA PIO, <code>ata0</code></td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>network</td>
+<td>WiFi, lwIP, telnet, HTTP, MQTT</td>
+<td>virtio-net, HTTP, httpd, DNS, MQTT is off</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>screen</td>
+<td>ST7789v2 and a copy of the console</td>
+<td>a framebuffer of 1280x800 of the 8x16 font of the PC (Spleen, 160x50, <code>font.line_gap</code>), the VGA text as the fallback</td>
+<td>a renderer into a file</td>
+<td>-</td>
+</tr>
+<tr>
+<td>MMU</td>
+<td>- (the chip has none)</td>
+<td>yes: ring 3, NX/W^X</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>cores</td>
+<td>2 under FreeRTOS, the kernel on 1</td>
+<td>2 in the MADT, the kernel on 1</td>
+<td><code>MICRO_OS_CPUS</code>, 1 by default</td>
+<td>1</td>
+</tr>
+<tr>
+<td>build</td>
+<td><code>make idf-build</code></td>
+<td><code>make x86-build</code></td>
+<td><code>make build</code></td>
+<td>by the host build</td>
+</tr>
+</tbody>
+</table>
+<p>The matrix follows the ports, not a wish: the board has no MMU and its flash is
+not executable for a file, so it cannot run a program; the simulator must not
+jump into an arbitrary image, so it cannot either; the x86-64 machine has the
+loader, the page tables and the ring that make it possible. Everything else -
+the scheduler, the VFS, MicroFS, <code>/proc</code>, <code>/dev</code>, the libc subset, the shell -
+is the same code on all of them.</p>
+<h2 id="esp32-the-board">ESP32: the board<a class="headerlink" href="#esp32-the-board" title="Permanent link">&para;</a></h2>
+<p>The M5Stack StickC Plus2 (<code>ESP32-PICO-V3-02</code>, 240 MHz, 2 MB PSRAM, 8 MB flash,
+135x240 TFT), on ESP-IDF v5.3 and FreeRTOS.</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>idf-build
+make<span class="w"> </span>idf-flash<span class="w"> </span><span class="nv">IDF_PORT</span><span class="o">=</span>/dev/ttyACM0
+tools/device-test.sh<span class="w"> </span>/dev/ttyACM0<span class="w">      </span><span class="c1"># build, flash, read, RESULT: PASS</span>
+</code></pre></div>
+
+<p>What works: the boot with the self test and the hardware doctor, the console on
+the UART and on the TFT, MicroFS on the flash, <code>/log/start.log</code>, the scripts of
+<code>/etc/init.d</code>, the drivers (display, buttons, buzzer, LED, IR on the pin of the
+LED, IMU, RTC, battery, microphone, sound detector, WiFi), deep sleep with the
+wake of the timer, of BUTTON C and of the RTC alarm, <code>telnet</code> on port 23,
+<code>httpd</code>, <code>mqtt</code>, <code>http</code> and <code>ntp</code>.</p>
+<p>What does not: memory protection (<code>fork()</code> is the placeholder of a machine
+without an MMU), an update over the network (the A/B update is over USB,
+ADR 0022), an IR receiver (the board carries the emitter only; <code>ir rx</code> waits
+for an element on G26), the enclosure modes, a second user. The alarm of the BM8563 turns the board on from
+off; a sleeping board obeys it because the firmware sets the timer of the chip
+for the moment of the match, not because the INT of the clock is a wake line.
+The flash is 8 MB: two application slots of 1.125 MiB, <code>progs</code> 132 KiB and
+MicroFS 5.56 MiB (ADR 0022). The details, the pins and the quirks are in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/ports/esp32/README.md"><code>docs/ports/esp32/README.md</code></a> and
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/ports/esp32/hardware.md"><code>docs/ports/esp32/hardware.md</code></a>.</p>
+<h2 id="x86-64-bare-metal-in-qemu">x86-64: bare metal in QEMU<a class="headerlink" href="#x86-64-bare-metal-in-qemu" title="Permanent link">&para;</a></h2>
+<p>A machine with no operating system under it: no libc, no POSIX, no firmware.
+The loader is a multiboot image that QEMU takes with <code>-kernel</code>; it copies the
+kernel to 16 MiB, maps the same bytes at <code>0xFFFFFFFF80000000</code> - the higher half
+where the image is linked - builds the identity map of the first gigabyte and
+turns long mode on.</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>x86-build
+make<span class="w"> </span>x86-run<span class="w">            </span><span class="c1"># the window: a framebuffer of 1280x800 and the PS/2 keyboard</span>
+make<span class="w"> </span>x86-run-serial<span class="w">     </span><span class="c1"># the same machine in a terminal</span>
+make<span class="w"> </span>x86-smoke<span class="w">          </span><span class="c1"># boot and check the transcript</span>
+</code></pre></div>
+
+<p>The processors come from the MADT of ACPI, and the boot prints how many the
+firmware describes and how many it runs: <code>-smp 2</code> gives
+<code>2 cpu(s) reported by the firmware, 1 in use</code>, because the APs wait for the
+trampoline of ADR 0012 that is not written yet. <code>make x86-smp-build</code> builds
+the portable kernel with <code>KERNEL_SMP=ON</code>.</p>
+<p>What works: a framebuffer of 1280x800 in RGB565 through the Bochs VBE
+interface of the VGA (ADR 0023) - a grid of 160x50 cells of the 8x16 font of
+the PC (Spleen), the step of a line from <code>font.line_gap</code>, the colours of
+<code>/etc/console</code>, and the text mode of the VGA when the card has no such
+interface - COM1 out of one <code>k_port_write()</code>, the
+PS/2 keyboard, the PIT, the context switch, the scheduler, paging and ring 3,
+NX/W^X (the text of the kernel and of a program is read-only code, every data
+page and stack is NX, and the boot audits the tables), the kernel in the
+higher half at <code>0xFFFFFFFF80000000</code> (ADR 0007),
+<code>execve</code> with <code>MOX1</code> images, <code>fork()</code> with copy on write, MicroFS on the first
+partition of an ATA disk (or on 512 KB of RAM without one), the modes and the
+owners, and the network: a virtio-net card, ARP, ICMP, UDP, a client and a
+server of TCP and a resolver with a cache (<code>make x86-net-smoke</code>). It is the
+machine of <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs/programs"><code>programs.md</code></a> and the proof that the kernel is
+portable.</p>
+<p>What does not: the second processor (the list is read, the AP bring-up is the
+blocker of ADR 0012, "The pilot of 1.x"), the key-value store (no <code>/etc</code> to
+persist), a second disk, DMA,
+SMAP/SMEP (a documented decision, ADR 0007), and
+the parts of the network that wait for a real link: DHCP, IPv6 and a
+congestion window. The details are in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/ports/x86_64/README.md"><code>docs/ports/x86_64/README.md</code></a>.</p>
+<h2 id="host-the-tests-and-the-simulator">host: the tests and the simulator<a class="headerlink" href="#host-the-tests-and-the-simulator" title="Permanent link">&para;</a></h2>
+<p>A Linux process: threads instead of a scheduler substrate, <code>pthread</code> mutexes
+instead of a spinlock, files and sockets instead of a flash and a radio. It is
+the development loop and the machine of <code>make test</code>.</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span><span class="nb">test</span><span class="w">        </span><span class="c1"># the unit tests, plus the null probe</span>
+make<span class="w"> </span>sim<span class="w">         </span><span class="c1"># the whole system on a volume in a file</span>
+make<span class="w"> </span>smoke<span class="w">       </span><span class="c1"># the same, driven by a script</span>
+</code></pre></div>
+
+<p>What works: everything portable, with the drivers stubbed and the console
+rendered into a file or nowhere. What it cannot do: run a program, and
+reproduce preemption - the critical section is a recursive <code>pthread</code> mutex, so
+a race is invisible unless the race detector looks for it (<code>make test-tsan</code>).
+The cores are a setting of the run: <code>MICRO_OS_CPUS=2</code> tells the kernel it has
+two, and a task is then in the queue of one of them (<code>make test-smp</code>,
+<code>make test-tsan</code> and <code>make soak-host</code> do it). Every task is already a pthread,
+so a "core" is a run queue and an identity of the task, not a worker thread.
+The details are in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/ports/host/README.md"><code>docs/ports/host/README.md</code></a>.</p>
+<h2 id="null-the-port-that-is-not-a-machine">null: the port that is not a machine<a class="headerlink" href="#null-the-port-that-is-not-a-machine" title="Permanent link">&para;</a></h2>
+<p><code>ports/port_null</code> answers "there is no such thing" to every call: no console,
+no flash, no store, no sockets, no tasks. It is never run for a purpose. It
+exists for one check: <code>microos_null_probe</code> links the kernel <strong>and every
+portable component</strong> against it, so a symbol that portable code takes from a
+machine by accident stops the build on a laptop. It is compiled by the host
+build and run by <code>ctest</code>, and it is the compiled form of ADR 0004.</p>
+<p>It cannot catch a libc call - the probe is linked with the libc of the host -
+but it catches a leak of the port itself, which is the part that has to be
+complete. The details are in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/ports/null/README.md"><code>docs/ports/null/README.md</code></a>.</p>
+<h2 id="which-page-to-read-next">Which page to read next<a class="headerlink" href="#which-page-to-read-next" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs/build">build.md</a> - the commands and the dependencies of each build.</li>
+<li><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs/testing">testing.md</a> - what each machine is checked with.</li>
+<li><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs/programs">programs.md</a> - why only x86-64 runs a program with protection.</li>
+<li><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs/porting">porting.md</a> - the contract, the bring-up order and the checks.</li>
+<li><a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/porting.md"><code>docs/porting.md</code></a> - bringing the kernel to another machine, in full.</li>
+</ul>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.9.0/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../programs/">← Programs</a>
+      <a class="next" href="../porting/">Porting →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.9.0</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.9.0/docs/wiki/ports.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

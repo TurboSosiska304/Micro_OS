@@ -1,0 +1,655 @@
+<!doctype html><html lang="en" data-version="1.0.0-rc1" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.0.0-rc1/kernel-abi/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Kernel and ABI — Micro OS wiki 1.0.0-rc1</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.0.0-rc1</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <span aria-current="true">1.0.0-rc1</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#kernel-and-abi">Kernel and ABI</a><ul>
+  <li><a href="#the-table">The table</a>
+  </li>
+  <li><a href="#the-edge-of-the-table">The edge of the table</a>
+  </li>
+  <li><a href="#signals">Signals</a>
+  </li>
+  <li><a href="#descriptors">Descriptors</a>
+  </li>
+  <li><a href="#limits">Limits</a>
+  </li>
+  <li><a href="#the-mode-and-the-owner">The mode and the owner</a>
+  </li>
+  <li><a href="#the-moments-of-a-file">The moments of a file</a>
+  </li>
+  <li><a href="#processes-and-programs">Processes and programs</a>
+  </li>
+  <li><a href="#the-contract-of-the-port-18">The contract of the port: 1.8</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Kernel and ABI</div>
+    <div class="banner">
+      You are reading <b>1.0.0-rc1</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+      The newest documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+    </div>
+
+    <h1 id="kernel-and-abi">Kernel and ABI<a class="headerlink" href="#kernel-and-abi" title="Permanent link">&para;</a></h1>
+<p>The system calls are the only door between a program and the kernel. Their
+numbers are a <strong>contract</strong>: they are written down, covered by a test, and never
+change. A program built for one version of the kernel keeps working with the
+next one. The canonical document, with the arguments and the reasoning, is
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/syscall-abi.md"><code>docs/syscall-abi.md</code></a>; this page is the map for a person
+who wants to use the system, not a second copy of the contract.</p>
+<h2 id="the-table">The table<a class="headerlink" href="#the-table" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>No.</th>
+<th>Call</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>exit</code></td>
+<td>end the task (or the program) with a status</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>read</code></td>
+<td>bytes out of a descriptor</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>write</code></td>
+<td>bytes into a descriptor</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>open</code></td>
+<td>a descriptor for a path, with flags</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>close</code></td>
+<td>drop a descriptor</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>stat</code></td>
+<td>the type, the mode, the owner, the size</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>lseek</code></td>
+<td>move the position of a descriptor</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>unlink</code></td>
+<td>remove a file</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>mkdir</code></td>
+<td>create a directory</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>readdir</code></td>
+<td>the next entries of a directory</td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>getpid</code></td>
+<td>the number of the task</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>getcwd</code></td>
+<td>the current directory</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>ioctl</code></td>
+<td>a command of a device</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>yield</code></td>
+<td>give the processor away</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>sleep</code></td>
+<td>wait in milliseconds</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>uptime</code></td>
+<td>milliseconds since the boot</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>reboot</code></td>
+<td>restart the machine</td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>fork</code></td>
+<td>a child task</td>
+</tr>
+<tr>
+<td>18</td>
+<td><code>getppid</code></td>
+<td>the number of the parent</td>
+</tr>
+<tr>
+<td>19</td>
+<td><code>waitpid</code></td>
+<td>wait for a child, get its status</td>
+</tr>
+<tr>
+<td>20</td>
+<td><code>malloc</code></td>
+<td>memory of the kernel heap</td>
+</tr>
+<tr>
+<td>21</td>
+<td><code>free</code></td>
+<td>give it back</td>
+</tr>
+<tr>
+<td>22</td>
+<td><code>realloc</code></td>
+<td>resize a block</td>
+</tr>
+<tr>
+<td>23</td>
+<td><code>chmod</code></td>
+<td>the mode of an object</td>
+</tr>
+<tr>
+<td>24</td>
+<td><code>chown</code></td>
+<td>the owner of an object</td>
+</tr>
+<tr>
+<td>25</td>
+<td><code>execve</code></td>
+<td>make the caller a program, with its arguments and environment</td>
+</tr>
+<tr>
+<td>26</td>
+<td><code>statx</code></td>
+<td>the numbers of <code>stat</code> and the moments of a change</td>
+</tr>
+<tr>
+<td>27</td>
+<td><code>pipe</code></td>
+<td>two descriptors of one pipe</td>
+</tr>
+<tr>
+<td>28</td>
+<td><code>dup2</code></td>
+<td>a second descriptor of an open file</td>
+</tr>
+<tr>
+<td>29</td>
+<td><code>kill</code></td>
+<td>send a signal to a task</td>
+</tr>
+<tr>
+<td>30</td>
+<td><code>signal</code></td>
+<td>install a handler, get the previous one</td>
+</tr>
+<tr>
+<td>31</td>
+<td><code>sigreturn</code></td>
+<td>return from a handler (the port's page, not a program)</td>
+</tr>
+<tr>
+<td>32</td>
+<td><code>getlimit</code></td>
+<td>the current memory, CPU or descriptor limit of the task</td>
+</tr>
+<tr>
+<td>33</td>
+<td><code>setlimit</code></td>
+<td>lower one of them</td>
+</tr>
+</tbody>
+</table>
+<p><code>34</code> is the count, not a call. A number that is not in the table is <code>ENOSYS</code>;
+a new call always takes the next free number, and an old one never moves. The
+shell prints the same table with <code>abi</code>:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; abi
+the system calls of the kernel:
+nr    name
+0     exit
+...
+25    execve
+26    statx
+27    pipe
+28    dup2
+29    kill
+30    signal
+31    sigreturn
+32    getlimit
+33    setlimit
+34 call(s) registered
+</code></pre></div>
+
+<p>The convention is the one of Linux: the number and six arguments, the result in
+the return value, and a negative result is an error with the number of POSIX
+(<code>-14</code> is <code>EFAULT</code>, <code>-2</code> is <code>ENOENT</code>, <code>-38</code> is <code>ENOSYS</code>). The width of an
+argument is the width of a pointer of the machine: 32 bits on the board, 64
+bits on the host and on x86-64.</p>
+<h2 id="the-edge-of-the-table">The edge of the table<a class="headerlink" href="#the-edge-of-the-table" title="Permanent link">&para;</a></h2>
+<p>Every argument is checked where it enters, in
+<code>components/kernel/src/ksys.c</code>, before a filesystem or a driver sees it:</p>
+<ul>
+<li><strong>a path</strong> is not NULL, begins at <code>/</code>, and ends within 127 characters
+  (<code>KSYS_PATH_MAX</code>, one less than <code>VFS_PATH_MAX</code>); a path that does not end in
+  the window is <code>ENAMETOOLONG</code>;</li>
+<li><strong>a buffer</strong> is NULL only with a zero length, and no call touches more than
+  64 KiB in one exchange; a longer one is <code>E2BIG</code>, a NULL with a length is
+  <code>EINVAL</code>;</li>
+<li><strong>the memory of the caller</strong> is checked through the port: on a machine with
+  paging the kernel walks the page tables of the program, and a range that is
+  not there is <code>EFAULT</code>; the bytes are then copied with
+  <code>copy_from_user()</code>/<code>copy_to_user()</code>, so the VFS never sees a pointer of the
+  program;</li>
+<li><strong>the flags of <code>open</code></strong> are one of the three access modes and no bit outside
+  the contract;</li>
+<li><strong>the <code>whence</code> of <code>lseek</code></strong> and <strong>the pid of <code>waitpid</code></strong> are compared before
+  a cast can cut a wide register into a valid value;</li>
+<li><strong><code>stat</code> and <code>getcwd</code></strong> need the place for the answer: NULL is <code>EINVAL</code>, a
+  place that is not the caller's memory is <code>EFAULT</code>;</li>
+<li><strong><code>readdir</code></strong> takes whole entries: a count that is not a multiple of the size
+  of an entry is <code>EINVAL</code>.</li>
+</ul>
+<p><code>EFAULT</code> is the most interesting of them, because it is what a machine with an
+MMU can finally say. On x86-64 the null page, the guard page under the stack,
+the part of the window that was never mapped and a range that runs past
+<code>0x03000000</code> are all "not there": the call answers <code>-14</code> instead of taking a
+page fault in ring 0. <code>/bin/badptr</code> is the program of that test - it hands
+<code>write</code>, <code>stat</code> and <code>read</code> a pointer outside the window, a range that crosses
+its end and the guard page, and every call answers 14 while the machine goes on
+and writes a line with a valid pointer afterwards.</p>
+<h2 id="signals">Signals<a class="headerlink" href="#signals" title="Permanent link">&para;</a></h2>
+<p>Four signals, the numbers of POSIX: <code>SIGINT</code> (2), <code>SIGPIPE</code> (13), <code>SIGTERM</code>
+(15) and <code>SIGCHLD</code> (17). <code>signal(sig, handler)</code> installs a function of the
+program and answers the previous disposition; <code>SIG_DFL</code> ends a task that gets
+<code>INT</code>, <code>TERM</code> or <code>PIPE</code> with the status 128 + the signal, <code>SIG_IGN</code> throws the
+signal away, and <code>SIGCHLD</code> is ignored by default. <code>kill(pid, sig)</code> sends a
+signal to one task with a positive pid; 0 and -1 are not groups here, and a pid
+that names no task is <code>ESRCH</code> (<code>-3</code>, the number the table already used for
+"file exists").</p>
+<p>A signal is answered in the context of the task that gets it, on the way out of
+a system call or on the tick of the timer of x86-64. A handler of a program runs
+in ring 3: the port puts a frame below the stack pointer of the program and the
+program returns through the restorer page, which calls <code>sigreturn</code> (29). A
+handler of a task of the host or of the board is an ordinary function of the
+kernel and runs in place.</p>
+<p><code>waitpid()</code> looks at a finished child first and then at the signals; a pending
+signal that has to be answered makes the call answer <code>EINTR</code> and leaves the
+child to the next wait. The exit of a child marks <code>SIGCHLD</code> on its parent. No
+job control: the system has no groups and no <code>&amp;</code>, <code>fg</code> or <code>bg</code>; Ctrl+C while
+the shell runs a program sends <code>SIGINT</code> to that program, and while it runs a
+pipeline to every stage of it and the programs they started (the job of
+ADR 0017). <code>kill</code> takes a pid from <code>ps</code>. ADR 0015 has the design, and the
+x86-64 smoke test runs <code>/bin/signals</code> through all of it.</p>
+<h2 id="descriptors">Descriptors<a class="headerlink" href="#descriptors" title="Permanent link">&para;</a></h2>
+<p>Every task has a table of four descriptors, and the descriptor is the number of
+the slot. The open file behind it is a counted description of the kernel: two
+descriptors of one task (<code>dup2</code>) and the copies of the parent and the child of
+a fork name one open file, with one position and one set of flags. A
+descriptor remembers the access it was opened with: reading one opened for
+writing, or writing one opened for reading, is <code>EBADF</code> before a filesystem is
+asked. The position lives in the description, so two tasks that opened their
+own files do not move each other's cursor.</p>
+<p>A directory is opened with <code>KSYS_O_DIRECTORY</code> (<code>0x0800</code>) and read with
+<code>readdir</code>; it is read, never written. A plain <code>open</code> of a directory is
+<code>EISDIR</code>, and <code>readdir</code> of a file is <code>ENOTDIR</code>.</p>
+<p><code>pipe(fds)</code> (27) gives two ordinary descriptors, <code>fds[0]</code> reading and <code>fds[1]</code>
+writing; the pipe is a ring of 256 bytes in the kernel. The end of the writing
+end is the end of the file (a read gives 0), and a write with no reader is
+<code>EPIPE</code> - there is no <code>SIGPIPE</code> yet, so the error is the whole answer. A wait
+of a pipe is a poll with a bound of half a second and then <code>EAGAIN</code>; <code>lseek</code>
+of a pipe is <code>ESPIPE</code> and <code>readdir</code> is <code>ENOTDIR</code>. <code>dup2(oldfd, newfd)</code> (28)
+makes <code>newfd</code> a second descriptor of one open file, closes what was open
+there, and answers <code>newfd</code>; a number outside the table is <code>EBADF</code>.
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/adr/0014-pipes.md">ADR 0014</a> has the design and the limits.</p>
+<h2 id="limits">Limits<a class="headerlink" href="#limits" title="Permanent link">&para;</a></h2>
+<p>A task starts with the ceiling of three resources and may only lower them:
+the memory it holds (2 MiB), the processor time it spends (about 49 days) and
+the descriptors it opens (4). <code>setlimit</code> (33) takes a selector
+(<code>KSYS_RLIMIT_MEMORY</code>, <code>_CPU</code>, <code>_FDS</code>) and a value; <code>getlimit</code> (32) copies the
+current limit to the caller. A raise is <code>EPERM</code>: there is one user, uid 0, and
+it gets no exemption, so a program cannot lift its own ceiling.</p>
+<p>The memory is the sum of the user blocks of the task - the kernel and the
+system utilities are not charged - and a block over it is 0 from <code>malloc</code>
+(<code>ENOMEM</code> from the library); <code>free</code> returns the room. The CPU time is counted
+at the system calls and at the tick of the port; when it reaches the limit the
+task is marked with <code>SIGTERM</code> (the closest of the four signals to <code>SIGXCPU</code>)
+and the default action ends it with 143. The descriptors stop at the limit
+with <code>EMFILE</code>: <code>open</code>, <code>pipe</code> and a <code>dup2</code> onto a number at or above it.
+Lowering a limit never closes what is already open.</p>
+<p>The library has <code>microos_getlimit</code>, <code>microos_setlimit</code> and
+<code>microos_getrlimits</code>, the shell has <code>ulimit</code> to print and lower the limits of
+the shell, and <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/syscall-abi.md"><code>docs/syscall-abi.md</code></a> has the contract.</p>
+<h2 id="the-mode-and-the-owner">The mode and the owner<a class="headerlink" href="#the-mode-and-the-owner" title="Permanent link">&para;</a></h2>
+<p>Every object has nine bits of <code>rwx</code> and a uid of fifteen bits, stored in the
+spare bits of its MicroFS record (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/memory.md#6-the-record-of-an-inode"><code>docs/memory.md</code></a>).
+A new file is <code>0644</code>, a new directory <code>0755</code>, and the owner is 0.</p>
+<p>The system has <strong>one user</strong>, uid 0, and it gets <strong>no exemption of root</strong>: a file
+of mode <code>0200</code> cannot be read by the only user of the system either. An object
+owned by uid 0 is judged by the triad of the owner, one owned by any other
+number by the triad of the others, because there is no group here. <code>open</code>
+compares its access with the mode before a descriptor exists, so every
+filesystem answers a forbidden open the same way (<code>EPERM</code>); <code>execve</code> needs the
+<code>x</code> bit; <code>stat</code> reports and checks nothing, as in POSIX.</p>
+<p>A mode outside the nine bits and an owner outside the fifteen are <code>EINVAL</code>, not
+a number cut to fit. <code>chmod 000</code> is not expressible: a zero in the record means
+"this record predates the modes", so the filesystem refuses it instead of
+writing a number it would read back as <code>0644</code>.</p>
+<p>The <code>x</code> bit of every directory of a path is walked and checked before the
+object at the end: a directory of mode <code>0600</code> keeps its children out of reach
+of <code>open</code>, <code>stat</code> and <code>execve</code>.</p>
+<h2 id="the-moments-of-a-file">The moments of a file<a class="headerlink" href="#the-moments-of-a-file" title="Permanent link">&para;</a></h2>
+<p><code>stat</code> has no field for a date and its structure is frozen. <code>statx</code> (26) takes
+a <code>struct vfs_statx</code>: the five fields of <code>stat</code> and then <code>mtime</code> (the last
+change of the content) and <code>ctime</code> (the last change of the record, the mode or
+the owner), both the seconds of Unix in 64 bits. They come from the clock of
+the kernel; a machine that was never set stamps with the seconds since its
+boot, and <code>k_clock_present()</code> says whether the number can be printed as a
+date.</p>
+<p>Zero means <strong>this filesystem keeps no time</strong>: a volume of MicroFS of version 1
+has 16-byte records with no room for a moment, and procfs, devfs and the FAT
+reader have no moment of their own. A new MicroFS volume (version 2) moves
+<code>mtime</code> on create, write and truncate, and <code>ctime</code> on those and on
+<code>chmod</code>/<code>chown</code>; there is no access time, because a read does not rewrite a
+record. The library has the same call as <code>microos_statx()</code> and <code>struct
+microos_statx</code>. ADR 0013 has the format and the migration: an old volume
+mounts and stays timeless, it is not converted behind its owner's back.</p>
+<h2 id="processes-and-programs">Processes and programs<a class="headerlink" href="#processes-and-programs" title="Permanent link">&para;</a></h2>
+<p><code>fork()</code> answers the pid in the parent and 0 in the child. On x86-64 it is a
+real copy-on-write fork of the page tables; on a machine without an MMU the
+child shares the memory of the parent and re-enters its program, and the port
+says so. <code>waitpid()</code> waits for a child and reports its status; no child is
+<code>ECHILD</code>.</p>
+<p><code>execve(path, argv, envp)</code> reads the file through the VFS, checks the mode,
+parses a <code>MOX1</code> image and asks the port to run it. The environment is the third
+argument, a vector of <code>NAME=VALUE</code> words; a NULL one is the environment of the
+system (<code>PATH=/bin</code>, <code>HOME=/</code>, <code>USER=root</code>, <code>PWD=/</code>). The port enters the
+program with <code>argc</code> in <code>rdi</code>, <code>argv</code> in <code>rsi</code> and <code>envp</code> in <code>rdx</code>
+(<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/adr/0016-userland.md">ADR 0016</a>). The board and the simulator answer
+<code>ENOSYS</code> for an image of their own machine and <code>ENOEXEC</code> for one of another;
+x86-64 enters ring 3. <a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.0.0-rc1/docs/programs">programs.md</a> has the details of the
+format, the entry and the library of a program.</p>
+<h2 id="the-contract-of-the-port-18">The contract of the port: 1.8<a class="headerlink" href="#the-contract-of-the-port-18" title="Permanent link">&para;</a></h2>
+<p>The kernel and a port are two halves of one pair, and the version of the
+contract is their vermagic. It lives in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/components/kernel/include/kernel/port/info.h"><code>info.h</code></a> of the port
+contract:</p>
+<div class="highlight"><pre><span></span><code><span class="cp">#define KERNEL_PORT_API_VERSION_MAJOR 1u</span>
+<span class="cp">#define KERNEL_PORT_API_VERSION_MINOR 8u</span>
+</code></pre></div>
+
+<p>A port asserts the version at build time, and the boot compares it again and
+panics on a major mismatch instead of failing far from the cause. <code>make
+integrity</code> checks that every port implements the whole contract. The step
+1.7 was the check of the memory of the caller - <code>k_port_exec_contains()</code>,
+which turns a bad pointer of a program into <code>EFAULT</code>; 1.8 is
+<code>k_port_exec_arch()</code> - the machine of the port as the header of an image names
+it (<code>0</code> x86-64, <code>1</code> Xtensa, <code>-1</code> for a port that runs no programs), which is
+what turns an image of another machine into <code>ENOEXEC</code> before a byte of it runs
+(ADR 0018). Some older pages of <code>docs/</code> still name 1.4; the number the boot
+prints is the one in <code>info.h</code>, and the boot of this tree prints <code>contract 1.8</code>.</p>
+<p>The three builds of one tree are the check of the contract in practice: a
+function that only one port implements is a function the others do not need,
+and a component that includes a platform header fails <code>make integrity</code> before
+it can compile on the machine the author has.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.0.0-rc1/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../porting/">← Porting</a>
+      <a class="next" href="../testing/">Testing →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.0.0-rc1</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0-rc1/docs/wiki/kernel-abi.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

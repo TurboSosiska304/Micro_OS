@@ -1,0 +1,372 @@
+<!doctype html><html lang="en" data-version="1.0.0" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.0.0/porting/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Porting — Micro OS wiki 1.0.0</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.0.0</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <span aria-current="true">1.0.0</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#porting">Porting</a><ul>
+  <li><a href="#the-shape-of-a-port">The shape of a port</a>
+  </li>
+  <li><a href="#the-order-that-hurts-least">The order that hurts least</a>
+  </li>
+  <li><a href="#what-checks-it">What checks it</a>
+  </li>
+  <li><a href="#what-a-port-does-not-do">What a port does not do</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Porting</div>
+
+    <h1 id="porting">Porting<a class="headerlink" href="#porting" title="Permanent link">&para;</a></h1>
+<p>A <strong>port</strong> is a directory that implements the contract of
+<code>components/kernel/include/kernel/port/*.h</code> and <code>kernel/port_task.h</code>; a
+<strong>board</strong> is the description of a machine plus the drivers of its chips. The
+kernel includes nothing of a platform, and <code>make integrity</code> fails when it
+tries (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0004-portable-boundary.md">ADR 0004</a>). The same sources build
+as a Linux process, as a bare-metal x86-64 machine and as the firmware of the
+board because of that line.</p>
+<p>The canonical guide, with the version of the contract, every group of calls,
+the stubs of an absent duty and the common mistakes, is
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/porting.md"><code>docs/porting.md</code></a>. This page is the short way in; the guide
+and the headers are the truth.</p>
+<h2 id="the-shape-of-a-port">The shape of a port<a class="headerlink" href="#the-shape-of-a-port" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Header</th>
+<th>What the machine answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>execution</td>
+<td><code>kernel/port_task.h</code></td>
+<td>stack, tasks, sleep, signals</td>
+</tr>
+<tr>
+<td>console</td>
+<td><code>kernel/port/console.h</code></td>
+<td>the bytes out, a line, a key, a poll</td>
+</tr>
+<tr>
+<td>clock</td>
+<td><code>kernel/port/time.h</code></td>
+<td>milliseconds and microseconds since the boot</td>
+</tr>
+<tr>
+<td>heap</td>
+<td><code>kernel/port/mem.h</code></td>
+<td>the internal heap, the PSRAM, alloc and free</td>
+</tr>
+<tr>
+<td>locks</td>
+<td><code>kernel/port/lock.h</code></td>
+<td>a critical section and a recursive mutex</td>
+</tr>
+<tr>
+<td>power</td>
+<td><code>kernel/port/power.h</code></td>
+<td>halt and reset</td>
+</tr>
+<tr>
+<td>identity</td>
+<td><code>kernel/port/info.h</code></td>
+<td>the name, the architecture, contract 1.8</td>
+</tr>
+<tr>
+<td>store</td>
+<td><code>kernel/port/kv.h</code></td>
+<td>the keys behind <code>/etc</code>, or "nothing is stored"</td>
+</tr>
+<tr>
+<td>network</td>
+<td><code>kernel/port/net.h</code></td>
+<td>TCP client and server, one UDP exchange</td>
+</tr>
+<tr>
+<td>programs</td>
+<td><code>kernel/port/exec.h</code></td>
+<td>a window, the entry, the end, a pointer check</td>
+</tr>
+</tbody>
+</table>
+<p>The first seven are mandatory; the store, the network and programs may be
+stubs that answer honestly. The execution substrate is never optional: the
+scheduler has no context to switch without it.</p>
+<p>Two duties have no <code>k_port_*</code> call: the boot (<code>kernel_boot()</code> with the board
+description and the subsystem table, <code>kernel/boot.h</code>) and the block devices
+(<code>struct k_blockdev</code> registered with <code>k_blockdev_register()</code>,
+<code>kernel/blockdev.h</code>). Drivers are not port duties.</p>
+<h2 id="the-order-that-hurts-least">The order that hurts least<a class="headerlink" href="#the-order-that-hurts-least" title="Permanent link">&para;</a></h2>
+<ol>
+<li>console — one character out, everything else is debugged through it;</li>
+<li>time — a counter that only goes forward;</li>
+<li>execution substrate — the kernel's own tests then run;</li>
+<li>memory — <code>kmm</code> and the VFS start working;</li>
+<li>locks — the critical section first, the sleeping mutex after;</li>
+<li>block device — MicroFS can mount;</li>
+<li>store, network, programs — each may say "I have none";</li>
+<li>board and drivers.</li>
+</ol>
+<p>Read the existing ports in this order: <code>ports/port_null</code> (the shape with no
+machine), <code>ports/port_host</code> (the same calls over POSIX), <code>ports/port_x86_64</code>
+(the bare machine, programs, signals and an MMU) and
+<code>components/port_esp32</code> (the board).</p>
+<h2 id="what-checks-it">What checks it<a class="headerlink" href="#what-checks-it" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span><span class="nb">test</span><span class="w">            </span><span class="c1"># the kernel against port_host, and port_null linked</span>
+make<span class="w"> </span>integrity<span class="w">       </span><span class="c1"># [layers], [port], [budget], [sources], [format]</span>
+make<span class="w"> </span>x86-smoke<span class="w">       </span><span class="c1"># a second machine boots</span>
+tools/device-test.sh<span class="w"> </span>/dev/ttyACM0<span class="w">   </span><span class="c1"># the board boots</span>
+python3<span class="w"> </span>tools/wiki_check.py
+</code></pre></div>
+
+<p><code>[port]</code> looks for every function of the contract in every port directory: the
+built library for the host and null ports, the sources for the ESP32 and
+x86-64. A boot says <code>port: &lt;name&gt;, contract 1.8</code>; a major mismatch panics and
+a minor one warns.</p>
+<h2 id="what-a-port-does-not-do">What a port does not do<a class="headerlink" href="#what-a-port-does-not-do" title="Permanent link">&para;</a></h2>
+<p>It does not add a call to the contract for one board, include a driver header
+or know the syscall ABI. If the kernel needs a new door, that is a new call
+and a bump of the contract for every port — that is what the version is for.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.0.0/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../ports/">← Ports</a>
+      <a class="next" href="../kernel-abi/">Kernel and ABI →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.0.0</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/wiki/porting.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

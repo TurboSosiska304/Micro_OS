@@ -1,0 +1,831 @@
+<!doctype html><html lang="en" data-version="1.8.0" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.8.0/testing/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Testing — Micro OS wiki 1.8.0</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.8.0</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <span aria-current="true">1.8.0</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="../network/">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#testing">Testing</a><ul>
+  <li><a href="#the-commands">The commands</a>
+  </li>
+  <li><a href="#make-test-the-unit-tests">make test: the unit tests</a>
+  </li>
+  <li><a href="#make-smoke-the-simulator">make smoke: the simulator</a>
+  </li>
+  <li><a href="#make-reproducible-the-same-inputs-the-same-bytes">make reproducible: the same inputs, the same bytes</a>
+  </li>
+  <li><a href="#make-coverage-the-lines-of-the-kernel">make coverage: the lines of the kernel</a>
+  </li>
+  <li><a href="#the-x86-64-smoke-tests">The x86-64 smoke tests</a>
+  </li>
+  <li><a href="#make-integrity-the-boundary-and-the-hygiene">make integrity: the boundary and the hygiene</a>
+  </li>
+  <li><a href="#make-ci-the-local-half">make ci: the local half</a>
+  </li>
+  <li><a href="#the-device-test">The device test</a>
+  </li>
+  <li><a href="#adding-a-test">Adding a test</a>
+  </li>
+  <li><a href="#the-campaign-of-10">The campaign of 1.0</a><ul>
+  <li><a href="#one-boot-600-seconds-make-soak">One boot, 600 seconds: make soak</a>
+  </li>
+  <li><a href="#the-host-half-make-soak-host">The host half: make soak-host</a>
+  </li>
+  <li><a href="#the-fuzz-make-fuzz-long">The fuzz: make fuzz-long</a>
+  </li>
+  <li><a href="#the-disk-make-disk-stress">The disk: make disk-stress</a>
+  </li>
+  <li><a href="#the-board-toolsboard_soaksh">The board: tools/board_soak.sh</a>
+  </li>
+  <li><a href="#reading-a-result-and-the-levels-of-a-bug">Reading a result and the levels of a bug</a>
+  </li>
+</ul>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Testing</div>
+
+    <h1 id="testing">Testing<a class="headerlink" href="#testing" title="Permanent link">&para;</a></h1>
+<p>The checks are layered by what they can see. A unit test sees one piece of the
+kernel; the simulator sees the whole portable system as a process; the x86-64
+smoke test sees a bare machine and a processor; the device test sees the board
+and the chips on it. None of them replaces another.</p>
+<h2 id="the-commands">The commands<a class="headerlink" href="#the-commands" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What it proves</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make test</code></td>
+<td>the host build, the unit tests, the null probe</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make test-asan</code></td>
+<td>the same tests with the sanitizers</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make test-tsan</code></td>
+<td>the same tests under the race detector, on two cores</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make test-smp</code></td>
+<td>the tests of the kernel of two cores (<code>KERNEL_SMP</code>)</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make test-minimal</code></td>
+<td>the host tests with the optional features off</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>make smoke</code></td>
+<td>the simulator boots and the shell answers</td>
+<td>the host build</td>
+</tr>
+<tr>
+<td><code>make coverage</code></td>
+<td>the lines of <code>components/kernel</code> and the threshold</td>
+<td><code>gcc</code>, <code>gcov</code>, Python</td>
+</tr>
+<tr>
+<td><code>make reproducible</code></td>
+<td>two runs of the disk image are the same bytes</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make x86-build</code></td>
+<td>the x86-64 kernel and loader compile</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make x86-smp-build</code></td>
+<td>the same kernel with <code>KERNEL_SMP=ON</code> (ADR 0012)</td>
+<td><code>gcc</code>, <code>cmake</code>, <code>ninja</code></td>
+</tr>
+<tr>
+<td><code>make x86-smoke</code></td>
+<td>the kernel boots, runs <code>/bin/hello</code>, the shell answers</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-vga-smoke</code></td>
+<td>the VGA screen and the PS/2 keyboard, no display</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-disk-smoke</code></td>
+<td>a file written by one boot is read by the next</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make x86-net-smoke</code></td>
+<td>the network: ping, UDP, HTTP, <code>httpd</code> and DNS</td>
+<td><code>qemu-system-x86_64</code></td>
+</tr>
+<tr>
+<td><code>make bench</code></td>
+<td>the numbers of the machine: the call of the door, fork and exec, a pipe, a file of 16 MiB, the console and a shell pipeline (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/docs/bench.md">../bench.md</a>)</td>
+<td><code>qemu-system-x86_64</code>, the two builds</td>
+</tr>
+<tr>
+<td><code>make soak</code></td>
+<td>one boot of x86-64 for 600 s under the mixed load</td>
+<td>QEMU, the host build</td>
+</tr>
+<tr>
+<td><code>make soak-host</code></td>
+<td>the portable kernel on the host under TSan for 600 s, two cores</td>
+<td>GCC, TSan, valgrind</td>
+</tr>
+<tr>
+<td><code>make fuzz-long</code></td>
+<td>the fuzz of the ABI and the parsers, with a multiplier</td>
+<td>GCC, ASan</td>
+</tr>
+<tr>
+<td><code>make disk-stress</code></td>
+<td>a full volume, <code>fsck -y</code> and two boots (MicroFS, FAT)</td>
+<td>QEMU, dosfstools, mtools</td>
+</tr>
+<tr>
+<td><code>make board-soak</code></td>
+<td>the same session on the board for 180 s, one boot (the gate of a compatibility release; <code>BOARD_SOAK_MINUTES=10</code> for a change of the flash or the boot)</td>
+<td>ESP-IDF and a board</td>
+</tr>
+<tr>
+<td><code>make integrity</code></td>
+<td>the boundary, the bundle, the partitions, the hygiene</td>
+<td><code>clang-format</code></td>
+</tr>
+<tr>
+<td><code>make ci</code></td>
+<td>the list a contributor runs before a push</td>
+<td>the above, QEMU optional</td>
+</tr>
+<tr>
+<td><code>tools/device-test.sh</code></td>
+<td>build, flash and boot the board</td>
+<td>ESP-IDF and a board</td>
+</tr>
+</tbody>
+</table>
+<h2 id="make-test-the-unit-tests"><code>make test</code>: the unit tests<a class="headerlink" href="#make-test-the-unit-tests" title="Permanent link">&para;</a></h2>
+<p><code>make test</code> configures and builds <code>build-host/</code> and runs <code>ctest</code>, which runs
+three tests:</p>
+<ul>
+<li><code>microos_tests</code> - the unit tests, in <code>tests/cases/</code>, on the framework of
+  <code>tests/framework/ktest.h</code>. There is no external dependency; the tests run
+  inside a real kernel task, so they exercise the task API as well.</li>
+<li><code>mkprog</code> - <code>tools/test_mkprog.py</code>, the layout of the image that
+  <code>tools/mkprog.sh</code> writes; it builds tiny objects with the compiler of the
+  host and skips itself when Python is not found.</li>
+<li><code>null_probe</code> - the kernel and every portable component linked against the
+  null port. A symbol that portable code takes from a machine by accident is a
+  link error here, on a laptop.</li>
+</ul>
+<p>The numeric corpus is <code>tests/corpus/vectors.txt</code>: 512 numbers with the
+boundary values (0, 1, 255, 65535, 2147483647 and so on) mixed in. A new
+numeric behaviour reuses it rather than inventing a second list.</p>
+<p><code>make test-asan</code> and <code>make test-tsan</code> are the same tests in <code>build-asan/</code> and
+<code>build-tsan/</code>. The board has no debugger, so the host is the place where a
+wrong pointer or undefined behaviour has to be caught; TSan is the only thing
+that sees a race, because the host port cannot reproduce preemption.</p>
+<p><code>make test-minimal</code> is the second configuration of the host build (ADR 0010):
+<code>KERNEL_PSRAM</code>, <code>KERNEL_EXEC</code>, the network components and the second
+filesystem are off, in <code>build-minimal/</code>. It proves that the sources still
+build without them and runs the tests that do not need the feature - the
+cases of <code>exec</code> and of the network are guarded in the source, so the report
+still says how many checks the small build has.</p>
+<h2 id="make-smoke-the-simulator"><code>make smoke</code>: the simulator<a class="headerlink" href="#make-smoke-the-simulator" title="Permanent link">&para;</a></h2>
+<p><code>make smoke</code> runs <code>tools/sim_smoke.py</code>, which boots
+<code>build-host/ports/port_host/microos_sim</code> with a volume and a store of its own,
+types a list of commands and checks the transcript: the subsystems, MicroFS,
+<code>/proc</code>, <code>/dev</code>, the configuration of <code>/etc</code>, the shell and the network. It is
+the cheapest end-to-end test of the portable system, and it takes a couple of
+seconds.</p>
+<p>The simulator links <code>components/net</code>, so the same HTTP client, clock of NTP
+and page of the state the board runs over lwIP run there over the sockets of
+the process. The smoke test starts a small page of its own on the loopback and
+asks the guest for it with <code>http get</code>, so the path from the shell through the
+client to a real socket is exercised, not only the parser of a unit test. It
+does not open a port on the network of the machine: the page lives in the test
+process, on a port the kernel chose.</p>
+<p><code>make sim</code> runs the same binary by hand, with <code>/tmp/microos-sim.img</code> and
+<code>/tmp/microos-kv</code> by default. <code>python3 tools/sim_smoke.py --verbose</code> shows
+every step.</p>
+<h2 id="make-reproducible-the-same-inputs-the-same-bytes"><code>make reproducible</code>: the same inputs, the same bytes<a class="headerlink" href="#make-reproducible-the-same-inputs-the-same-bytes" title="Permanent link">&para;</a></h2>
+<p>The gate of 1.0 asks for an image that two runs build to the same bytes. Three
+things used to make that fail:</p>
+<ul>
+<li>the records of MicroFS are stamped with <code>mtime</code> and <code>ctime</code>, and the
+  filesystem took the moment from the clock of the process;</li>
+<li><code>kernel_build_id()</code> is <code>__DATE__ " " __TIME__</code>, which changes on every
+  compile;</li>
+<li>an absolute path of the source tree reached the debug information and
+  <code>__FILE__</code> of a panic message.</li>
+</ul>
+<p><code>make</code> exports <code>SOURCE_DATE_EPOCH</code> (0 by default, the convention of
+reproducible builds); <code>make reproducible</code> builds the disk image, keeps a copy,
+builds it again from nothing and compares the two with <code>cmp</code>, then prints
+their <code>sha256</code>. What is fixed:</p>
+<ul>
+<li><code>tools/mkfs_mfs.c</code> reads <code>SOURCE_DATE_EPOCH</code> (and <code>--source-date-epoch</code>) and
+  gives the filesystem one fixed moment for every record
+  (<code>mfs_set_time_source()</code>); the running machine keeps the wall clock of the
+  kernel;</li>
+<li><code>cmake/reproducible.cmake</code> sets <code>__DATE__</code> and <code>__TIME__</code> from the same
+  moment and maps the paths of the tree with <code>-ffile-prefix-map</code>, so the
+  kernel id and the debug information no longer depend on when and where the
+  build ran;</li>
+<li><code>tools/bundle.sh</code> makes its archive with sorted names, a fixed mtime and the
+  numeric owner 0, and <code>gzip -n</code>; the ESP32 firmware uses
+  <code>CONFIG_APP_REPRODUCIBLE_BUILD</code> in <code>sdkconfig.defaults</code>.</li>
+</ul>
+<p>A <code>sdkconfig</code> that was generated before this option existed keeps its old
+value: the defaults of the tree are read only when there is no <code>sdkconfig</code>.
+On an old checkout, remove <code>sdkconfig</code> (or set the option in <code>idf.py
+menuconfig</code>) before the build that has to be reproducible.</p>
+<p><code>SOURCE_DATE_EPOCH</code> changes the bytes of the image on purpose: two dates are
+two different builds. What is compared is two runs with the same date, the
+same sources and the same tools.</p>
+<p>The board is the other half. The cloud builds the firmware twice, in <code>build/</code>
+and <code>build-repro/</code>, and compares <code>micro_os.bin</code>, <code>bootloader.bin</code> and
+<code>partition-table.bin</code>; it makes the bundle twice as well and compares the two
+<code>dist/</code> trees, archive included. Two clean builds of this tree with
+<code>SOURCE_DATE_EPOCH=0</code> gave the same three images. A laptop without ESP-IDF can
+only do the half above, which is why <code>make reproducible</code> is the image and not
+the firmware.</p>
+<h2 id="make-coverage-the-lines-of-the-kernel"><code>make coverage</code>: the lines of the kernel<a class="headerlink" href="#make-coverage-the-lines-of-the-kernel" title="Permanent link">&para;</a></h2>
+<p><code>make coverage</code> configures <code>build-coverage/</code> with <code>-DMICRO_OS_COVERAGE=ON</code>
+(<code>--coverage -O0 -g</code>), runs the unit tests and the simulator, and then
+<code>tools/coverage_report.py</code> hands every <code>.gcda</code> to <code>gcov --json-format</code> and
+merges the reports by <code>(source, line)</code>, so a source compiled into two binaries
+is counted once. A line is covered when any of the runs reached it. The
+report counts <code>components/kernel</code> and fails under the threshold: <strong>70% of
+lines</strong>. This tree met <strong>80.6-80.7%</strong> (2581-2584 of 3201 lines) when the gate was added;
+70 leaves room for another compiler and another <code>gcov</code>, whose notion of an
+executable line can differ a little, and is high enough that a regression of
+the tests is noticed. <code>--path</code> and <code>--threshold</code> move the report to another
+subtree or another number.</p>
+<p><code>gcov</code> is a part of GCC and no <code>lcov</code> is needed: a machine with the compiler
+has the report. The counters are removed before the run, so the number is of
+this run and not of the runs before it.</p>
+<h2 id="the-x86-64-smoke-tests">The x86-64 smoke tests<a class="headerlink" href="#the-x86-64-smoke-tests" title="Permanent link">&para;</a></h2>
+<p><code>make x86-smoke</code> boots the kernel on a real (emulated) processor: QEMU loads
+the loader of the port, the loader turns long mode on and copies the kernel,
+and the kernel prints its banner on the serial port. Then the script types
+commands into COM1 and checks the answers: the boot, the filesystem, the
+program of <code>/bin</code> (the <code>execve</code> path, the arguments, the status), the fork with
+copy on write, the fault of <code>/bin/crash</code>, and the <code>EFAULT</code> of <code>/bin/badptr</code>.
+The run prints its number of checks, ends with <code>RESULT: PASS</code>, and the count of
+<code>1.2.0</code> is the one of the release run (pending until the integration hands
+over the tree).</p>
+<p><code>make x86-vga-smoke</code> looks at the other console: it boots with
+<code>-display none</code>, reads the framebuffer with <code>screendump</code> (a PPM of 1280x800)
+and the text mode at <code>0xB8000</code> with <code>pmemsave</code>, compares the cells with the
+table of the font, reads the colours of <code>/etc/console</code> and of <code>ls --color</code>,
+and types with <code>sendkey</code>, so it proves both screens and IRQ1 without a display
+server. It is a target of its own and <strong>not</strong> a part of <code>make ci</code>: the monitor
+of QEMU is a tool a build farm does not have to have.</p>
+<p><code>make x86-disk-smoke</code> gives the machine an 8 MB image on the primary IDE
+channel, writes a file in one boot and reads it in the next, and runs the
+programs of the volume (<code>zcat</code>, Lua, bc/dc and the commands of sbase) in both
+boots. It is the test of the ATA driver, of the MBR parser and of MicroFS on a
+real medium, and it is also not a part of <code>make ci</code>.</p>
+<p><code>make x86-net-smoke</code> builds the image with <code>-DMICRO_OS_X86_NET=ON</code>, gives QEMU
+a virtio-net card on its user-mode network and a forward of a port of the host
+to the guest, and checks the whole contract of the port over the wire: the
+device and its MAC, <code>ping</code> of the gateway, a UDP exchange with an echo server
+of the host, an HTTP GET of the client of <code>components/net</code>, the stream of
+<code>wget</code>, TLS 1.3 and 1.2 with a wrong name and a wrong authority refused, the
+install of a signed package over HTTPS, the page of the state served by the
+guest through <code>hostfwd</code>, and a name the resolver answers twice (the second
+from the cache). Like the other two it is not a part of <code>make ci</code>: it opens a
+port on the loopback and needs the user-mode network.</p>
+<p><code>make x86-iso-smoke</code> boots the BIOS ISO with <code>-cdrom</code> and nothing else - no
+<code>-kernel</code>, no <code>-initrd</code>, no disk - and checks the loader, the signature of the
+kernel, the mount of the root module and the shell with <code>/bin</code>. It is the
+definition of "the ISO boots" and it is not a part of <code>make ci</code>.</p>
+<h2 id="make-integrity-the-boundary-and-the-hygiene"><code>make integrity</code>: the boundary and the hygiene<a class="headerlink" href="#make-integrity-the-boundary-and-the-hygiene" title="Permanent link">&para;</a></h2>
+<p><code>tools/integrity_check.py</code> checks what a compiler cannot:</p>
+<ul>
+<li>the <strong>layers</strong>: the kernel includes only the kernel, a portable component no
+  platform header and no <code>k_port_*</code> call, and a port implements the whole
+  contract of <code>kernel/port/*.h</code>;</li>
+<li>the <strong>bundle</strong> in <code>dist/</code>, when there is one: the sums and the images;</li>
+<li>the <strong>partition table</strong>: <code>partitions.csv</code> against the flash size and the
+  build;</li>
+<li>the <strong>budget</strong> of the image: the firmware fits its 2 MB slot;</li>
+<li>the <strong>features</strong> (ADR 0010): a flag that is off leaves no symbol in the map
+  of the ESP-IDF build and no library in the host build;</li>
+<li><strong>git</strong>: the objects, through <code>git fsck --strict</code>;</li>
+<li>the <strong>hygiene</strong> of the sources: UTF-8, LF, no trailing whitespace, no tabs,
+  100 columns in C, and <code>clang-format</code> when it is installed.</li>
+</ul>
+<p><code>--skip-format --skip-git</code> and <code>--expect-version &lt;version&gt;</code> are the useful
+options when a release is prepared; <code>--verbose</code> names every check. The
+release workflow passes <code>--expect-tag &lt;tag&gt;</code> instead of the version: the
+numbers <em>and</em> the suffix of the kernel must be the tag's, so a
+<code>release_candidate</code> that forgot its <code>-rc1</code> fails the check instead of
+calling itself a release.</p>
+<h2 id="make-ci-the-local-half"><code>make ci</code>: the local half<a class="headerlink" href="#make-ci-the-local-half" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], reproducible,
+integrity
+</code></pre></div>
+
+<p><code>x86-smoke</code> joins the list when <code>qemu-system-x86_64</code> is on <code>PATH</code> and is
+skipped with a message when it is not: a missing optional machine must not fail
+a run. <code>coverage</code> and <code>reproducible</code> are blocking: the first refuses a kernel
+below 70% of lines, the second refuses two images that differ. <code>make ci</code> does
+<strong>not</strong> build the firmware of the board (that needs ESP-IDF) and does not run
+the VGA or disk smoke tests or the device test.</p>
+<p>The cloud repeats the list on every push to <code>mainline</code> and <code>release_candidate</code>
+and adds what a build farm has: valgrind over the tests, the firmware build,
+the bundle, and <code>x86-smoke</code>. The local half and the cloud half are close but
+not identical; <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/docs/debts.md"><code>docs/debts.md</code></a> keeps the difference as a debt.</p>
+<h2 id="the-device-test">The device test<a class="headerlink" href="#the-device-test" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>tools/device-test.sh<span class="w">                  </span><span class="c1"># auto-detected port</span>
+tools/device-test.sh<span class="w"> </span>/dev/ttyACM0
+<span class="nv">CONSOLE_SECONDS</span><span class="o">=</span><span class="m">60</span><span class="w"> </span>tools/device-test.sh<span class="w"> </span>/dev/ttyACM0
+</code></pre></div>
+
+<p>The script finds ESP-IDF (<code>$IDF_PATH</code>, <code>../esp-idf</code>, <code>~/esp/esp-idf</code>), builds,
+flashes, reads the console for <code>CONSOLE_SECONDS</code> (30 by default) and prints
+<code>RESULT: PASS</code> when the self test, the hardware doctor and the shell came up.
+It is outside CI: no runner has the board. A release is gated on it by hand.</p>
+<p><code>tools/console.py</code> reads the console without flashing; <code>tools/stream_console.py</code>
+is the interactive version. Both need <code>pyserial</code>, which the ESP-IDF Python
+environment already has.</p>
+<h2 id="adding-a-test">Adding a test<a class="headerlink" href="#adding-a-test" title="Permanent link">&para;</a></h2>
+<p>A new case needs four touches (the same list as in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/AGENTS.md"><code>AGENTS.md</code></a>):</p>
+<ol>
+<li><code>tests/cases/test_&lt;thing&gt;.c</code>;</li>
+<li>the <code>void test_&lt;thing&gt;(void);</code> declaration in <code>tests/include/tests/tests.h</code>;</li>
+<li>the call in <code>run_tests()</code> in <code>tests/src/main.c</code>;</li>
+<li>the file in <code>add_executable(microos_tests ...)</code> in <code>tests/CMakeLists.txt</code>.</li>
+</ol>
+<p>Kernel behaviour without a test is unfinished work. A test that needs real
+hardware is a sign that platform and portable code got mixed: the kernel tests
+run on the host, and the board is checked by the device test and by the smoke
+tests of its port.</p>
+<p>The fuzz of the ABI and of <code>MOX1</code> has a deterministic seed
+(<code>tests/cases/test_fuzz.c</code>); the numbers of the campaign are in the next
+section, and the records of MicroFS are fuzzed there too.</p>
+<h2 id="the-campaign-of-10">The campaign of 1.0<a class="headerlink" href="#the-campaign-of-10" title="Permanent link">&para;</a></h2>
+<p>The gate of the release is written in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/docs/releases/1.0.md"><code>docs/releases/1.0.md</code></a>: <strong>one session runs 600 seconds
+under a mixed load without a bug, and the session is one boot.</strong> A loop of
+twenty-five short boots is a useful smoke test of the tools, but it is not
+the gate: a leak, a lost wakeup or a slow corruption needs the same machine
+to stay up.</p>
+<p>The campaign is the four tools below, on the two machines and the host substrate:</p>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>unit</th>
+<th>soak</th>
+<th>fuzz</th>
+<th>stress</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>host</strong></td>
+<td><code>make test</code>, <code>make test-asan</code>, <code>make test-tsan</code></td>
+<td><code>make soak-host</code> (TSan, 600 s)</td>
+<td><code>make fuzz-long</code></td>
+<td>valgrind, inside <code>soak-host</code></td>
+</tr>
+<tr>
+<td><strong>x86-64</strong></td>
+<td><code>make test</code> (the same sources)</td>
+<td><code>make soak</code> (one boot, 600 s)</td>
+<td><code>make fuzz-long</code></td>
+<td><code>make disk-stress</code></td>
+</tr>
+<tr>
+<td><strong>board</strong></td>
+<td><code>tools/device-test.sh</code></td>
+<td><code>make board-soak</code> (180 s)</td>
+<td>—</td>
+<td><code>fsck</code> in the board session</td>
+</tr>
+</tbody>
+</table>
+<p><code>make ci</code> does <strong>not</strong> include the campaign: ten minutes of QEMU and a board
+do not belong to a push. The campaign runs on a release candidate and its
+report is attached to the candidate.</p>
+<h3 id="one-boot-600-seconds-make-soak">One boot, 600 seconds: <code>make soak</code><a class="headerlink" href="#one-boot-600-seconds-make-soak" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>soak<span class="w">                      </span><span class="c1"># 600 s, one boot of the x86-64 machine</span>
+make<span class="w"> </span>soak<span class="w"> </span><span class="nv">SOAK_MINUTES</span><span class="o">=</span><span class="m">1</span><span class="w">       </span><span class="c1"># the smoke test of the tool itself</span>
+</code></pre></div>
+
+<p>The target builds <code>build-x86-net</code> (the port with the network and its disk)
+and a full volume (<code>tools/soak_image.py</code>), then <code>tools/soak.py</code> boots the
+machine once and types a cycle of commands until the clock says stop:</p>
+<ul>
+<li>the shell: <code>uname</code>, <code>uptime</code>, <code>free</code>, <code>df</code>, <code>ulimit</code>, <code>ps</code>, <code>mount</code>,
+  <code>tree</code>, <code>fsck</code>, <code>kill</code> of a pid nobody has, <code>sleep</code>;</li>
+<li>every program of <code>/bin</code> through <code>exec</code>: <code>hello</code>, <code>cat</code>, <code>echo</code>, <code>ls</code>,
+  <code>wc</code>, <code>grep</code>, <code>head</code>, <code>mkdir</code>, <code>rm</code>, <code>pwd</code>, <code>spawn</code>, <code>fork</code>, <code>signals</code>,
+  <code>nx</code>, <code>badptr</code>, <code>crash</code>;</li>
+<li>pipelines and redirections: <code>ls /bin | wc -l</code>, <code>cat &lt; f | wc -l</code>,
+  <code>echo x &gt; f</code>, <code>echo y &gt;&gt; f</code>, and a read of the file back;</li>
+<li>the filesystem: a directory, a program's <code>rm -r</code>, files written, appended
+  and removed; once per boot the volume starts with <strong>no free block</strong>, one
+  write is refused with <code>ENOSPC</code>, the filler leaves, <code>fsck -y</code> repairs and
+  the volume is used again;</li>
+<li>signals: <code>exec /bin/signals</code> and Ctrl+C typed into the console while the
+  program runs;</li>
+<li>the network: <code>ping 10.0.2.2</code>, the HTTP client against a page of the
+  process, the <code>httpd</code> page reached through <code>hostfwd</code>, and DNS when this
+  host can resolve a name.</li>
+</ul>
+<p>The direct form has the same options: <code>tools/soak.py --minutes 1</code>,
+<code>--seconds</code>, <code>--seed</code>, <code>--keep-logs</code>, <code>--no-net</code>, <code>--hang-seconds</code>.
+<code>--iterations N</code> is the other mode: N short boots, one cycle each, with the
+average boot reported. It is for the days before the higher half; the gate
+is the single 600-second session.</p>
+<p>A session fails on any of:</p>
+<ul>
+<li>a <code>Panic</code>, a <code>Guru Meditation</code>, a <code>triple fault</code>, <code>Rebooting</code>, a failed
+  assertion or <code>*** ERROR</code> in the console;</li>
+<li>QEMU going away before the clock ends (a reset is the end of the boot);</li>
+<li>the console silent for <code>--hang-seconds</code> (30 by default), or a command that
+  does not answer inside <code>--timeout</code>;</li>
+<li>a command of the load whose answer lacks the word it must have;</li>
+<li>a heap that lost more than <code>--mem-drift-kb</code> (16 KB by default), a shell
+  that holds memory at rest, a changed descriptor limit, or a task table
+  that grew;</li>
+<li>a difference between the <code>free</code>/<code>ulimit</code>/<code>ps</code>/<code>df</code> samples before and
+  after the load. The numbers are printed in the report.</li>
+</ul>
+<p>NTP is skipped with a line of the report when the process cannot bind UDP
+123: the kernel asks <code>10.0.2.2:123</code>, which QEMU maps to the loopback of the
+host, and a laptop has no privilege for the port. That is a skip and not a
+pass; a runner with <code>CAP_NET_BIND_SERVICE</code> (or a network namespace) runs it.</p>
+<p>The transcript of a failed session is written to <code>build-x86-net/soak-logs/</code>
+(and <code>--keep-logs</code> writes the one of a pass); the report prints the path.</p>
+<h3 id="the-host-half-make-soak-host">The host half: <code>make soak-host</code><a class="headerlink" href="#the-host-half-make-soak-host" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>soak-host<span class="w">                   </span><span class="c1"># TSan for 600 s and one valgrind run</span>
+make<span class="w"> </span>soak-host<span class="w"> </span><span class="nv">HOST_SOAK_MINUTES</span><span class="o">=</span><span class="m">1</span>
+</code></pre></div>
+
+<p><code>tools/host_stress.c</code> is the load: four tasks of the host port at once,
+each allocating and freeing blocks of <code>kmm</code>, making pipes, creating,
+rewriting and removing files, and forking a child that exits
+(<code>task_fork_shared</code>). The version built in <code>build-tsan</code> is the one that
+matters: the host port stands in for the critical section with a mutex and
+cannot show preemption, so TSan is the only reader of a race here.</p>
+<p>The tool fails on a <code>WARNING: ThreadSanitizer</code> (and prints the location it
+names), on a stress that stops printing (a deadlock), on a run that ends
+before its time, on a block the allocator still holds, on a task left in
+the table, or on a definite leak of valgrind. One run of 5 seconds under
+valgrind is a part of the target; <code>--skip-valgrind</code> is for a machine without
+it.</p>
+<p>The first campaign of this tree named a race that the shorter tests never
+saw: <code>g_last_error</code> in <code>components/kernel/src/vfs.c</code> is written by every
+VFS call from the tasks' threads and is read by nobody. It is an open debt
+in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/docs/debts.md"><code>docs/debts.md</code></a>; until it is closed, <code>make soak-host</code>
+fails, which is the correct answer of the tool.</p>
+<h3 id="the-fuzz-make-fuzz-long">The fuzz: <code>make fuzz-long</code><a class="headerlink" href="#the-fuzz-make-fuzz-long" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>fuzz-long<span class="w">                                </span><span class="c1"># 20x the iterations, seed 0</span>
+make<span class="w"> </span>fuzz-long<span class="w"> </span><span class="nv">FUZZ_ITERATIONS</span><span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="nv">FUZZ_SEED</span><span class="o">=</span><span class="m">7</span>
+</code></pre></div>
+
+<p>The suite is the ordinary one in the sanitizer build; the campaign only
+moves two numbers of <code>tests/cases/test_fuzz.c</code> through the environment:
+<code>KTEST_FUZZ_ITERATIONS</code> multiplies the loops and <code>KTEST_FUZZ_SEED</code> changes
+the seed of the MOX1 and MicroFS streams. The binary still runs every case,
+so the ABI edge (<code>test_ksys</code>), FAT, ext2 and the network are exercised in
+the same run. A long run is repeatable: the same seed and the same
+multiplier give the same sequence on every machine.</p>
+<h3 id="the-disk-make-disk-stress">The disk: <code>make disk-stress</code><a class="headerlink" href="#the-disk-make-disk-stress" title="Permanent link">&para;</a></h3>
+<p><code>tools/disk_stress.py</code> boots the image twice. The first boot finds a full
+volume (<code>ENOSPC</code>), removes the filler, repairs with <code>fsck -y</code>, writes,
+appends, makes and removes a directory, and leaves a file for the second
+boot. The second boot checks the volume, reads the file, and runs and
+removes again. The verdict is that the volume is either whole or made whole
+by the repair: <code>fsck</code> says <code>the volume is consistent</code>, or <code>0 problem(s)
+after the repair</code>, and never a problem after it.</p>
+<p>MicroFS is checked on <code>build-x86</code>; FAT is checked in a second partition of
+an image of <code>build-x86-fat</code> (the port with <code>MICRO_OS_FS_FAT32=ON</code>), filled
+with <code>mcopy</code> and repaired with <code>fsck fat -y</code>. Those two halves need
+<code>mkfs.vfat</code> and <code>mcopy</code>; when they are not installed the FAT half is
+reported as skipped, and <code>--require-fat</code> turns that skip into a failure for
+a runner that must have them.</p>
+<h3 id="the-board-toolsboard_soaksh">The board: <code>tools/board_soak.sh</code><a class="headerlink" href="#the-board-toolsboard_soaksh" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>board-soak<span class="w">                             </span><span class="c1"># build, flash, 180 s</span>
+tools/board_soak.sh<span class="w"> </span>--minutes<span class="w"> </span><span class="m">10</span><span class="w">            </span><span class="c1"># the long session of a release</span>
+tools/board_soak.sh<span class="w"> </span>--minutes<span class="w"> </span><span class="m">1</span><span class="w">             </span><span class="c1"># the tool itself</span>
+tools/board_soak.sh<span class="w"> </span>--no-build<span class="w"> </span>--no-flash<span class="w">   </span><span class="c1"># the firmware already there</span>
+</code></pre></div>
+
+<p>The gate of the board of 1.2 is three minutes: from <code>1.2.0</code> the board is the
+compatibility port of ADR 0018, the changes of the release are small, and ten
+minutes of the same cycle would not prove another thing. A change of the
+flash, the boot or the volume asks for <code>BOARD_SOAK_MINUTES=10</code> and the long
+session of the releases before 1.2.</p>
+<p>The script does what <code>tools/device-test.sh</code> does (finds ESP-IDF, builds,
+flashes) and then <code>tools/board_soak_session.py</code> resets the board once and
+spends one boot with it: <code>exec /bin/hello</code> with arguments, <code>cat</code> of a file
+written by the shell, files appended and removed, <code>mkdir</code>/<code>rm -r</code>, the
+foreign image's <code>exec format error</code>, <code>fsck</code>, <code>telnet on/off</code>, <code>wifi status</code>,
+<code>display rotate</code>, <code>mfetch</code>, <code>modules</code>, <code>sleep</code>, <code>abi</code>, <code>ps</code> and <code>ulimit</code>.
+A panic, a <code>Guru Meditation</code>, a backtrace, a reboot, a silence or a
+descriptor/memory/volume/task drift beyond the small allowance fails it.
+The report prints the heap, the free blocks, the descriptors and the tasks
+before and after, and the drift the run allows.</p>
+<h3 id="reading-a-result-and-the-levels-of-a-bug">Reading a result and the levels of a bug<a class="headerlink" href="#reading-a-result-and-the-levels-of-a-bug" title="Permanent link">&para;</a></h3>
+<p>A pass is the last line <code>RESULT: PASS 600s</code> (the x86 and host sessions),
+<code>RESULT: PASS (N short iteration(s))</code> for <code>--iterations</code>, or
+<code>RESULT: PASS 600s</code> from the board. The report above it is the evidence:
+duration, boot, cycles, commands, memory/descriptors/tasks before and
+after, and the first failures with the line of the answer. Attach it to the
+candidate with the <code>uname</code> of the build, the command, the seed, the logs of
+<code>build-*/soak-logs/</code>, and the lines <code>network ... ntp ... dns ...</code> that say
+which halves actually ran.</p>
+<p>The campaign classifies what it finds:</p>
+<ul>
+<li><strong>L1 — a crash, a loss of data or a security hole.</strong> A panic, a reboot, a
+  triple fault, a corrupted volume that <code>fsck -y</code> cannot repair, a file
+  that disappears, a task that faults where the kernel should have answered
+  <code>EFAULT</code>. Always a blocker.</li>
+<li><strong>L2 — a feature is broken.</strong> A command of the load that must pass and
+  does not, a <code>fsck</code> that leaves a problem, a fork or a signal with a wrong
+  answer, a leak that grows with the load. Always a blocker.</li>
+<li><strong>L3 — an edge or a rare race.</strong> A TSan warning, a window that needs a
+  seed and many iterations, an <code>ENOSPC</code> path that leaves a surprise. A
+  blocker for 1.0 unless it is recorded as a debt with its next step and
+  its workaround; the <code>g_last_error</code> above is such a case.</li>
+<li><strong>L4 — cosmetic.</strong> A line of output, a message of the log, a spelling.
+  It changes no result and may stay at the release.</li>
+</ul>
+<p>The four levels are the same on every machine. A failure of a tool that has
+not been run (a skipped network or a missing <code>mcopy</code>) is not a pass: the
+report says <code>skip</code>, and the release notes say which halves were skipped.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.8.0/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../kernel-abi/">← Kernel and ABI</a>
+      <a class="next" href="../troubleshooting/">Troubleshooting →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.8.0</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.8.0/docs/wiki/testing.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

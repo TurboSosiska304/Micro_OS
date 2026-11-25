@@ -1,0 +1,491 @@
+<!doctype html><html lang="en" data-version="0.5.0-rc2" data-kind="prerelease">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/0.5.0-rc2/build/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Build and run — Micro OS wiki 0.5.0-rc2</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>0.5.0-rc2</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <span aria-current="true">0.5.0-rc2</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#build-and-run">Build and run</a><ul>
+  <li><a href="#dependencies">Dependencies</a>
+  </li>
+  <li><a href="#the-host-build">The host build</a>
+  </li>
+  <li><a href="#the-x86-64-build">The x86-64 build</a>
+  </li>
+  <li><a href="#the-esp32-build">The ESP32 build</a>
+  </li>
+  <li><a href="#the-checks-around-the-builds">The checks around the builds</a>
+  </li>
+  <li><a href="#when-the-build-stops">When the build stops</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Build and run</div>
+    <div class="banner">
+      You are reading <b>0.5.0-rc2</b> — a pre-release.
+      The stable documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+      The newest documentation is <a href="/Micro_OS/2.0.0/">2.0.0</a>.
+    </div>
+
+    <h1 id="build-and-run">Build and run<a class="headerlink" href="#build-and-run" title="Permanent link">&para;</a></h1>
+<p>Three builds come out of one tree, and each of them is a check of the
+portability as much as a product:</p>
+<table>
+<thead>
+<tr>
+<th>Build</th>
+<th>What it produces</th>
+<th>Commands</th>
+<th>Directory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>host</td>
+<td>the unit tests and the simulator, as a Linux process</td>
+<td><code>make build</code>, <code>make test</code>, <code>make sim</code>, <code>make smoke</code></td>
+<td><code>build-host/</code>, <code>build-asan/</code>, <code>build-tsan/</code></td>
+</tr>
+<tr>
+<td>x86-64</td>
+<td>a bare-metal kernel and its loader, for QEMU</td>
+<td><code>make x86-build</code>, <code>make x86-run</code>, <code>make x86-smoke</code></td>
+<td><code>build-x86/</code></td>
+</tr>
+<tr>
+<td>ESP32</td>
+<td>the firmware of the board, through ESP-IDF v5.3</td>
+<td><code>make idf-build</code>, <code>make idf-flash</code>, <code>make bundle</code></td>
+<td><code>build/</code></td>
+</tr>
+</tbody>
+</table>
+<p>The null port (<code>ports/port_null</code>) has no build of its own: it is linked into
+the host build as <code>microos_null_probe</code>, and the link is the check.</p>
+<h2 id="dependencies">Dependencies<a class="headerlink" href="#dependencies" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Package</th>
+<th>Needed by</th>
+<th>Arch / CachyOS</th>
+<th>Debian / Ubuntu</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cmake</code>, <code>ninja</code></td>
+<td>every build</td>
+<td><code>cmake ninja</code></td>
+<td><code>cmake ninja-build</code></td>
+</tr>
+<tr>
+<td><code>gcc</code></td>
+<td>the host and x86 builds</td>
+<td><code>gcc</code></td>
+<td><code>gcc</code></td>
+</tr>
+<tr>
+<td><code>python3</code></td>
+<td>the tools, the checks, ESP-IDF</td>
+<td><code>python</code></td>
+<td><code>python3</code></td>
+</tr>
+<tr>
+<td><code>qemu-system-x86_64</code></td>
+<td>running the x86-64 machine</td>
+<td><code>qemu-system-x86</code></td>
+<td><code>qemu-system-x86</code></td>
+</tr>
+<tr>
+<td>GTK backend of QEMU</td>
+<td>the window of <code>make x86-run</code></td>
+<td><code>qemu-ui-gtk</code></td>
+<td><code>qemu-system-gui</code></td>
+</tr>
+<tr>
+<td><code>clang-format</code></td>
+<td><code>make format</code>, the format check</td>
+<td><code>clang-format</code></td>
+<td><code>clang-format</code></td>
+</tr>
+<tr>
+<td><code>valgrind</code></td>
+<td>the cloud run of the tests, optional</td>
+<td><code>valgrind</code></td>
+<td><code>valgrind</code></td>
+</tr>
+<tr>
+<td><code>pyserial</code></td>
+<td><code>tools/console.py</code>, <code>tools/stream_console.py</code></td>
+<td><code>python3 -m pip install pyserial</code></td>
+<td>the same</td>
+</tr>
+</tbody>
+</table>
+<p>The packages of the last two columns are installed with <code>sudo pacman -S
+--needed ...</code> or <code>sudo apt install ...</code>. ESP-IDF is needed only for the board;
+it brings its own toolchain and Python environment. <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/commands.md"><code>commands.md</code></a>
+is the reference for the packages and for the variables that override the
+defaults.</p>
+<h2 id="the-host-build">The host build<a class="headerlink" href="#the-host-build" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>build<span class="w">       </span><span class="c1"># cmake -B build-host -S . -G Ninja -DCMAKE_BUILD_TYPE=Debug</span>
+make<span class="w"> </span><span class="nb">test</span><span class="w">        </span><span class="c1"># build, then ctest: the unit tests and the null probe</span>
+make<span class="w"> </span>test-asan<span class="w">   </span><span class="c1"># the same tests with the address and UB sanitizers</span>
+make<span class="w"> </span>test-tsan<span class="w">   </span><span class="c1"># the same tests under the race detector</span>
+make<span class="w"> </span>sim<span class="w">         </span><span class="c1"># build, then run build-host/ports/port_host/microos_sim</span>
+make<span class="w"> </span>smoke<span class="w">       </span><span class="c1"># boot the simulator and check what it says</span>
+</code></pre></div>
+
+<p>The same by hand:</p>
+<div class="highlight"><pre><span></span><code>cmake<span class="w"> </span>-B<span class="w"> </span>build-host<span class="w"> </span>-S<span class="w"> </span>.<span class="w"> </span>-G<span class="w"> </span>Ninja<span class="w"> </span>-DCMAKE_BUILD_TYPE<span class="o">=</span>Debug
+cmake<span class="w"> </span>--build<span class="w"> </span>build-host
+ctest<span class="w"> </span>--test-dir<span class="w"> </span>build-host<span class="w"> </span>--output-on-failure
+build-host/ports/port_host/microos_sim
+</code></pre></div>
+
+<p>The simulator is the whole system on a volume in a file: MicroFS, <code>/proc</code>,
+<code>/dev</code>, the configuration of <code>/etc</code>, the init scripts and the shell. The
+environment shapes it:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MICROOS_VOLUME</code></td>
+<td>the file of the MicroFS volume</td>
+<td><code>/tmp/microos-sim.img</code></td>
+</tr>
+<tr>
+<td><code>MICROOS_KV_DIR</code></td>
+<td>the directory of the key-value store</td>
+<td><code>/tmp/microos-kv</code></td>
+</tr>
+<tr>
+<td><code>MICROOS_SCREEN</code></td>
+<td>draw the console into this file instead of nowhere</td>
+<td>unset</td>
+</tr>
+<tr>
+<td><code>MICROOS_INPUT</code></td>
+<td>a script of button events for <code>input</code></td>
+<td>unset</td>
+</tr>
+</tbody>
+</table>
+<p><code>make sim</code> is interactive; <code>make smoke</code> (<code>tools/sim_smoke.py</code>) drives it with
+a list of commands and checks the transcript. <code>make clean</code> removes
+<code>build-host/</code> and <code>build-asan/</code> only: <code>build-tsan/</code> and <code>build/</code> stay.</p>
+<h2 id="the-x86-64-build">The x86-64 build<a class="headerlink" href="#the-x86-64-build" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>x86-build<span class="w">            </span><span class="c1"># the loader and the kernel, into build-x86/</span>
+make<span class="w"> </span>x86-run<span class="w">              </span><span class="c1"># a QEMU window: VGA text and the PS/2 keyboard</span>
+make<span class="w"> </span>x86-run-serial<span class="w">       </span><span class="c1"># the same machine in a terminal (-nographic)</span>
+make<span class="w"> </span>x86-smoke<span class="w">            </span><span class="c1"># boot and check the transcript, no window</span>
+make<span class="w"> </span>x86-vga-smoke<span class="w">        </span><span class="c1"># check the screen and the keyboard without a display</span>
+make<span class="w"> </span>x86-run-disk<span class="w">         </span><span class="c1"># the window with an 8 MB disk on the IDE channel</span>
+make<span class="w"> </span>x86-run-disk-serial<span class="w">  </span><span class="c1"># the same disk in a terminal</span>
+make<span class="w"> </span>x86-disk-smoke<span class="w">       </span><span class="c1"># two boots on one image: a file survives both</span>
+</code></pre></div>
+
+<p>The build is a CMake project of its own (<code>ports/port_x86_64</code>), because the
+kernel there has no libc under it. The image is two files:
+<code>build-x86/loader32.elf</code> (a multiboot loader that QEMU takes with <code>-kernel</code>)
+and <code>build-x86/microos64.bin</code> (the flat kernel image). The programs of <code>/bin</code>
+are built first (<code>hello.mox</code>, <code>crash.mox</code>, <code>fork.mox</code>, <code>badptr.mox</code>) and the
+kernel carries them as blobs, because it needs the bytes before it has a
+filesystem to read them from.</p>
+<p>The display backend is a package of its own in some distributions: the target
+asks QEMU for its list of backends first and prints the command to run when
+the one asked for is missing. <code>make x86-run X86_DISPLAY=sdl</code> picks SDL, and
+<code>make x86-run-serial</code> is the machine for a box without a display server at
+all.</p>
+<p>The disk is a raw image of 8 MB, made the first time it is needed
+(<code>tools/x86_disk_smoke.py --mkimage</code>) and kept in <code>build-x86/disk.img</code>. It is
+generated, not committed; <code>make clean</code> does not remove <code>build-x86/</code>, so
+<code>rm -rf build-x86</code> is the way to start over. The details are in the port's
+README, <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/ports/x86_64/README.md"><code>docs/ports/x86_64/README.md</code></a>.</p>
+<h2 id="the-esp32-build">The ESP32 build<a class="headerlink" href="#the-esp32-build" title="Permanent link">&para;</a></h2>
+<p><code>make idf-build</code> finds ESP-IDF on its own, in this order: <code>$IDF_PATH</code>, a
+checkout beside the repository (<code>../esp-idf</code>), then <code>~/esp/esp-idf</code>. Point it
+elsewhere with <code>IDF_EXPORT=/path/to/export.sh</code>; there is no need to source
+<code>export.sh</code> for the <code>make idf-*</code> targets.</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>idf-build<span class="w">     </span><span class="c1"># idf.py -D IDF_TARGET=esp32 build</span>
+make<span class="w"> </span>idf-flash<span class="w">     </span><span class="c1"># flash over USB; make idf-flash IDF_PORT=/dev/ttyACM0</span>
+make<span class="w"> </span>idf-monitor<span class="w">   </span><span class="c1"># the serial monitor (leave with Ctrl+])</span>
+make<span class="w"> </span>idf-size<span class="w">      </span><span class="c1"># the size report of the firmware</span>
+make<span class="w"> </span>bundle<span class="w">        </span><span class="c1"># build everything and collect dist/ for distribution</span>
+</code></pre></div>
+
+<p>A first checkout needs the target once. With ESP-IDF exported:</p>
+<div class="highlight"><pre><span></span><code>idf.py<span class="w"> </span>set-target<span class="w"> </span>esp32
+idf.py<span class="w"> </span>build
+idf.py<span class="w"> </span>-p<span class="w"> </span>/dev/ttyACM0<span class="w"> </span>flash<span class="w"> </span>monitor
+idf.py<span class="w"> </span>menuconfig<span class="w">      </span><span class="c1"># the Micro OS Kconfig (components/drivers/Kconfig)</span>
+idf.py<span class="w"> </span>erase-flash<span class="w">     </span><span class="c1"># wipes everything, MicroFS data included</span>
+</code></pre></div>
+
+<p>The board is on <code>/dev/ttyACM0</code> and the port belongs to the group <code>uucp</code>:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>gpasswd<span class="w"> </span>-a<span class="w"> </span><span class="nv">$USER</span><span class="w"> </span>uucp<span class="w">    </span><span class="c1"># log out and back in afterwards</span>
+</code></pre></div>
+
+<p><code>tools/device-test.sh</code> builds, flashes and reads the console, and prints
+<code>RESULT: PASS</code> when the self test, the hardware doctor and the shell are up.
+The layout of the flash is in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/partitions.csv"><code>partitions.csv</code></a>:
+<code>factory</code> 2 MB and MicroFS 5.75 MB, with no room for an OTA slot. The board's
+own README is <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/ports/esp32/README.md"><code>docs/ports/esp32/README.md</code></a>, the
+pins and quirks are in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/ports/esp32/hardware.md"><code>docs/ports/esp32/hardware.md</code></a>.</p>
+<h2 id="the-checks-around-the-builds">The checks around the builds<a class="headerlink" href="#the-checks-around-the-builds" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>integrity<span class="w">   </span><span class="c1"># the bundle, the image headers, the partition table, git, hygiene, format</span>
+make<span class="w"> </span>format<span class="w">      </span><span class="c1"># reformat the C sources with clang-format</span>
+make<span class="w"> </span>ci<span class="w">          </span><span class="c1"># build, test, test-asan, test-tsan, smoke, [x86-smoke], integrity</span>
+</code></pre></div>
+
+<p><code>make ci</code> runs the x86-64 smoke test when <code>qemu-system-x86_64</code> is on <code>PATH</code>
+and says so when it is not. It does not build the firmware, and it does not run
+the VGA or disk smoke tests or the device test: those are separate commands.
+<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs/testing"><code>testing.md</code></a> explains what each check proves.</p>
+<h2 id="when-the-build-stops">When the build stops<a class="headerlink" href="#when-the-build-stops" title="Permanent link">&para;</a></h2>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs/troubleshooting"><code>troubleshooting.md</code></a> is the table of the errors that
+happen most: ESP-IDF not found, a toolchain that the registry of ESP-IDF does
+not know, a QEMU without a display, <code>/dev/ttyACM0</code> that belongs to somebody
+else, and the link errors of a stale build directory.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v0.5.0-rc2/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../getting-started/">← Start here</a>
+      <a class="next" href="../shell/">Shell →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 0.5.0-rc2</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v0.5.0-rc2/docs/wiki/build.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,404 @@
+<!doctype html><html lang="en" data-version="1.1.2" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.1.2/network/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Network — Micro OS wiki 1.1.2</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.1.2</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <span aria-current="true">1.1.2</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0/">1.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.1/">The 1.1 release</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="../settings/">Settings</a>
+  </li>
+  <li>
+    <a href="../screen/">Screen</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Network</a>
+  </li>
+  <li>
+    <a href="../pkg/">Packages</a>
+  </li>
+  <li>
+    <a href="../programs/">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#the-network">The network</a><ul>
+  <li><a href="#what-a-machine-has-today">What a machine has today</a>
+  </li>
+  <li><a href="#the-http-client-of-the-board">The HTTP client of the board</a>
+  </li>
+  <li><a href="#the-stream-and-what-it-changes">The stream, and what it changes</a>
+  </li>
+  <li><a href="#what-is-not-there-yet">What is not there yet</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Network</div>
+
+    <h1 id="the-network">The network<a class="headerlink" href="#the-network" title="Permanent link">&para;</a></h1>
+<p>Micro OS speaks the network with the sockets of its port: the board has WiFi
+and lwIP, x86-64 has a virtio-net card and a small stack of its own, and the
+host substrate uses the sockets of Linux. The kernel does not know which:
+<code>kernel/port/net.h</code> is a socket, a name and a byte, and the client of HTTP and
+the resolver of names live above it.</p>
+<h2 id="what-a-machine-has-today">What a machine has today<a class="headerlink" href="#what-a-machine-has-today" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th></th>
+<th>ESP32 (board)</th>
+<th>x86-64 (QEMU)</th>
+<th>host substrate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>link</td>
+<td>WiFi station, lwIP</td>
+<td>virtio-net</td>
+<td>the sockets of Linux</td>
+</tr>
+<tr>
+<td>address</td>
+<td>DHCP from the access point</td>
+<td>static <code>10.0.2.15/24</code>, gateway <code>10.0.2.2</code>, DNS <code>10.0.2.3</code> (the user network of QEMU)</td>
+<td>whatever Linux gives</td>
+</tr>
+<tr>
+<td>names</td>
+<td>lwIP (<code>getaddrinfo</code>)</td>
+<td>a resolver of its own with a cache: <code>dns &lt;name&gt;</code></td>
+<td>the resolver of Linux</td>
+</tr>
+<tr>
+<td>TCP and UDP</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>ICMP</td>
+<td>the stack of lwIP</td>
+<td><code>ping &lt;address&gt;</code></td>
+<td>no</td>
+</tr>
+<tr>
+<td>HTTP client</td>
+<td><code>http get &lt;url&gt;</code></td>
+<td>no command yet</td>
+<td>tests only</td>
+</tr>
+<tr>
+<td>HTTP server</td>
+<td><code>httpd [port\|off]</code>, the page of the state</td>
+<td>no command yet</td>
+<td>no</td>
+</tr>
+<tr>
+<td>NTP</td>
+<td><code>ntp [server]</code></td>
+<td>no command yet</td>
+<td>no</td>
+</tr>
+<tr>
+<td>MQTT</td>
+<td><code>mqtt &lt;host&gt; &lt;port&gt; &lt;topic&gt; &lt;message&gt;</code>, QoS 0</td>
+<td>not built</td>
+<td>no</td>
+</tr>
+<tr>
+<td>telnet</td>
+<td><code>telnet [on\|off]</code>, the shell on port 23</td>
+<td>no</td>
+<td>no</td>
+</tr>
+</tbody>
+</table>
+<p>The commands of x86-64 are <code>netinfo</code> (the device, the address, the
+counters), <code>ping</code>, <code>netudp</code> (one exchange) and <code>dns</code>. <code>make x86-net-smoke</code>
+boots the machine with a card of QEMU and checks the stack: ARP, ICMP, UDP,
+a client and a server of TCP, and the cache of the resolver.</p>
+<h2 id="the-http-client-of-the-board">The HTTP client of the board<a class="headerlink" href="#the-http-client-of-the-board" title="Permanent link">&para;</a></h2>
+<p><code>http get</code> is a client of a console, not of a file:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; http get http://example.com/
+200, 1256 byte(s)
+&lt;!doctype html&gt;...
+</code></pre></div>
+
+<p>It speaks HTTP/1.0, reads the answer into a buffer, and cuts a body that is
+longer than the buffer (<code>components/net/src/http.c</code>). There is no chunked
+body, no redirect and no TLS, and the answer of a server is a line of text
+for a person, not a program to install.</p>
+<p>The server is the other direction: <code>httpd</code> publishes the page of the state on
+port 80, without authentication; <code>telnet</code> puts the shell on port 23 and is
+off until a person turns it on. Both are described in
+<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.1.2/docs/shell">shell.md</a>.</p>
+<h2 id="the-stream-and-what-it-changes">The stream, and what it changes<a class="headerlink" href="#the-stream-and-what-it-changes" title="Permanent link">&para;</a></h2>
+<p>K12 (<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.1.2/docs/adr/0024-stream-and-installer.md">ADR 0024</a>) turns the console
+client into a stream: <code>Content-Length</code> and a chunked body, a bounded number of
+redirects, a timeout, and a sink that is a file or the inactive slot of an
+update. The console face is:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; wget http://mirror.example/hello-x86_64.mox /var/cache/pkg/hello.mox
+hello-x86_64.mox: 8 192 bytes, 2.1 KB/s, done
+</code></pre></div>
+
+<p>The same stream fills the inactive slot of the board, which is the update over
+the network that 1.1 left open.</p>
+<p>The public internet is HTTPS. TLS is <strong>mbedTLS</strong>: the board takes the copy of
+ESP-IDF, and x86-64 vendors it with a freestanding platform layer - the
+allocator of the kernel, entropy from <code>RDRAND</code>, the clock from NTP and the
+roots of <code>/etc/ssl/certs.pem</code> through the VFS. A clock that NTP has not set is
+a warning at the handshake, because a certificate has dates.</p>
+<p>A package is trusted by its <strong>signature</strong>, not by its transport: TLS protects
+the wire, and the Ed25519 trailer of the file protects the program. A hostile
+mirror can refuse to serve; it cannot replace the bytes.</p>
+<h2 id="what-is-not-there-yet">What is not there yet<a class="headerlink" href="#what-is-not-there-yet" title="Permanent link">&para;</a></h2>
+<ul>
+<li>no TLS on either machine: the handshake is the work of K12;</li>
+<li>no HTTP client and no NTP command on x86-64 (the network of the port is
+  TCP, UDP, ICMP and DNS; the console client is the work of K12);</li>
+<li>no DHCP and no IPv6 on x86-64: the address of the port is the one of the
+  user network of QEMU, and a real link is a later change;</li>
+<li>no congestion window and no retransmission timers beyond the simple ones of
+  the port (<code>docs/ports/x86_64/README.md</code> says what the stack is).</li>
+</ul>
+<p>The network of a machine without a link - the simulator and the host
+substrate - is the sockets of Linux for the tests, and nothing for the
+console.</p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../screen/">← Screen</a>
+      <a class="next" href="../pkg/">Packages →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.1.2</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.1.2/docs/wiki/network.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>

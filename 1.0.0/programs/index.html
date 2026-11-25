@@ -1,0 +1,889 @@
+<!doctype html><html lang="en" data-version="1.0.0" data-kind="stable">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <link rel="canonical" href="https://turbososiska304.github.io/Micro_OS/1.0.0/programs/">
+  <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="../assets/wiki.css">
+  <title>Programs — Micro OS wiki 1.0.0</title>
+</head>
+<body>
+<a class="skip-link" href="#content">Skip to content</a>
+
+<header class="top">
+  <div class="top-inner">
+    <a class="brand" href="..">Micro&nbsp;OS <span>wiki</span></a>
+    <div class="search" role="search">
+      <input type="search" id="mkdocs-search-query" placeholder="Search this version…"
+             aria-label="Search this version" autocomplete="off">
+      <div id="mkdocs-search-results" class="search-results"
+           data-no-results-text="No results found"></div>
+    </div>
+
+    <details class="versions">
+      <summary title="Change the version">Version&nbsp;<b>1.0.0</b></summary>
+      <div class="versions-menu">
+        <div class="versions-group">Stable</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0/">2.0.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0/">1.9.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0/">1.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0/">1.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.1/">1.6.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0/">1.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0/">1.5.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0/">1.4.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.1/">1.3.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0/">1.3.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.1/">1.2.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0/">1.2.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.2/">1.1.2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.1/">1.1.1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.1.0/">1.1.0</a>
+          </li>
+          <li>
+            <span aria-current="true">1.0.0</span>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0/">0.8.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0/">0.7.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0/">0.6.0</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0/">0.4.0</a>
+          </li>
+        </ul>
+        <div class="versions-group">Pre-release</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/2.0.0-rc1/">2.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.9.0-rc1/">1.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc3/">1.8.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc2/">1.8.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.8.0-rc1/">1.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.7.0-rc1/">1.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc2/">1.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.6.0-rc1/">1.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.5.0-rc1/">1.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.4.0-rc1/">1.4.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.3.0-rc10/">1.3.0-rc10</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.2.0-rc3/">1.2.0-rc3</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/1.0.0-rc1/">1.0.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.9.0-rc1/">0.9.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.8.0-rc1/">0.8.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.7.0-rc1/">0.7.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc2/">0.6.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.6.0-rc1/">0.6.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc2/">0.5.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.5.0-rc1/">0.5.0-rc1</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc2/">0.4.0-rc2</a>
+          </li>
+          <li>
+            <a href="/Micro_OS/0.4.0-rc1/">0.4.0-rc1</a>
+          </li>
+        </ul>
+        <div class="versions-group">Development</div>
+        <ul>
+          <li>
+            <a href="/Micro_OS/dev/">dev</a>
+          </li>
+        </ul>
+        <div class="versions-all"><a href="/Micro_OS/versions/">All versions</a></div>
+      </div>
+    </details>
+    <a class="site" href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project&nbsp;site&nbsp;↗</a>
+    <a class="repo" href="https://github.com/TurboSosiska304/Micro_OS" rel="noopener">GitHub&nbsp;↗</a>
+  </div>
+</header>
+
+<div class="shell">
+  <aside>
+    <nav class="nav" aria-label="Documentation">
+      <ul class="nav-list">
+  <li>
+    <a href="..">Home</a>
+  </li>
+  <li>
+    <a href="../release-1.0/">The 1.0 release</a>
+  </li>
+  <li>
+    <a href="../getting-started/">Start here</a>
+  </li>
+  <li>
+    <a href="../build/">Build and run</a>
+  </li>
+  <li>
+    <a href="../shell/">Shell</a>
+  </li>
+  <li>
+    <a href="../files/">Files</a>
+  </li>
+  <li>
+    <a href="./" aria-current="page">Programs</a>
+  </li>
+  <li>
+    <a href="../ports/">Ports</a>
+  </li>
+  <li>
+    <a href="../porting/">Porting</a>
+  </li>
+  <li>
+    <a href="../kernel-abi/">Kernel and ABI</a>
+  </li>
+  <li>
+    <a href="../testing/">Testing</a>
+  </li>
+  <li>
+    <a href="../troubleshooting/">Troubleshooting</a>
+  </li>
+</ul>
+    </nav>
+    <nav class="toc" aria-label="On this page">
+      <div class="toc-title">On this page</div>
+      <ul>
+  <li><a href="#programs">Programs</a><ul>
+  <li><a href="#the-format-mox1-version-2">The format: MOX1, version 2</a>
+  </li>
+  <li><a href="#the-programs-on-the-disk">The programs on the disk</a>
+  </li>
+  <li><a href="#bin-and-the-boot">/bin and the boot</a>
+  </li>
+  <li><a href="#the-board-xtensa-code-without-an-mmu">The board: Xtensa code without an MMU</a>
+  </li>
+  <li><a href="#exec-at-the-console">exec at the console</a>
+  </li>
+  <li><a href="#the-entry-on-x86-64-int-0x80">The entry on x86-64: int $0x80</a>
+  </li>
+  <li><a href="#the-entry-of-a-program-argc-argv-envp">The entry of a program: argc, argv, envp</a>
+  </li>
+  <li><a href="#the-library-of-a-program">The library of a program</a>
+  </li>
+  <li><a href="#the-address-space-and-fork">The address space and fork</a>
+  </li>
+  <li><a href="#what-a-program-cannot-do">What a program cannot do</a>
+  </li>
+</ul>
+  </li>
+</ul>
+    </nav>
+  </aside>
+
+  <main id="content">
+    <div class="crumb"><a href="..">Micro OS wiki</a> <span aria-hidden="true">/</span> Programs</div>
+
+    <h1 id="programs">Programs<a class="headerlink" href="#programs" title="Permanent link">&para;</a></h1>
+<p>A program in Micro OS is a <strong>file</strong>, not a function of the kernel: <code>execve</code>
+reads the file through the VFS, the kernel checks it against a format of its
+own, and the port places it in memory and enters it. The decisions are in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0005-programs-and-protection.md">ADR 0005</a> (the format and the rights),
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0006-program-entry.md">ADR 0006</a> (the entry),
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0007-paging-and-user-mode.md">ADR 0007</a> (the address space and ring 3)
+and <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0016-userland.md">ADR 0016</a> (the environment, the library and the
+programs of <code>/bin</code>); the report of the phase is
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/phases/phase7.md"><code>docs/phases/phase7.md</code></a>.</p>
+<p>Two machines of the tree can run a program today:</p>
+<table>
+<thead>
+<tr>
+<th>Machine</th>
+<th><code>k_port_exec_supported()</code></th>
+<th><code>k_port_exec_arch()</code></th>
+<th>What <code>execve</code> answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>x86-64 in QEMU</td>
+<td>true</td>
+<td><code>0</code> (x86-64)</td>
+<td>it runs the image in ring 3</td>
+</tr>
+<tr>
+<td>ESP32 board</td>
+<td>true</td>
+<td><code>1</code> (Xtensa)</td>
+<td>it runs the image in the kernel's address space (no protection)</td>
+</tr>
+<tr>
+<td>host simulator</td>
+<td>false</td>
+<td><code>0</code> on x86-64, <code>-1</code> elsewhere</td>
+<td><code>ENOSYS</code> for its own machine, <code>ENOEXEC</code> for another, <code>ENOSYS</code> on a host of a machine the format does not know</td>
+</tr>
+<tr>
+<td>null port</td>
+<td>false</td>
+<td><code>-1</code></td>
+<td><code>ENOSYS</code></td>
+</tr>
+</tbody>
+</table>
+<p>A port that cannot enter a program still names the machine it is, because the
+machine is a fact about the processor and the loader is a separate promise.
+The arch of the header is compared with <code>k_port_exec_arch()</code> before the port
+is asked anything: an image of another machine is <code>ENOEXEC</code>, and no byte of it
+is entered - the board checks this against a hand-made x86-64 image at every
+boot. In the simulator the shell still has <code>exec</code>; it looks for the file,
+checks the execute bit, and then reports why the program did not run. That is
+the contract working, not a missing build.</p>
+<h2 id="the-format-mox1-version-2">The format: MOX1, version 2<a class="headerlink" href="#the-format-mox1-version-2" title="Permanent link">&para;</a></h2>
+<p>An executable is a flat image: a header of 32 bytes, then the code, then the
+initialised data. The bss is not in the file; the port clears it. The layout is
+in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/components/kernel/include/kernel/exec.h"><code>components/kernel/include/kernel/exec.h</code></a>:</p>
+<table>
+<thead>
+<tr>
+<th>Offset</th>
+<th>Field</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>magic</code></td>
+<td>the bytes <code>M</code>, <code>O</code>, <code>X</code>, <code>1</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>version</code></td>
+<td>2</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>flags</code></td>
+<td>0; a flag the kernel does not know is a refusal</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>entry</code></td>
+<td>the offset of the first instruction, from the start of the image</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>text_size</code></td>
+<td>the bytes of code</td>
+</tr>
+<tr>
+<td>20</td>
+<td><code>data_size</code></td>
+<td>the bytes of initialised data</td>
+</tr>
+<tr>
+<td>24</td>
+<td><code>bss_size</code></td>
+<td>the bytes to clear, at most 1 MiB</td>
+</tr>
+<tr>
+<td>28</td>
+<td><code>arch</code></td>
+<td>the machine of the bytes: <code>0</code> x86-64, <code>1</code> Xtensa</td>
+</tr>
+<tr>
+<td>32</td>
+<td></td>
+<td>the text, then the data</td>
+</tr>
+</tbody>
+</table>
+<p>Version 2 is version 1 with the machine in the last field, which version 1
+kept reserved and zero. The bytes of one machine are not the bytes of another,
+so an image says which machine it is for, and a reader that does not know a
+version refuses it instead of guessing at the meaning of the bytes. This
+kernel reads version 2 and refuses version 1 (and a later generation) with a
+sentence in the kernel log that names the version it reads; the call answers
+<code>EINVAL</code>.</p>
+<p>The parser (<code>components/kernel/src/exec.c</code>) checks the image against itself
+and nothing else: the magic and the version, an arch that is one of the two
+machines of the format, the sizes against the file, a text that is not empty,
+an entry inside the text, sizes that are multiples of four, a known flag, and
+a bss under a megabyte. Whether the image fits the window of the machine, and
+whether it is the right machine at all, is between the caller of <code>k_exec_run</code>
+and the port, asked later.</p>
+<p><code>tools/mkprog.sh</code> turns a linked object into an image:</p>
+<div class="highlight"><pre><span></span><code>tools/mkprog.sh<span class="w"> </span><span class="o">[</span>--base<span class="w"> </span>0x02000000<span class="o">]</span><span class="w"> </span><span class="o">[</span>--data-base<span class="w"> </span>0x3FFCE000<span class="o">]</span><span class="w"> </span><span class="se">\</span>
+<span class="w">                </span><span class="o">[</span>--arch<span class="w"> </span>x86-64<span class="p">|</span>xtensa<span class="o">]</span><span class="w"> </span>hello.elf<span class="w"> </span>hello.mox<span class="w"> </span>hello_main
+</code></pre></div>
+
+<p>The image is not relocated: the code and the data have to be linked for the
+address the port names, and <code>--base</code> makes the script refuse an image linked
+for another window. <code>--arch</code> writes the machine into offset 28 and defaults
+to <code>x86-64</code>; a name the format does not know is refused before an image is
+written. <code>--data-base</code> is for a port whose data is a window of its own (the
+board): the data no longer follows the text, so the script checks its address
+against that number instead of the contiguous rule and also checks where the
+bss will be cleared. The x86-64 port builds its sixteen images this way: the
+object is compiled for the window, linked with <code>programs/program.ld</code>, turned
+into a <code>.mox</code> by the script (<code>--base 0x02000000 --arch x86-64</code>), and written
+into the MicroFS volume of the disk by <code>make x86-disk</code> (see below). The kernel
+carries no copy of a program. The board builds <code>hello</code> and <code>cat</code> with
+<code>--arch xtensa --base 0x4009E000 --data-base 0x3FFCE000</code> and the toolchain of
+ESP-IDF (ADR 0018).</p>
+<h2 id="the-programs-on-the-disk">The programs on the disk<a class="headerlink" href="#the-programs-on-the-disk" title="Permanent link">&para;</a></h2>
+<p>A program is a file of a volume, and the volume is a property of the disk of
+the machine. The image of the x86-64 port is made by a host tool that links
+the filesystem of the board, so the format of the volume has one
+implementation:</p>
+<div class="highlight"><pre><span></span><code>make<span class="w"> </span>x86-disk<span class="w">      </span><span class="c1"># build-x86/programs.img: MBR, one partition, MicroFS</span>
+make<span class="w"> </span>x86-run<span class="w">       </span><span class="c1"># boot that image; /bin/hello runs before the shell</span>
+make<span class="w"> </span>x86-smoke<span class="w">     </span><span class="c1"># the same, driven by the smoke test</span>
+</code></pre></div>
+
+<p><code>tools/mkfs_mfs.c</code> writes the image: an MBR with one Linux partition at LBA
+2048, a MicroFS volume in it, <code>/bin</code>, <code>/etc</code> and an empty <code>/etc/init.d</code>, the
+sixteen <code>.mox</code> images of the build written to <code>/bin</code> with mode <code>0755</code>, and
+the settings of the machine in <code>/etc/setting</code>. It does not repeat the layout
+of MicroFS: it is a block device over a range of the file, and
+<code>components/mfs</code> formats it and writes the objects through <code>mfs_create</code>,
+<code>mfs_write</code> and <code>mfs_chmod</code>. The host test
+<code>tests/cases/test_mkfs_image.c</code> reads the bytes back with the same <code>mfs_*</code>
+calls, mounts the volume and checks <code>/bin/hello</code>, <code>/etc/init.d</code> and
+<code>/etc/setting</code>.</p>
+<p>The boot also mounts <code>/proc</code> and <code>/dev</code> (the same procfs and devfs the board
+and the simulator mount), so the root of x86-64 is the root of every port:
+<code>tree /</code> draws <code>bin/</code>, <code>etc/</code> (with <code>init.d/</code> and <code>setting</code>), <code>proc/</code> and
+<code>dev/</code>. <code>/etc/setting</code> is data of the image:</p>
+<div class="highlight"><pre><span></span><code>hello
+hostname=x86_64
+console=vga
+</code></pre></div>
+
+<p>A volume without <code>/etc</code> (the memory volume of a machine with no disk) gets
+the directory and the file from the boot; a volume that already has them is
+never changed.</p>
+<h2 id="bin-and-the-boot"><code>/bin</code> and the boot<a class="headerlink" href="#bin-and-the-boot" title="Permanent link">&para;</a></h2>
+<p>The x86-64 port mounts the MicroFS volume of its disk at <code>/</code> and finds
+<code>/bin</code> already there: the sixteen images are files the tool wrote, with the
+mode of a program (<code>0755</code>), and no boot creates one:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it proves</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/bin/hello</code></td>
+<td>the door: <code>write</code>, arguments, environment, pid, clock, <code>sleep</code>, <code>exit</code>; it prints <code>cpl 3</code></td>
+</tr>
+<tr>
+<td><code>/bin/crash</code></td>
+<td>a fault of ring 3 is reported and the shell survives</td>
+</tr>
+<tr>
+<td><code>/bin/fork</code></td>
+<td><code>fork()</code> with copy on write: the child gets 0, the parent the pid</td>
+</tr>
+<tr>
+<td><code>/bin/badptr</code></td>
+<td>a pointer outside the window is <code>EFAULT</code>, not a fault of ring 0</td>
+</tr>
+<tr>
+<td><code>/bin/signals</code></td>
+<td>a handler, <code>SIGTERM</code> ending a child, a wait cut by <code>SIGINT</code>, <code>SIG_IGN</code>, and the errors of <code>kill</code></td>
+</tr>
+<tr>
+<td><code>/bin/nx</code></td>
+<td>the protection of the pages: a fetch of its data, a write to its text and a call that hands its text to the kernel, each taken down, and a parent still alive</td>
+</tr>
+<tr>
+<td><code>/bin/cat</code></td>
+<td><code>open</code>, <code>read</code>, <code>write</code> on a file or descriptor 0, through the library of a program</td>
+</tr>
+<tr>
+<td><code>/bin/echo</code></td>
+<td>the vector of the arguments and <code>write</code>, the shortest useful program</td>
+</tr>
+<tr>
+<td><code>/bin/ls</code></td>
+<td>a directory through <code>open(O_DIRECTORY)</code> and <code>readdir</code>; no path is the working directory</td>
+</tr>
+<tr>
+<td><code>/bin/grep</code></td>
+<td>the lines of a source that hold a word (<code>-i</code>, <code>-v</code>), through <code>strstr</code></td>
+</tr>
+<tr>
+<td><code>/bin/head</code></td>
+<td>the first lines of a source (<code>-n N</code>), a block at a time</td>
+</tr>
+<tr>
+<td><code>/bin/mkdir</code></td>
+<td>a directory through <code>mkdir</code>, one for every word of the line</td>
+</tr>
+<tr>
+<td><code>/bin/pwd</code></td>
+<td>the directory of the task through <code>getcwd</code></td>
+</tr>
+<tr>
+<td><code>/bin/rm</code></td>
+<td>a name through <code>unlink</code>; <code>-r</code> walks a directory with <code>readdir</code></td>
+</tr>
+<tr>
+<td><code>/bin/spawn</code></td>
+<td><code>execve</code> from a program, with an environment of its own</td>
+</tr>
+<tr>
+<td><code>/bin/wc</code></td>
+<td>the lines, words and bytes of a source (<code>-l</code>, <code>-w</code>, <code>-c</code>) or of descriptor 0</td>
+</tr>
+</tbody>
+</table>
+<p>The first five talk to the kernel through <code>programs/prog.h</code>, because what they
+test is the raw door, the fault, the fork, the edge and the signals. The last
+ten are ordinary C programs linked against <code>components/libc/user</code>
+(<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0016-userland.md">ADR 0016</a>). Every one of them reads descriptor 0
+when it is given no file (or <code>-</code>); <code>execve</code> carries the table of the caller, so
+a redirect or a pipe of the shell fills it (<code>cat &lt; file</code>, <code>ls /bin | wc -l</code>,
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0017-shell-pipelines.md">ADR 0017</a>). A program at the prompt with no
+redirect still has no descriptor 0 of the console.</p>
+<p>The boot then asks for <code>/bin/hello</code> with <code>ksys_execve()</code>: the stat, the check
+of the mode, the read through the VFS, the parse and the entry are the ones of
+the call and not a copy of them. The shell runs the same file with <code>exec</code>.</p>
+<h2 id="the-board-xtensa-code-without-an-mmu">The board: Xtensa code without an MMU<a class="headerlink" href="#the-board-xtensa-code-without-an-mmu" title="Permanent link">&para;</a></h2>
+<p>The board runs a <code>.mox</code> of arch <code>1</code> (Xtensa), and the price is written on the
+first line the program prints: <strong>there is no protection</strong>. The program is a
+task of the kernel with the kernel's own address space; a write to its text or
+a bad pointer that reaches the kernel is a fault of the machine, and the board
+prints <code>Guru Meditation</code> and reboots (ADR 0018 §4, <code>docs/debts.md</code>).</p>
+<p>The loader cannot put a C program in one window. The ESP32 has two kinds of
+memory and the code needs both:</p>
+<table>
+<thead>
+<tr>
+<th>Window</th>
+<th>Address</th>
+<th>Size</th>
+<th>What lives there</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>instruction RAM</td>
+<td><code>0x4009E000</code>..<code>0x400A0000</code></td>
+<td>8 KiB</td>
+<td>the text and its <code>.literal</code> pools</td>
+</tr>
+<tr>
+<td>DRAM</td>
+<td><code>0x3FFCE000</code>..<code>0x3FFD0000</code></td>
+<td>8 KiB</td>
+<td>the data, the bss and the vectors (<code>argc</code>, <code>argv</code>, <code>envp</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The instruction RAM is executable and writable but only 32-bit accessible for
+data; a byte read of a string there is a <code>LoadStoreError</code> (the Kconfig option
+that emulates it would turn every character of <code>printf</code> into an exception).
+The DRAM is byte-addressed and not executable. The two windows are the top of
+<code>iram0_0_seg</code> and the top of the static DRAM segment; the build fixes the size
+of the static segment (<code>CONFIG_ESP32_USE_FIXED_STATIC_RAM_SIZE</code>) so the heap
+starts at <code>0x3FFD0000</code>, and <code>components/port_esp32/exec_windows.ld</code> refuses a
+kernel that grows into either window. A program of the board is therefore
+limited to 8 KiB of text and 8 KiB of data, one at a time: a program that calls
+<code>execve</code> would overwrite the code it is running from, and the port answers
+<code>ENOMEM</code>.</p>
+<p>The door is a function, not an instruction. The <code>syscall</code> instruction of the
+Xtensa is taken by the vector of ESP-IDF before the port sees it (ADR 0018
+§3a), so the loader passes the address of <code>port_mox_syscall(nr, a0 ... a5)</code> -
+the shape of <code>ksys_call()</code> - as the first argument of <code>_start</code>, and the
+library keeps it for every wrapper. The numbers and the results are the ones
+of <code>kernel/ksys.h</code>, the same as on x86-64; only the crossing differs. The
+entry is <code>_start(void *door, long argc, char *const argv[], char *const
+envp[])</code> in the windowed ABI of the machine.</p>
+<p>The images travel in the firmware as blobs and are written to <code>/bin</code> of MicroFS
+at the boot, because there is no <code>progs</code> partition in the table yet; the bytes
+go through a file and the VFS before <code>execve</code> reads them back. The <code>progs</code>
+partition and the mapping of flash as instructions are the next step (ADR
+0018 §2). The board ships <code>/bin/hello</code>, <code>/bin/cat</code>, and <code>/bin/foreign</code> - a
+hand-made x86-64 image that exists only to be refused. <code>tools/device-test.sh</code>
+runs <code>hello</code> at the boot (twice, through <code>execve</code>) and from the shell, and
+checks that <code>/bin/foreign</code> answers <code>ENOEXEC</code> before a byte of it runs:</p>
+<div class="highlight"><pre><span></span><code>microos&gt; exec /bin/hello one two
+PROGRAM: hello from /bin
+PROGRAM: arch xtensa, no protection
+PROGRAM: /bin/hello is 2152 bytes, mode 493
+PROGRAM: argc 3
+PROGRAM: argv[0] /bin/hello
+PROGRAM: argv[1] one
+PROGRAM: argv[2] two
+PROGRAM: envp 4, PATH=/bin
+PROGRAM: pid 10, up 32477 ms
+PROGRAM: exit 0
+task: 'program' (pid 10) exited with code 0
+esp32: the program exited with 0
+the program has finished
+</code></pre></div>
+
+<p>The mode is printed in decimal (<code>493</code> is <code>0755</code>), and the lines of the kernel
+(<code>task: ...</code>, <code>esp32: ...</code>) are left in the transcript because they are part of
+the boot console of the board.</p>
+<h2 id="exec-at-the-console"><code>exec</code> at the console<a class="headerlink" href="#exec-at-the-console" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>microos&gt; exec hello
+PROGRAM: hello from /bin
+PROGRAM: cpl 3
+PROGRAM: argc 1, argv[0] hello
+PROGRAM: envp 4, PATH=/bin
+PROGRAM: pid 4, up 2869 ms
+PROGRAM: slept 10 ms, up 2880 ms
+the program has finished
+microos&gt; exec /bin/cat /etc/setting
+hello
+hostname=x86_64
+console=vga
+the program has finished
+microos&gt; exec /bin/echo one two
+one two
+the program has finished
+microos&gt; exec /bin/wc -l /etc/setting
+3 /etc/setting
+the program has finished
+microos&gt; exec /bin/pwd
+/
+the program has finished
+microos&gt; exec /bin/spawn
+spawn: starting /bin/hello with its own environment
+PROGRAM: argc 2, argv[0] hello
+PROGRAM: envp 2, PATH=/custom
+the program has finished
+microos&gt; exec crash
+PROGRAM: crash writes to address zero
+the program faulted: vector 14 at 0x0000000000000000
+the program has finished
+</code></pre></div>
+
+<p>A name with a slash is a path; a name without one is looked up in <code>PATH</code>, where
+the first regular file with an execute bit wins. The vector of the arguments is
+the line after the name, with <code>argv[0]</code> the name that was typed, as in Linux.</p>
+<p>The port also prints the lines of the task (<code>task: created 'program' ...</code>,
+<code>x86-64: the program exited with 0</code>); they are left out here. The shell waits:
+<code>execve</code> returns only when the program has ended (or when it never started),
+and the port prints the status the program ended with (0 to 255).</p>
+<p>The errors, in the order they are met:</p>
+<table>
+<thead>
+<tr>
+<th>Answer</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ENOENT</code></td>
+<td>the path names nothing</td>
+</tr>
+<tr>
+<td><code>EISDIR</code></td>
+<td>it is a directory</td>
+</tr>
+<tr>
+<td><code>EPERM</code></td>
+<td>the file has no <code>x</code> bit for the caller (<code>0400</code> is not a program)</td>
+</tr>
+<tr>
+<td><code>EINVAL</code></td>
+<td>the file is not a <code>MOX1</code> image of version 2, or it names a machine the format does not know</td>
+</tr>
+<tr>
+<td><code>ENOEXEC</code></td>
+<td>the image is code for another machine (<code>arch</code> is not <code>k_port_exec_arch()</code>)</td>
+</tr>
+<tr>
+<td><code>ENOMEM</code></td>
+<td>the image does not fit the window of the port</td>
+</tr>
+<tr>
+<td><code>ENOSYS</code></td>
+<td>this machine has no window of programs</td>
+</tr>
+</tbody>
+</table>
+<p>A failed <code>execve</code> spends no descriptor of the caller: the file is read through
+the VFS, not through the table of the task.</p>
+<h2 id="the-entry-on-x86-64-int-0x80">The entry on x86-64: <code>int $0x80</code><a class="headerlink" href="#the-entry-on-x86-64-int-0x80" title="Permanent link">&para;</a></h2>
+<p>A program of x86-64 is not a function of the kernel, so the call has to be an
+instruction of the processor. The vector 128 is a gate of the port:</p>
+<table>
+<thead>
+<tr>
+<th>What</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the instruction</td>
+<td><code>int $0x80</code></td>
+</tr>
+<tr>
+<td>the number of the call</td>
+<td><code>rax</code></td>
+</tr>
+<tr>
+<td>the six arguments</td>
+<td><code>rdi</code>, <code>rsi</code>, <code>rdx</code>, <code>r10</code>, <code>r8</code>, <code>r9</code></td>
+</tr>
+<tr>
+<td>the result</td>
+<td><code>rax</code> (negative is an error)</td>
+</tr>
+</tbody>
+</table>
+<p>The registers are the ones of Linux; <code>rcx</code> and <code>r11</code> are not arguments because
+the instruction <code>syscall</code> keeps them. The gate opens for ring 3. The processor
+takes <code>RSP0</code> from the TSS on the way in, so the handler runs on a kernel stack
+of the program, not on a stack the program could have pointed anywhere; the
+handler puts the kernel's thread pointer back, turns the interrupts on, calls
+<code>ksys_call()</code> and returns with <code>iretq</code>. The table of the calls is in
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/syscall-abi.md#the-table"><code>docs/syscall-abi.md</code></a> and in
+<a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.0.0/docs/kernel-abi">kernel-abi.md</a>.</p>
+<p>A program ends with <code>exit</code> (number 0), not with <code>ret</code>: a return in ring 3 has
+no kernel frame to land in. The port notices the exit, unwinds to the call that
+entered it and reports the status (0..255). A program that faults is printed as
+<code>the program faulted: vector N at 0x...</code>, taken down, and its status is 255;
+the shell that ran it is alive and answers the next command.</p>
+<h2 id="the-entry-of-a-program-argc-argv-envp">The entry of a program: <code>argc</code>, <code>argv</code>, <code>envp</code><a class="headerlink" href="#the-entry-of-a-program-argc-argv-envp" title="Permanent link">&para;</a></h2>
+<p>The port enters an image with the arguments of a C function in the registers
+(<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/adr/0016-userland.md">ADR 0016</a>):</p>
+<table>
+<thead>
+<tr>
+<th>Register</th>
+<th>Argument</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rdi</code></td>
+<td><code>argc</code>, the number of the words of <code>argv</code></td>
+</tr>
+<tr>
+<td><code>rsi</code></td>
+<td><code>argv</code>, the vector of the arguments, ended by NULL</td>
+</tr>
+<tr>
+<td><code>rdx</code></td>
+<td><code>envp</code>, the vector of <code>NAME=VALUE</code> words, ended by NULL</td>
+</tr>
+</tbody>
+</table>
+<p>The stack is aligned as after a call and its top word is zero, so the C entry
+is <code>main(argc, argv, envp)</code>; a program that returns instead of calling <code>exit</code>
+faults on address zero. The board has one argument in front of the three - the
+door of the port - and passes the four in <code>a2</code>..<code>a5</code> of the windowed ABI; the
+<code>_start</code> of <code>components/libc/user</code> hides the difference from <code>main</code>. <code>envp</code> is
+never NULL: a program started without an environment of its own sees the four
+words of the system - <code>PATH=/bin</code>, <code>HOME=/</code>, <code>USER=root</code>, <code>PWD=/</code> - because the
+shell has no <code>export</code> yet.</p>
+<p><code>execve(path, argv, envp)</code> is number 25, and the environment is its third
+argument, as in POSIX. Both vectors are copied at the edge of the call: at most
+eight words and 512 bytes each, and a bad one is <code>EFAULT</code> or <code>E2BIG</code> before the
+file is read. <code>exec /bin/cat /etc/setting</code> passes no environment, and the
+kernel fills in the one of the system.</p>
+<h2 id="the-library-of-a-program">The library of a program<a class="headerlink" href="#the-library-of-a-program" title="Permanent link">&para;</a></h2>
+<p><code>components/libc/user/</code> is the library a program is linked against; it is not
+the library of the kernel, which calls <code>ksys_*</code> and has no address in ring 3:</p>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>What it has</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>include/ulibc.h</code></td>
+<td>the prototypes and the numbers of the calls, from <code>kernel/ksys.h</code></td>
+</tr>
+<tr>
+<td><code>src/start.c</code></td>
+<td><code>_start</code>: <code>main(argc, argv, envp)</code>, then <code>exit</code>; on the board also the door, as the first argument</td>
+</tr>
+<tr>
+<td><code>src/syscall.c</code></td>
+<td><code>int $0x80</code> on x86-64 and the door of the port on the board; <code>open</code>, <code>close</code>, <code>read</code>, <code>write</code>, <code>lseek</code>, <code>readdir</code>, <code>stat</code>, <code>mkdir</code>, <code>unlink</code>, <code>getcwd</code>, <code>getpid</code>, <code>uptime</code>, <code>execve</code>, <code>exit</code></td>
+</tr>
+<tr>
+<td><code>src/stdio.c</code></td>
+<td><code>printf</code> and <code>puts</code> over a buffer of 128 bytes and <code>write(1, ...)</code></td>
+</tr>
+<tr>
+<td><code>src/string.c</code></td>
+<td><code>strlen</code>, <code>strcmp</code>, <code>strncmp</code>, <code>strstr</code>, <code>memcpy</code>, <code>memset</code></td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ulibc.h"</span>
+
+<span class="kt">int</span><span class="w"> </span><span class="nf">main</span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">argc</span><span class="p">,</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">argv</span><span class="p">[],</span><span class="w"> </span><span class="kt">char</span><span class="w"> </span><span class="o">*</span><span class="k">const</span><span class="w"> </span><span class="n">envp</span><span class="p">[])</span>
+<span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">fd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">open</span><span class="p">(</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span><span class="w"> </span><span class="n">ULIBC_O_RDONLY</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">fd</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">0</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="n">printf</span><span class="p">(</span><span class="s">"cat: %s: error %d</span><span class="se">\n</span><span class="s">"</span><span class="p">,</span><span class="w"> </span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span><span class="w"> </span><span class="o">-</span><span class="n">fd</span><span class="p">);</span>
+<span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">ULIBC_EXIT_FAILURE</span><span class="p">;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">    </span><span class="cm">/* ... read and write ... */</span>
+<span class="w">    </span><span class="n">close</span><span class="p">(</span><span class="n">fd</span><span class="p">);</span>
+<span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">ULIBC_EXIT_SUCCESS</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div>
+
+<p>The functions return the result of the call, so a negative number is <code>-errno</code>:
+the library has no <code>errno</code> of its own. A program of the library is built by
+<code>ports/port_x86_64/CMakeLists.txt</code> (the runtime sources are linked with the
+file of the program, the entry is <code>_start</code>), and the image is a <code>.mox</code> like
+every other. There is no dynamic linker: each image carries its copy of the
+library.</p>
+<h2 id="the-address-space-and-fork">The address space and <code>fork</code><a class="headerlink" href="#the-address-space-and-fork" title="Permanent link">&para;</a></h2>
+<p>A program is a task of the scheduler with page tables of its own:</p>
+<ul>
+<li>the window is 16 MiB at 32 MiB (<code>0x02000000</code>-<code>0x03000000</code>), mapped onto a
+  physical arena at 64 MiB; the kernel reaches the bytes through its identity
+  map, the program through its own pages;</li>
+<li>the stack is 64 KiB at the top of the window, with an unmapped guard page
+  below it; the null page is not mapped, so a write to address zero is a fault
+  and not a silent success;</li>
+<li>the kernel is supervisor-only and out of the reach of ring 3; the program
+  runs with <code>cpl 3</code> and calls the kernel only through the gate. The kernel
+  image itself is in the higher half (<code>0xFFFFFFFF80000000</code>), and a program's
+  space names that map as it is, without the user bit;</li>
+<li><code>fork()</code> copies the page tables, points both copies at the same frames
+  read-only, and the first write of either side faults, copies the 4 KiB page
+  and takes the write bit back. The child returns 0, the parent returns the
+  pid, and <code>waitpid()</code> sees the status.</li>
+</ul>
+<p>On a machine without an MMU the same call is a placeholder: the child shares
+the memory of the parent and re-enters the program, and the port says so.
+There is no <code>fork()</code> with an address space of its own on the board, and no
+plan to pretend otherwise.</p>
+<h2 id="what-a-program-cannot-do">What a program cannot do<a class="headerlink" href="#what-a-program-cannot-do" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>No ELF and no dynamic linker.</strong> The format is <code>MOX1</code>, everything is
+  statically linked, and there are no shared objects.</li>
+<li><strong>No program of the board yet.</strong> The header knows the machine (ADR 0018)
+  and <code>mkprog.sh</code> writes it, but the loader of the ESP32 port is not written:
+  an Xtensa image on the board is still <code>ENOSYS</code>, and only x86-64 enters a
+  program. The format is ready for the second machine; the port is not.</li>
+<li><strong>No libc of the host.</strong> A program has the calls of the ABI, the library of
+  <code>components/libc/user</code> and nothing else. The library is not a standard C
+  library: no allocation, no files of a stream, no <code>errno</code>, no floating point
+  (the programs are built with <code>-mgeneral-regs-only</code>), and the formatter has
+  no precision and no <code>*</code> width.</li>
+<li><strong>No inherited descriptors.</strong> A program is a task with a table of four
+  descriptors of its own, and the shell does not pass its own table to it.
+  <code>cat</code>, <code>wc</code>, <code>head</code> and <code>grep</code> read descriptor 0 when they are given no file
+  (or <code>-</code>), but a fresh table has no descriptor 0: the read answers <code>EBADF</code>
+  until a redirection or an inherited table opens it. The descriptors 1 and 2
+  are the console; <code>pipe</code>, <code>dup2</code> and the inheritance are a debt of the
+  milestone after this one.</li>
+<li><strong>No <code>mmap</code> and no <code>brk</code>.</strong> A program cannot ask for a range of its own, and
+  the library has no <code>malloc</code>.</li>
+<li><strong>No shell <code>export</code>.</strong> The environment of every program is the four words of
+  the kernel; a program that wants its own passes one to <code>execve</code>.</li>
+<li><strong>No protection by SMAP yet.</strong> The edge checks the page tables of the caller
+  and then reads the same pages in ring 0; the hardware half of the rule waits
+  for the flags of the processor (SMEP) and the <code>STAC</code>/<code>CLAC</code> window of the
+  copy (SMAP). The higher half is there.</li>
+</ul>
+<p>The open rows are in <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/debts.md"><code>docs/debts.md</code></a>; the plan is
+<a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/roadmap.md"><code>docs/roadmap.md</code></a>, K4 and K5.</p>
+<p><a href="https://github.com/TurboSosiska304/Micro_OS/tree/v1.0.0/docs">Back to the wiki index</a></p>
+    <nav class="pager" aria-label="Pages">
+      <a class="prev" href="../files/">← Files</a>
+      <a class="next" href="../ports/">Ports →</a>
+    </nav>
+  </main>
+</div>
+
+<footer>
+  <div class="footer-inner">
+    <div>Micro OS wiki · version 1.0.0</div>
+    <div class="footer-links">
+      <a href="/Micro_OS/versions/">All versions</a>
+      <a href="https://turbososiska304.github.io/microos-site/" rel="noopener">Project site</a>
+      <a href="https://github.com/TurboSosiska304/Micro_OS/blob/v1.0.0/docs/wiki/programs.md"
+         rel="noopener">Edit on GitHub</a>
+      <span>Built with MkDocs</span>
+    </div>
+  </div>
+</footer>
+
+<script>var base_url = "..";</script>
+<script src="../search/main.js"></script>
+</body>
+</html>
