@@ -187,10 +187,11 @@ of P3 wakes on its timer, its clock and its button.
 * After a wake-up from the RTC or the button, the program must set
   **HOLD (G4) = 1**, otherwise the board powers off again. The firmware does
   it in the first statement of `app_main`, before the console or the kernel.
-* Power off: hold BUTTON C (or `power off` in the shell, which drops HOLD).
-  With the cable plugged in the board keeps running — USB feeds the 3.3 V rail
-  whether the latch is closed or not — and the command says so instead of
-  pretending.
+* Power off: hold BUTTON C. The shell's `power off` is the clean end of
+  ADR 0050: it syncs the volume, flushes the flash, and then holds HOLD and
+  enters the deep sleep whose only wake source is BUTTON C. The board is off
+  until a person presses the button, and it boots again from the clean volume;
+  the latch is kept, because a sleep with no way back is a dead board.
 * Battery charging: with USB power the battery charges; the charge current and
   the state are read through the ADC divider on G38.
 

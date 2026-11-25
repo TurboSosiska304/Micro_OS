@@ -17,24 +17,88 @@ A program cannot call those functions: it was not compiled into the kernel and
 their addresses are not its own. Its library is `components/libc/user` (ADR
 0016): `_start`, the door of the call, `open`, `close`, `read`, `write`,
 `lseek`, `readdir`, `stat`, `mkdir`, `unlink`, `getcwd`, `getpid`, `uptime`,
-`execve`, `exit`, `printf`, `puts` and the strings (`strlen`, `strcmp`,
-`strncmp`, `strstr`, `memcpy`, `memset`), with the numbers of `kernel/ksys.h`
-and no allocation, no `errno` and no floating point. The door is `int $0x80`
-on x86-64 and the address of a function of the port on the board (ADR 0018);
-the numbers and the arguments of the calls are the same on both machines. The
-two libraries share the header of the ABI and nothing else, and that is
-deliberate: one runs with the kernel under it, the other has nothing but the
-gate.
+`execve`, `exit`, `printf`, `puts`, `snprintf`, the strings, the allocation
+and the streams. The door is `syscall` on x86-64 (with the vector 0x80 as
+the second door of the same convention) and the address of a function of the
+port on the board (ADR 0018); the numbers and the arguments
+of the calls are the same on both machines. The two libraries share the
+header of the ABI and nothing else, and that is deliberate: one runs with the
+kernel under it, the other has nothing but the gate.
 
-The library of a program grew with its utilities (0.7): `stat` to tell a file
-from a directory (`rm` refuses a directory without `-r`), `mkdir` and
+The library of a program grew with its utilities (0.7): the record of a path
+to tell a file from a directory (`rm` refuses a directory without `-r`;
+the POSIX `stat` of the third port took that place), `mkdir` and
 `unlink` for the tree (`mkdir`, `rm`), `getcwd` for the directory of the task
-(`pwd`), and `strstr` for a word in a line (`grep`). The list is what the ten
-programs of `/bin` use and not a standard library: a function without a caller
-of this tree is not in it. `cat`, `wc`, `head` and `grep` read descriptor 0
-when they are given no file, which is the shape of a filter; a fresh table of
-a program has no descriptor 0 yet, so that read is `EBADF` until a redirection
-opens it ([`docs/debts.md`](debts.md)).
+(`pwd`), and `strstr` for a word in a line (`grep`). The port of zlib
+(`/bin/zcat`) added the three families a portable source expects, the port of
+Lua the arithmetic of a double, and the ports of sbase and of file the
+families of a Unix-like system (`getopt`, `fnmatch`, `regex`, `pwd`,
+`termios`, the reader of a line). They are still small enough for the board
+because a program selects the files it links: the list of a program is in
+`ports/port_x86_64/CMakeLists.txt`, and a command of sbase does not carry the
+formatter of a double nor the database of libmagic.
+
+| Part | Files | What it is |
+|---|---|---|
+| the allocation | `src/malloc.c` | a free list whose first block is an arena in the bss of the program (`-DULIBC_HEAP_SIZE`, 256 KiB by default) and which grows through `KSYS_BRK` (call 47) when the arena has no room, not `KSYS_MALLOC`: the block of the kernel is memory of ring 0 and a program cannot read it; `calloc` and `realloc` are the same heap, and `free` gives a block back to it and never to the machine |
+| the error | `src/errno.c` | `errno` as a global of the program and `strerror`; the calls keep the negative number of the ABI and the wrappers also store its magnitude, so a portable library reads `errno` after `read` |
+| the streams | `src/file.c` | `fopen`, `fdopen`, `fmemopen`, `freopen`, `fclose`, `fread`, `fwrite`, `fgetc`, `getc`, `getchar`, `ungetc`, `fputc`, `fgets`, `fputs`, `fflush`, `setvbuf`, `perror`, `feof`, `ferror`, `fseek`, `ftell`, `rewind`, `fileno`, `fprintf` over a descriptor; one block of the arena of the program (4 KiB by default) holds the read-ahead and the bytes written and not given to the kernel, the mode is line-buffered on a terminal, block-buffered on a file and a pipe and unbuffered on the error descriptor, and `fflush`/`fclose`/`exit` give the block to the kernel (ADR 0035); the binary mode is accepted and ignored because no file of the system translates a byte; `tmpfile` is a failure (no `/tmp`) |
+| the formatter | `src/stdio.c`, `src/format_float.c` | `printf`, `puts`, `putchar`, `snprintf`/`vsnprintf`/`sprintf`, and `fprintf`/`vfprintf` over the streams; the conversions are the ones of the table below, and a build that defines `ULIBC_WITH_FLOAT` adds the digits of a double from `src/format_float.c` |
+| the reader of a line | `src/format_ext.c` | `getline`/`getdelim`: the buffer of the caller grows with the line, which is what a command of a Unix-like system is written on |
+| the conversions and the sort | `src/stdlib.c` | `strtod`, `strtol`/`strtoul`/`strtoll`/`strtoull`, `atoi`/`atol`/`atof`, `abs`/`labs`, `qsort` (a merge sort in the arena, insertion when it has no room), `getenv` over `environ`. A build without `ULIBC_WITH_FLOAT` links the file and not `strtod`/`atof`, which are in the float build alone |
+| the numbers and the order of sbase | `src/stdlib_ext.c` | the same conversions with the `ERANGE` of an overflow, `atoll`/`llabs`, the heap sort of `qsort` and the halving walk of `bsearch`, and `getenv`; a command of sbase links this file and a program of another port the one above, so no program carries two answers to one name |
+| the information about an object | `src/stat.c`, `include/sys/stat.h` | the POSIX `struct stat` with the `S_IS*` macros, `stat`/`lstat` (one call: the system has no links) over `KSYS_STATX`, `fstatat`, `fstat` over `KSYS_FSTAT` (the mode, the owner, the size and the two moments of the open object), `chmod`, `umask`. The record of the ABI keeps its own name, `ulibc_stat_call`, and fills `struct vfs_stat` |
+| the entries of a directory | `src/dirent.c`, `include/dirent.h` | `DIR`, `struct dirent`, `opendir`, `fdopendir`, `readdir`, `closedir`, `rewinddir`, `dirfd` over a batch of eight names of `ulibc_readdir` |
+| the path and the directory | `src/path.c`, `src/syscall.c` | the resolver of a relative path against the directory of the task (the kernel's, call 48 moves it), `.`/`..` folded, and the table of the directories an open named (`fdopendir`) |
+| the halves of a path, the copy of a word | `src/libgen.c`, `src/string_ext.c` | `basename`/`dirname`, `strdup`/`strndup` (they allocate, and a program without an arena does not link them), `strspn`/`strcspn`/`strpbrk` (in `src/string.c`, which every program links), the compare without the case of a letter |
+| the patterns and the options | `src/fnmatch.c`, `src/regex.c`, `src/getopt.c` | the pattern of a name, the regular expressions of `grep` and `sed`, and the options of a command |
+| the users and the terminal | `src/pwd.c`, `src/termios.c` | the one owner of the system (`getpwnam` and its neighbours) and the mode of the terminal of a descriptor, which is the structure of the ABI byte for byte |
+| the arithmetic | `src/math.c` | the functions of `<math.h>` for a `double`: the square root, the logarithm and the exponential of the x87 unit, the trigonometric functions of the unit with an argument reduced by `fprem`, and the rounding and the split of the exponent in integers |
+| the long jump | `src/setjmp.c` | `setjmp`/`longjmp` in the six callee-saved registers, the stack pointer and the return address of x86-64 |
+| the clock and the locale | `src/time.c`, `src/locale.c`, `src/ctype.c`, `src/assert.c` | `time` and `clock_gettime` over the call 49 (`CLOCK_REALTIME` is the wall clock of the machine, `CLOCK_MONOTONIC` the boot), `clock` over the processor time of the call 50, `gmtime`/`localtime`/`mktime`/`strftime` of the C locale, `asctime`/`ctime` (the 26 bytes of a moment), `localeconv`, the classes of a byte, `assert` |
+| the exit | `src/atexit.c` | the handlers of `atexit`, run by `exit` in the reverse order of their registration |
+| the ends of a POSIX library | `src/unistd_ext.c`, `src/asprintf.c` | `access`, `chdir`, `readlink`, `pipe`, `dup2`, `fork`, `_exit`, `wait`, `sleep`, `sysconf`, `isatty` and the `asprintf`/`vasprintf` of the arena - the calls a library of a Unix-like system expects of a machine that has a task and a descriptor |
+| the command of a shell | `src/popen.c`, `src/system.c`, `src/words.c` | `popen`/`pclose` and `system`: a pipe, a fork, the `dup2` of the command's end, the `execve` of the child and the `waitpid` of the parent (1.8). There is no `/bin/sh`, so the line is split by `src/words.c` (the quoting of the shell of this machine, no `|`, `>` or `;`) and the first word names the program; the vector is the one of one `execve` of the ABI (eight words of 512 bytes), and a longer line is `E2BIG`. `pclose` answers the status of the child, 127 for a command that did not start |
+| the numbers of the console | `src/syscall.c` | 1 and 2 are the console of this system *while they are not open as a file*, so `open` and `pipe` never hand out those two numbers: a new descriptor that the kernel put on 1 or 2 moves to the lowest free number above them (`dup2` and a `close`), and a caller that names 1 or 2 itself (`dup2` of a redirect) is obeyed |
+
+The names a portable source includes (`<string.h>`, `<stdlib.h>`, `<stdio.h>`,
+`<errno.h>`, `<unistd.h>`, `<fcntl.h>`, `<sys/types.h>`, `<sys/stat.h>`,
+`<dirent.h>`, `<libgen.h>`) are thin headers in
+`components/libc/user/include`, each one including `ulibc.h`. The port of
+file added the headers a library of a Unix-like system asks for beside them:
+`<stdint.h>` and `<inttypes.h>` (the types of a width in bits and the `PRIx64`
+of the formatter), `<sys/param.h>` (`MIN`, `MAX`, `howmany`) and `<locale.h>`
+(the C locale, `setlocale` and `localeconv`); the functions it needed are
+`asprintf`/`vasprintf` (a formatted string of the arena), `asctime`/`ctime`
+(the 26 bytes of a moment), `pread` (the read at an offset of a descriptor,
+in `third_party/file/src/pread.c`) and the `PIPE_BUF` of `<limits.h>`. The body of the
+library is still `ulibc.h`, and a program that wants the functions of the
+system includes `ulibc.h` and not the headers of the host.
+
+The formatter is the one of a program: `%d %i %u %o %x %X %c %s %p %%`, the
+flags `- + space # 0`, the width and the precision (a `*` takes either from
+the arguments), and the length `l`/`ll`/`z`/`j`/`h`. A build that defines
+`ULIBC_WITH_FLOAT` adds `%f %F %e %E %g %G`: the digits come from
+`src/format_float.c`, and the include of that source is the choice of a
+program with a `double` in it (Lua). A program of the tree that does not
+define the name is built with `-mgeneral-regs-only`, where a double has no
+register, and prints such a conversion as the characters it was written with.
+`%a` is not implemented.
+
+Floating point in the guest is the one place the port leaves its rule:
+`CR4.OSFXSR`, `CR4.OSXMMEXCPT` and `CR0.NE` are set by the loader, the
+program is built without `-mgeneral-regs-only`, and the scheduler saves
+neither the XMM registers nor the x87 state. A program with a point in its
+numbers therefore runs alone - `execve` waits for it - and a second one at the
+same time needs the save of the state (`docs/debts.md`).
+
+The list is what the programs of `/bin` and the first port use and not a
+standard library: a function without a caller of this tree is not in it.
+`cat`, `wc`, `head` and `grep` read descriptor 0 when they are given no file,
+which is the shape of a filter; a fresh table of a program has no descriptor
+0 yet, so that read is `EBADF` until a redirection opens it
+([`docs/debts.md`](debts.md)). The recipe of the next port is
+[`porting-programs.md`](porting-programs.md).
 
 ## The names
 
@@ -141,6 +205,95 @@ void microos_exit(int code);
 The flag of the waitpid is `MICROOS_WNOHANG`: the call does not wait and
 answers 0 when the child is not ready.
 
+## The library of a program: the POSIX families
+
+`components/libc/user` is the library a program is linked against (ADR 0016).
+It is not the library of the kernel above: it reaches the kernel only through
+`syscall` on x86-64 (or the door of the board), and it grew with the
+programs that were ported to it. The port of sbase (ten Unix tools) needed
+the families a portable POSIX source expects, and they are now part of it:
+
+| Header | The functions | The file |
+|---|---|---|
+| `<dirent.h>` | `opendir`, `readdir`, `closedir`, `rewinddir`, `fdopendir` over `KSYS_READDIR`, one batch of eight entries per directory | `src/dirent.c` |
+| `<sys/stat.h>` | `stat`, `lstat`, `fstat`, `fstatat`, `chmod`, `umask` and `struct stat` with the `S_IS*` macros over `KSYS_STATX`; `fstat` asks `KSYS_FSTAT` for the mode, the owner and the moments of the open object | `src/stat.c` |
+| `<unistd.h>` | `access`, `chdir`, `rmdir`, `readlink`, `isatty`, `pipe`, `dup2`, `fork`, `wait`, `waitpid`, `execvp`, `_exit`, `sleep`, `sysconf`, `getopt`, and `realpath` (the canonical name of a path that exists) | `src/unistd_ext.c`, `src/getopt.c`, `src/realpath.c` |
+| `<pwd.h>`, `<grp.h>` | the credentials of the task (`getuid`, `geteuid`, `getgid`, `setuid`, `setgid`); only uid and gid 0 have a name, `root` | `src/pwd.c` |
+| `<time.h>` | `time` (the wall clock of the call 49), `clock` (the processor time), `gmtime`/`localtime`, `strftime`, **`strptime`** (the reverse of `strftime` over the same names and numbers), `mktime`, `clock_gettime` | `src/time.c`, `src/strptime.c` |
+| `<regex.h>` | a POSIX basic/extended engine: literals, `.`, `*`, `+`, `?`, `{m,n}`, groups, back references, alternation, brackets and the classes | `src/regex.c` |
+| `<fnmatch.h>` | the pattern of a name with `*`, `?`, `[...]`, `FNM_PATHNAME` and `FNM_NOESCAPE` | `src/fnmatch.c` |
+| `<glob.h>` | `glob`/`globfree`: the names of a path with the wildcards of `fnmatch`, one component at a time over `opendir`/`readdir` and `stat`; `GLOB_NOSORT`, `GLOB_NOCHECK`, `GLOB_MARK`, `GLOB_DOOFFS`, `GLOB_ERR` and `GLOB_APPEND` | `src/glob.c` |
+| `<getopt.h>` | `getopt_long`/`getopt_long_only` beside `getopt`: `--name`, `--name=value`, a prefix no other name has, `struct option` with `no_argument`/`required_argument`/`optional_argument`, the `flag` and `val` of a table, `longindex` | `src/getopt.c` |
+| `<stdlib.h>` | the conversions with `ERANGE` (`strtod` only in a program with `ULIBC_WITH_FLOAT`), `qsort` (merge sort), `bsearch`, `atoll`/`llabs`, `getenv`, `atexit`, `abort`, `srand`/`rand` | `src/stdlib.c`, `src/rand.c` |
+| `<stdlib.h>` (a command) | `system`: the fork of a child, the program of the first word of the line over it and the `waitpid` of its status; a NULL answers 1, an empty line 0, a name that is not there 127 | `src/system.c`, `src/words.c` |
+| `<stdlib.h>` (the environment) | `getenv` over `environ`, `setenv`, `unsetenv` and `putenv`: the vector of `_start` is adopted into the arena on the first change, a name is replaced or dropped, and the words of `setenv` belong to the library while the word of `putenv` belongs to the caller | `src/env.c`, `src/stdlib.c` |
+| `<string.h>`, `<strings.h>`, `<ctype.h>` | `strdup`, `strndup`, `strspn`, `strcspn`, `strpbrk`, `strcasecmp`, `strcasestr` and the ASCII classes | `src/strdup.c`, `src/string_ext.c`, `src/ctype.c` |
+| `<stdio.h>` | `fprintf`/`vfprintf`, `sprintf`, `putchar`, `getline`/`getdelim`, `fmemopen`, `fdopen`, `fileno`, `ungetc`, `perror`, `sscanf`, `vsscanf`, `scanf`, `vscanf`, `fscanf` and `vfscanf` (one reader over a string or a stream, `%f` in a build with `ULIBC_WITH_FLOAT`, `%n`, the width, the `*` and `EOF` at the end of a file), and `popen`/`pclose` over a pipe, a fork and the `execve` of the command (1.8) | `src/stdio.c`, `src/stdio_ext.c`, `src/file.c`, `src/sscanf.c`, `src/popen.c`, `src/words.c` |
+| `<stdlib.h>` (the real numbers) | `strtod`, `atof` (the decimal form of the C locale, the value of the machine's rounding) | `src/stdlib.c` |
+| `<math.h>` | `fabs`, `floor`, `ceil`, `trunc`, `round`, `fmod`, `modf`, `frexp`, `ldexp`, `sqrt`, `pow`, `exp`, `log`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, over the x87 unit (a program built with `FLOAT`) | `src/math.c` |
+| `<signal.h>` | `signal`, `raise`, `SIGINT`, `SIGPIPE`, `SIGTERM`, `SIGCHLD`, `SIG_DFL`, `SIG_IGN`, and `SIGWINCH` as a number this machine has no signal for (`signal` answers `SIG_ERR`) | `src/syscall.c` |
+| `<sys/time.h>`, `<sys/resource.h>` | `gettimeofday` (the wall clock), `utimes` (`ENOSYS`), `getrusage` over the call 50 (`ru_utime` is the processor time of the task, `ru_stime` is zero, `RUSAGE_CHILDREN` is `ENOSYS`), `getrlimit`/`setrlimit` over the limits of the ABI (`RLIMIT_AS`, `RLIMIT_CPU`, `RLIMIT_NOFILE`), `usleep` (a sleep of the task) | `src/gettimeofday.c`, `src/resource.c`, `src/usleep.c`, `src/unsupported.c` |
+| `<termios.h>`, `<sys/ioctl.h>` | the mode of a terminal: `tcgetattr`, `tcsetattr`, `cfmakeraw`, the two pairs of the speed (no-ops: the line is fixed), `tcflush`, `tcdrain`, `ioctl` with `TCGETS`/`TCSETS`/`TIOCGWINSZ`/`FIONREAD`, and `isatty` over `TCGETS` (ADR 0051) | `src/termios.c`, `src/syscall.c` |
+| `<stdio.h>` (the names) | `rename` (POSIX puts it here, in `src/syscall.c`), and `usleep` in `<unistd.h>` | `src/syscall.c`, `src/usleep.c` |
+
+The stream of `<stdio.h>` is a descriptor, three flags and one block; the
+block is the read-ahead and the write buffer of the stream, it comes from the
+heap of the program and not from the object, and its mode is `_IOLBF` on a
+terminal, `_IOFBF` on a file and a pipe and `_IONBF` on the error descriptor,
+with `setvbuf` to change it (ADR 0035). `fmemopen` is a block of the caller
+that a command uses for a word of its line. The heap of `malloc` begins with
+an arena in the bss of the program (256 KiB by default, `ULIBC_HEAP_SIZE` for
+a tool that wants a bigger first block) and grows with `brk` when the arena
+has no room, because a block of `KSYS_MALLOC` is memory of ring 0 that a
+program cannot read.
+
+Two shapes of the machine were visible in the library and are gone in 1.8:
+
+* **`chdir` is a call of the ABI (48).** The directory of the task is the
+  kernel's; the library resolves a relative path against it (`getcwd`) and
+  folds `.` and `..`, so `ls a b`, `find .` and the `chdir` of `ls` between
+  two directories work, and a child started by `fork` or `execve` begins in
+  the directory the program moved to. The old copy of the directory in
+  `src/path.c` is what made a child start somewhere else.
+* **The machine has a wall clock (call 49).** `time()`, `gettimeofday` and
+  `CLOCK_REALTIME` answer the date of the machine - the host process, the CMOS
+  of the x86-64 machine, the BM8563 of the board, corrected by `ntp` or
+  `date set` - and `localtime` is UTC. A record written by the machine carries
+  the date of the person, and a listing of a file written now shows it. `clock()`
+  is the processor time of the program (call 50) and not the time since the
+  boot.
+
+Three shapes of the machine are still visible in the library and are decisions,
+not bugs:
+
+* **There is no floating point by default.** A program is built with
+  `-mgeneral-regs-only`; a `double` cannot cross a function of the guest, so
+  a program that does not ask for the `FLOAT` option has no `strtod`/`%f`, and
+  `sort -n` and `ls -h` of sbase order and print their numbers as decimals in
+  the port layer. The programs that do ask (SQLite and Lua) are built with
+  `ULIBC_WITH_FLOAT`, `src/format_float.c`, `src/strtod.c` and `src/math.c`,
+  and the loader turns the SSE and x87 units on for ring 3; the scheduler
+  saves neither, so one such program runs at a time (`docs/debts.md`).
+* **The calendar is UTC and has no zone.** `localtime` and `gmtime` answer the
+  same structure; a zone in `/etc` is the work of K10 (`docs/debts.md`).
+* **The processor time has no kernel half.** `getrusage` reports the whole of
+  the count as user time and a zero as system time, because a machine of one
+  privilege level has no boundary the kernel could measure.
+
+`fork` is real on x86-64 (copy on write): the child returns from the call with
+0, the parent with the pid, `execve` of a program replaces the image of the
+caller and `waitpid` reaps the child and hands back its status. `fork()` of
+the library is the call itself - the port zeroes the answer of the child and
+flushes the TLB of the pages it makes read-only, so no workaround is needed.
+
+The status of `waitpid` is the code the program exited with (0 to 255), and a
+task taken down by a signal ends with `128 + the signal`. That is not the
+16-bit word of POSIX where the code and the signal sit in two fields, so
+`<sys/wait.h>` reads it in those two ranges: 0 to 127 is `WIFEXITED` with
+`WEXITSTATUS` the code, and 128 to 255 is `WIFSIGNALED` with `WTERMSIG` the
+signal. A program that calls `exit(200)` is therefore reported as the signal
+72; a code above 127 is the price of a status of one byte.
+
 ## The limits
 
 ```c
@@ -174,14 +327,16 @@ const char *microos_strerror(int code);
 
 ## What the library cannot do
 
-* **The memory of a program is not protected.** There is no `mmap` and no
-  `brk`: the memory of the tasks is shared, the same way as the tasks
-  themselves share it after a `fork`.
+* **The memory of a program is not protected.** A program of x86-64 has page
+  tables and `mmap` and `brk`; the board and the simulator have neither, and
+  their tasks share one address space, the same way as the tasks themselves
+  share it after a `fork`.
 * **The standard descriptors are the console.** The descriptors 1 and 2 are
   the console of the system when they are not open as a file. `dup2` and
   `pipe` are there (`microos_dup2`, `microos_pipe`), so a program sends its
-  output to a file or to another program; the shell does not parse a
-  pipeline yet.
+  output to a file or to another program, and the shell of K7 parses a
+  pipeline and a redirect (ADR 0017). A descriptor that is not open is not
+  the console: a file opened as 1 shadows it for the caller.
 * **The console is not readable through the descriptor 0.** A program that
   wants the input of the user opens `/dev/tty0`. The utilities of
   `components/libc/user` do read descriptor 0 for a line, but the shell does
@@ -193,6 +348,20 @@ const char *microos_strerror(int code);
 
 ## The tests
 
-The tests of the library live in `tests/cases/test_libc.c`. The library is
-checked against the library of the system with the real numbers of the
-corpus of the project: the same numbers, the same text, the same errors.
+The tests of the library of the kernel live in `tests/cases/test_libc.c`:
+the library is checked against the library of the system with the real
+numbers of the corpus of the project. The pure part of the library of a
+program (the classes, the strings, the pattern of a name, the options, the
+regular expressions, the credentials and the decimal order of sbase) is
+compiled for the host by `tests/cases/test_userland.c`, which is a test of its
+own (`userland`); the door the credentials of that build call is the shim of
+`tests/cases/userland_door_shim.c`, and the real calls behind the door are
+covered by `make x86-smoke` and `make x86-disk-smoke`.
+
+The POSIX edge of the library has a second binary of the host, `libc_user`
+(`tests/cases/test_libc_user.c`): the environment, `realpath`, `strptime`,
+`getopt_long`, the reader of a format and `glob`. It links the files of the
+library and asks the door for a tree of names in read-only memory, which
+`tests/cases/libc_user_door_shim.c` answers, so a path, a directory and a
+stream are exercised on the host with the code the machine runs; the crossing
+of the real door stays the business of the two smokes of the port.

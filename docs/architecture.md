@@ -49,7 +49,7 @@ architecture own its part in `arch/<arch>/include/asm`:
 | `kernel/port/time.h` | time since the boot | `k_port_uptime_ms`, `k_port_uptime_us` |
 | `kernel/port/mem.h` | internal heap and PSRAM | `k_port_alloc`, `k_port_heap_free` |
 | `kernel/port/lock.h` | critical sections, recursive mutexes | `k_port_enter_critical`, `k_port_mutex_lock` |
-| `kernel/port/power.h` | halt, reset | `k_port_halt`, `k_port_reset` |
+| `kernel/port/power.h` | halt, off, reset | `k_port_power`, `k_port_halt`, `k_port_reset` |
 | `kernel/port/kv.h` | the store that survives a restart | `k_port_kv_get`, `k_port_kv_next` |
 | `kernel/port/net.h` | TCP and UDP | `k_port_net_connect`, `k_port_net_listen` |
 | `kernel/port/info.h` | identity and contract version | `k_port_name`, `k_port_api_major` |
@@ -98,18 +98,19 @@ contract is therefore two files in one commit, and a reviewer sees it.
 | `/proc`, `/dev`, `/sys` | yes | `/proc` and `/dev` from phase 2, `/sys` later |
 | System calls | yes | yes, from phase 3; hardware isolation on x86-64 (ring 3), logical on the board |
 | Memory protection | MMU | **on x86-64 only**: page tables per program, a user window and ring 3 (ADR 0007); the ESP32 has no MMU and keeps the logical boundary |
-| Multi-user | yes | no (a single user: the device itself) |
+| Multi-user | yes | partial (a uid and a gid per task, inherited and checked against the three triads of every object; `/etc/passwd`, `/etc/shadow` and `/etc/group`, `login`, `su`, `id` and `groups` on the console, and the setuid flag of an image, ADR 0033, ADR 0044, ADR 0053) |
 | Dynamic linker | yes | no (everything is statically linked) |
 
 We honestly call this **Linux-like**, not Linux. On the board there is no
 MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
 discipline. The x86-64 port has an MMU and uses it: a program gets page tables
-of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
+of its own, a 96 MiB window at 256 MiB, a guard page under its stack and ring
 3, and the kernel is supervisor-only and out of its reach. A fault of a
 program is reported and the program is taken down; the shell that ran it is
 alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
-clones its page tables and copies a page on the first write (ADR 0007). The
+clones its page tables, shares its frames and copies a page on the first write
+(ADR 0007, ADR 0057): a program of 64 MiB forks in about half a millisecond. The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
 mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
@@ -154,6 +155,10 @@ including level ordering and error checking.
   implemented on top of a timer queue.
 * PIDs are handed out starting from the init process (as in Linux), and
   `/proc/<pid>` are virtual directories.
+* A task that ends leaves its children to init: `task_exit()` reparents every
+  live child to pid 1, and the init of the port reaps the zombies nobody waits
+  for. Without it a program killed while it had a child left a slot of the
+  table of 32 taken for the life of the machine.
 
 ### Execution substrate
 
@@ -210,19 +215,57 @@ on another core says so where it starts the clock.
 
 The port answers how many cores it started (`k_port_cpu_count`) and which one
 is asking (`k_port_cpu_id`). The x86-64 port reads the processors from the
-MADT of ACPI and starts one - the AP bring-up is the blocker described in ADR
-0012; the host port takes the number from `MICRO_OS_CPUS` (one by default,
-two in `make test-smp`, `make test-tsan` and `make soak-host`), and every
-task there is a pthread, so a "core" is a queue of the kernel and an identity
-of the task. A port that predates the two calls links against their weak
-default (one core) and keeps working.
+MADT of ACPI, starts the application processors and counts only the ones that
+answered (ADR 0012, "The pilot of 1.x, closed"): the boot line is
+`2 cpu(s) reported by the firmware, 2 in use`, and a core that did not answer
+is named and left out. The host port takes the number from `MICRO_OS_CPUS`
+(one by default, two in `make test-smp`, `make test-tsan` and
+`make soak-host`), and every task there is a pthread, so a "core" is a queue
+of the kernel and an identity of the task. A port that predates the two calls
+links against their weak default (one core) and keeps working.
+
+The claim is the one call that makes the choice of a task safe under two
+cores: `k_sched_claim_next()` chooses the task and marks it RUNNING on the
+calling core in the same critical section, so the window between the choice
+and the jump of the switch is closed. A core picks only from its own queue: a
+task that has just used up its quantum is READY in that queue for a few
+instructions before the switch, and a second core that took it would resume a
+stack that is still in use. A task changes core at creation, on wake after a
+migration, and through `k_sched_migrate()`.
+
+Every core also has a context that is not a task: `kmain()` on the core 0 and
+the idle loop of an application processor. It is what the port returns to
+when the last task of a core ends, and it runs `schedule()` in a loop, so the
+next task of that core is always claimed. The port's current context, its
+pending stack and address space, and its thread pointer are per core
+(`struct port_cpu`, ports/port_x86_64/src/port_x86_64_task.c), and a core
+names itself by the first word of a record behind `IA32_GS_BASE`.
+
+The console is one resource of the machine and `k_port_write()` holds the big
+kernel lock for the whole call. The heap of the port and the pool of the page
+tables are sections of the machine as well: the heap takes the interrupts of
+the core with the lock, because a tick that preempted its holder could switch
+to a task that allocates, and the pool of the tables is shared by every
+address space. `CR0.WP` is set on every core, because it is a register of the
+core and the kernel's copy into a read-only page of a program has to fault
+there too. The timer and the keyboard are entries of the I/O APIC of the
+firmware (ADR 0034): one redirection entry per line, the destination core in
+the entry, the 8259 masked as a whole, and the EOI of a line goes to the local
+APIC of the core that took it. A machine whose firmware describes no chip
+keeps the 8259, which delivers everything to the core 0, whose LINT0 is the
+only one in the external mode. The APs take their ticks from their own local
+APIC timer (1 kHz, calibrated against the TSC), and a task put in the queue of
+another core wakes that core with an inter-processor interrupt instead of
+waiting for its tick. The open work is K8 of [debts.md](debts.md).
 
 ### Signals (ADR 0015)
 
 A signal is a bit of `struct task` (`sig_pending`) and a disposition in a
 small table of the task, not a message on a queue: the sender - `kill(pid,
-sig)` - sets the bit under the critical section and wakes the task, and the
-receiver answers it in its own context. The points of delivery are the way
+sig)` - sets the bit with one atomic operation and wakes the task, and the
+receiver answers it in its own context. Every access to the bit and to the
+table is an atomic, because the critical section of a port is the interrupts
+of one core and not a lock of the machine (ADR 0012). The points of delivery are the way
 out of a system call (`ksys_call()`) and the tick of the timer when the
 interrupted code is a program of ring 3. The default action of `SIGINT`,
 `SIGTERM` and `SIGPIPE` is the end of the task with the status `128 + sig`;
@@ -244,9 +287,12 @@ A task has three limits - the memory it holds, the processor time it spends
 and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
-They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, four descriptors) and only go down: with one user, uid 0, there is
-nobody to grant a raise, and the rule of no root bypass applies here too.
+They start at the ceiling of the machine (the PSRAM of the board, 2 MiB; the
+window of the programs on x86-64, just under 95 MiB, ADR 0057; about 49 days
+of CPU; sixteen descriptors) and only go down: the ceiling belongs to the
+machine, and neither a task nor root lifts it. The memory ceiling is the one
+of the three that the port answers (`k_port_memory_limit()`, contract 1.15),
+because it is a fact of the machine and not of the kernel.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
 it looks for a block, charges the user blocks to the task that allocated them
@@ -262,6 +308,17 @@ ends it with 143. The descriptors stop at the limit in `kfile_alloc()`,
 system is `ENOSPC`; lowering the limit never closes what is already open.
 `ulimit` of the shell prints the three numbers and lowers them, and the
 library has `microos_getlimit()`/`microos_setlimit()`.
+
+The memory limit is also the ceiling of the address space of a program on a
+machine that has one (ADR 0052): `brk` is charged to it, an anonymous mapping
+is counted when it is made and given back when it is unmapped, and the stack
+of a program stops at it too - a program that lowers its limit to 128 KiB has
+a heap, a mapping and a stack that each stop there. What is not counted is a
+page of a file behind a mapping (it is the file), the stack pages already
+grown (the limit is applied to the stack as one object), and the copy of an
+anonymous mapping that a fork makes (the child starts with its parent's count
+and no charge of its own). A total `RLIMIT_AS` over every page is a debt of
+`docs/debts.md`.
 
 ## 5. Virtual filesystem (phase 2)
 
@@ -310,13 +367,24 @@ apart:
 
 ### The pipes
 
-A pipe is a ring of 256 bytes in a table of eight entries of the kernel,
-with the counts of the reading and the writing descriptions over it
-(ADR 0014). The two ends are ordinary descriptors of the task, so the access
-check, the close, `dup2` and the copy of a fork need no special case; a write
-with no reader is `EPIPE`, because the kernel has no signals yet. A wait of a
-pipe is a poll with a bound of half a second, not a queue of waiters; the
-queue and its wakeup are the next step.
+A pipe is a ring of the port - 64 KiB on x86-64 and the host, 4 KiB on the
+board - in a table of sixteen entries of the kernel, with the counts of the
+reading and the writing descriptions over it (ADR 0035, which changes the
+ring and the wait of ADR 0014). The ring is not a block in the bss of the
+kernel: it comes from `kmm_alloc` with the pipe and goes back with its last
+end, so sixteen pipes of 64 KiB cost a megabyte only when they are all open.
+The two ends are ordinary descriptors of the task, so the access check, the
+close, `dup2` and the copy of a fork need no special case; a write with no
+reader is `EPIPE`, because the kernel has no signals yet, and a write of at
+most `PIPE_BUF` bytes is one step of the ring. A wait of a pipe is a record of
+the task on the channel of the pipes (`kernel/wait.h`, ADR 0046): it is armed
+under the lock of the table, before that lock is dropped, so the writer cannot
+put a byte in between and lose its wakeup; the writer then takes the waiter
+out of the sleeping table in the call of the write, and the wait has no bound
+- a reader slower than its writer is an ordinary pipeline, and a signal cuts
+the wait short with `EINTR`. The waiters are a table of the size of the table
+of the tasks and the wake is a broadcast of the channel, which is coarse on
+purpose: a waiter that finds itself woken and has nothing to read looks again.
 
 ### The blocks under the filesystem
 
@@ -328,6 +396,17 @@ registered at the boot. On the board the device is `flash0`, the partition
 filesystem asks for sector 17 and does not know which of them it got, which
 is what lets the persistence tests run on a laptop.
 
+The data of a file is a chain of blocks: the first four bytes of every block
+name the next one and the record names the head. A chain is a list with no
+table of the places, so the n-th block is reached by the walk through the n
+before it, one read of the device for each step. The descriptor of an open
+file therefore keeps the block it read last (`struct mfs_file` in
+`mfs/mfs.h`): a read goes on from there, a block costs one step, and only a
+seek back to an earlier block starts at the head again. Without that cursor
+a sequential read walked from the head for every block and a file of half a
+megabyte cost the square of its blocks - seconds between `exec` of a large
+program and its first line, which the port of zstd found.
+
 The store behind `/etc` is the same idea for a handful of strings:
 `kernel/port/kv.h` (get, set, erase, commit, next) is a duty of the port,
 because a board has one store. The ESP32 answers with the NVS, the host with
@@ -336,15 +415,24 @@ is why `config sync` can be tested without a board.
 
 ### The record, its moments, and `statx`
 
-A record of MicroFS of today is 32 bytes: the type, the first block, the
-size and the count of entries, then `mtime` and `ctime` as the seconds of
-Unix in 64 bits. A volume of version 1 keeps the 16 bytes of the releases
-before the times and is mounted without a rewrite; its records report zero
-for the two moments, which is "unknown" and not 1970. The version in the
-header and the `MFS_FEATURE_TIME` bit of `features` are read together, so a
-header that claims the room without the feature (or the other way around)
-is refused. The design and the migration are ADR 0013; the layout is
-`docs/memory.md`.
+A record of MicroFS of today is 64 bytes: the type, the first block, the
+size and the count of entries, `mtime` and `ctime` as the seconds of Unix in
+64 bits, the group of the object and a CRC32 of the record (ADR 0038). A
+volume of version 2 keeps the 32 bytes of the releases before the group and
+the checksum, and a volume of version 1 the 16 bytes before the times; both
+are mounted without a rewrite, their records report zero for what they have
+no room for - the moments of a version 1 record are "unknown" and not 1970,
+and a volume without a group has the group of root. The version in the
+header and the bits of `features` (`TIME`, `RECORD_CRC`) are read together,
+so a header that claims the room without the feature (or the other way
+around) is refused. The design and the migration are ADR 0013 and ADR 0038;
+the layout is `docs/memory.md`.
+
+`META` is the map of the free blocks and the table of the records, sized by
+the number of the records and not by a share of the volume: the table grows
+into the data section when the reserve of a new volume runs out, and a
+record that a power cut left half written is one whose CRC32 does not match,
+which the check names and the repair gives back (ADR 0038).
 
 The moments come from `k_clock_now_unix()`, the clock of the kernel that the
 RTC, NTP and the host process feed. A machine that was never set falls back
@@ -354,9 +442,12 @@ and the number does not travel through a program.
 
 `struct vfs_stat` and `KSYS_STAT` are frozen, so the moments have a call of
 their own: `KSYS_STATX` (26) copies a `struct vfs_statx`, the five fields of
-`stat` followed by the two times. The VFS operation is optional: procfs,
-devfs and the FAT reader answer through their `stat` and leave the times
-zero. The library exposes `microos_statx()` and `struct microos_statx`.
+`stat`, the group and the two times. The VFS operation is optional: procfs,
+devfs and the FAT reader answer through their `stat` and leave the group and
+the times zero. The library exposes `microos_statx()` and `struct
+microos_statx`. The structure grew by the word of the group in 1.7 (ADR
+0038), so the call copies 48 bytes and the two headers of the tree move
+together.
 
 ### The types of filesystems
 
@@ -401,18 +492,20 @@ A disk is a block device too, and a partition of it is one: the portable
 parser of `components/kernel/src/partition.c` reads the MBR or the GPT in the
 first sectors, holds every entry against the size of the disk and registers a
 child device with the name of the parent and `p` plus the number of the entry
-(`vd0p1`, `ata0p1`). A child adds the first sector of its partition to every
-request and refuses what runs past its end; the filesystem mounted on it does
-not know that a table exists.
+(`ata0p1`, `virtio0p1`). A child adds the first sector of its partition to
+every request and refuses what runs past its end; the filesystem mounted on it
+does not know that a table exists.
 
 Three rules of the layer are worth remembering: the parser never writes to
 the medium (a broken table is a refusal, not a repair); a disk without a table
 is not a volume, there is no "the whole disk is the filesystem" special case;
-and the drivers live in the ports (ATA PIO on x86-64 today, SDHCI and virtio
-planned) while the tables live in the kernel, because a table is a property of
-the medium and not of the controller. ADR 0008 is the design, including what
-the first real disk is and what waits for the queue, the interrupt and a
-physical address contract.
+and the drivers live in the ports (the ATA channel and the virtio-blk device
+of x86-64, SDHCI on the board) while the tables live in the kernel, because a
+table is a property of the medium and not of the controller. ADR 0008 is the
+design of the layer, ADR 0032 the physical address of a buffer a device reads
+and the bus-master path of the IDE channel, and ADR 0037 the second disk: the
+same image on a queue of virtio descriptors, a request as long as the queue
+allows and the interrupt of a PCI line.
 
 
 ## 6. Memory (phase 3)
@@ -428,6 +521,25 @@ physical address contract.
   port is linked in the higher half and mapped at the top, and the low identity
   map is kept for the heap, the arena and the devices (ADR 0007, "The higher
   half: taken").
+
+### The policy of a page (2.0, ADR 0052)
+
+The tables of the x86-64 port carry a policy and not only a map. A page of a
+program is code or it is data: `mmap` with `PROT_WRITE | PROT_EXEC` is
+`EINVAL`, the audit of every `exec` refuses a space that has such a page, and
+the boot reads the kernel's own map back. The stack of a program starts as
+64 KiB at the top of the window and grows downwards into a room of 1 MiB one
+page per fault, the page below the room is the guard and the lowest page the
+room may own, and the ceiling of the whole stack is `KSYS_RLIMIT_MEMORY` of
+the task. The kernel is supervisor-only in every space, so ring 3 cannot read
+or write a byte of it, and the two bits of CR4 that keep the kernel out of the
+memory of a program - SMEP and SMAP - are turned on when CPUID advertises them
+and named at the boot; the kernel opens the window of `STAC`/`CLAC` around
+every copy through a pointer of a program and closes it on the next context
+switch. A bad access is `EFAULT` with the address in the log, whether it was a
+fault of the program or a pointer a call refused. The host and the board have
+no page tables for a program and enforce nothing of this: the policy is the
+port's, and `docs/debts.md` names the two machines.
 
 ## 7. Drivers (phase 4)
 
@@ -492,10 +604,13 @@ on the network of its owner, and `telnet off` closes the door.
 The sockets under all of this are a duty of the port as well:
 `kernel/port/net.h` offers a connection, a server, a send that may wait or
 not, and a one-shot UDP exchange - and nothing else. There is no TLS, no
-IPv6 and no raw socket: the board is on the network of its owner. On the
-board the port speaks lwIP, on the host it speaks the sockets of the
-process, so the HTTP client, the clock of NTP and the server of telnet are
-exercised without a board.
+IPv6 and no raw socket in that contract: the board is on the network of its
+owner. TLS lives above the contract and not in it: `components/net` wraps a
+transport of bytes with mbedTLS on the machines that have the library
+(x86-64 and the host tests), and an image without it answers that `https`
+is not in it (ADR 0024 §3). On the board the port speaks lwIP, on the host
+it speaks the sockets of the process, so the HTTP client, the clock of NTP
+and the server of telnet are exercised without a board.
 
 ## 8. Programs (phase 7)
 
@@ -509,9 +624,12 @@ parses a format of its own and the port runs it. The decisions are in
 An executable is a flat image with a 32-byte header (`kernel/exec.h`): the
 magic `MOX1`, a version (2), flags, the offset of the entry, the sizes of the
 text, the data and the bss, and the machine the bytes are code for (`arch`: 0
-x86-64, 1 Xtensa). The image is linked for the window of the port - the code
-at its base plus the 32 bytes of the header - and copied as it is, because
-nothing relocates it; the bss is not in the file and the port clears it.
+x86-64, 1 Xtensa). The flags are `WX` (a page both writable and executable,
+which the parser refuses) and `SETUID` (the program asks for the identity of
+the owner of its file, ADR 0053); a bit the kernel does not know is a refusal.
+The image is linked for the window of the port - the code at its base plus the
+32 bytes of the header - and copied as it is, because nothing relocates it;
+the bss is not in the file and the port clears it.
 `tools/mkprog.sh` turns an object into the image and writes the machine. The
 parser (`components/kernel/src/exec.c`) checks the image against itself and
 nothing else: the magic and the version, an arch the format knows, sizes that
@@ -537,7 +655,7 @@ internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
 loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
-the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
+the program, maps the window at 256 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
 the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
@@ -545,8 +663,11 @@ the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,
 mode of a program
 and asks for `/bin/hello` with `execve` - the stat, the mode, the read through the VFS,
 the parse and the transition are the ones of the call. A program ends with
-`exit` and the port returns to the caller with its status; a fault of ring 3
-prints `the program faulted: vector N at 0x...` and does the same with status
+`exit` and the task it ran in becomes a zombie for its parent: the caller of
+`execve` without an address space (the shell, the boot) waits for it and gets
+0, and a program that replaced itself is reaped by the `waitpid` of its own
+parent, which gets the status the program ended with. A fault of ring 3
+prints `the program faulted: vector N at 0x...` and ends the task with status
 255 (ADR 0007).
 
 ### The entry and the library of a program
@@ -561,7 +682,7 @@ starts with the same shape. The environment travels to the port in
 
 The library of the kernel is linked into the kernel and calls `ksys_*`, which
 a program of ring 3 cannot reach, so a program is linked against
-`components/libc/user`: `_start`, the door of `int $0x80`, `open`, `close`,
+`components/libc/user`: `_start`, the door of `syscall`, `open`, `close`,
 `read`, `write`, `lseek`, `readdir`, `getpid`, `uptime`, `exit`, `printf`,
 `puts` and five functions of strings. The numbers of the calls come from
 `kernel/ksys.h`, the same header the kernel uses. The image carries its copy:
@@ -572,16 +693,22 @@ there is no dynamic linker.
 `chmod` and `chown` are numbers 23 and 24 of the syscall table and `execve` is
 25. A mode is nine bits (`rwx` for the user, the group and the others) and an
 owner is a fifteen-bit uid; both live in the spare bits of the MicroFS record
-(see [memory.md](memory.md)). There is one user (uid 0), and it gets no
-exemption of root: `open` compares the access it was asked for with the triad
-that decides for the caller, and `execve` needs the `x` bit; `stat` only
-reports. The width of the two numbers is checked at the door, the library
-(`components/libc`) has the three wrappers with the codes of POSIX in
-`errno`, and the shell has `chmod`, `chown` and `exec` over the same calls.
-The directories of a path are not checked for their `x` bit yet, and
-`fork()` with an address space of its own still waits for the copy of the page
-tables and copy on write (ADR 0005, ADR 0007). A program calls the kernel with
-`int $0x80` on the x86-64 port: the register ABI is in
+(see [memory.md](memory.md)). Every task has a uid and a gid (calls 36 to 40)
+and takes them from the task that made it. `open` compares the access it was
+asked for with the triad that decides for the caller and `execve` needs the
+`x` bit; root passes the read and the write, and no filesystem stores a group,
+so the triad of the others is the one a task that is not the owner reads.
+`chmod` is the owner or root, `chown`, `mount` and `umount` are root, and a
+signal to a task of another uid is `EPERM`; `stat` only reports. The width of
+the two numbers is checked at the door, the library (`components/libc`) has
+the three wrappers with the codes of POSIX in `errno`, and the shell has
+`chmod`, `chown` and `exec` over the same calls. The directories of a path are
+checked for their `x` bit, and `fork()` with an address space of its own
+still waits for the copy of the page tables and copy on write (ADR 0005,
+ADR 0007). A program calls the kernel with `syscall` on the x86-64 port; the
+vector 0x80 is the second door of the same convention, the one a program of
+another compiler and the restorer of a signal handler use, and the return of
+either instruction is the frame of the same 160 bytes. The register ABI is in
 [ADR 0006](adr/0006-program-entry.md), the program runs in ring 3 with page
 tables of its own, and the processor switches to a kernel stack of the program
 through the TSS on the way in. The pointers of the caller are checked at the

@@ -1,6 +1,7 @@
 # ADR 0006 - The entry of a program into the kernel
 
-* Status: accepted
+* Status: accepted, amended by ADR 0035 (the port grew `syscall`; the vector
+  0x80 stays as the second door of the same convention)
 * Date: 2026-11-21
 
 ## Context

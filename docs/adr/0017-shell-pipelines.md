@@ -54,7 +54,10 @@ there, so:
   person typed;
 * quotes, escapes, globs and variable expansion are still absent, as they
   were; `--` of the option parser and the two characters `""` of `path` keep
-  working because the splitter does not touch them.
+  working because the splitter does not touch them. (Amendment for 1.2.1: the
+  lexer reads `'...'`, `"..."` and `\`; the quotes are taken off before the
+  operators are looked for, so a quoted `|` or `>` is a character of the
+  argument. Globs and variables are still absent.)
 
 At most **three stages**: a boundary is one pipe and both of its ends are
 descriptors of the task making the pipeline, which has `TASK_MAX_FDS` (four).

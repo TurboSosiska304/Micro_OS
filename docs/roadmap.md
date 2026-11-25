@@ -73,7 +73,7 @@ written when the project was an operating system for one board; the numbers
       its disk and asks for `/bin/hello` with `execve`; the shell runs the
       same file with `exec`
 * [x] Programs are files on a filesystem of the disk, not blobs of the
-      kernel: `make x86-disk` writes `/bin` (fifteen programs) and `/etc` with
+      kernel: `make x86-disk` writes `/bin` (thirty-one programs) and `/etc` with
       `tools/mkfs_mfs.c`, and no boot installs an image
 * [x] `PATH` for the shell
 * [x] `argv` reaches the port, and the ABI of the entry is written down
@@ -86,8 +86,9 @@ written when the project was an operating system for one board; the numbers
 
 * [x] Mode bits and an owner in the file, set by `chmod`/`chown`
 * [x] The arguments of a system call checked at the edge
-* [x] The permissions enforced at the edge, for the one user of the system, at
-      `open` and `execve`
+* [x] The permissions enforced at the edge against the uid of the task, at
+      `open` and `execve`; the credentials of a task (calls 36 to 40) and
+      root that passes the triads of read and write
 * [x] The `x` bit of the directories of a path is walked and checked
 * [x] A real `fork()`: an address space per task, copy on write - the
       milestone of the x86-64 paging. The page tables per task, the copy of
@@ -100,13 +101,16 @@ written when the project was an operating system for one board; the numbers
 * [x] The shell pipelines and redirections: `cmd | cmd`, `>`/`>>`/`<`/`2>`,
       a task per stage over `task_fork_shared()`, a program that inherits
       the three descriptors of its stage, and Ctrl+C for every stage of the
-      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`)
+      job (ADR 0017; `test_kshell_pipe.c`, `make x86-smoke`). The stages are
+      no longer three: the parser holds sixteen, the pipes are made one
+      boundary at a time as the stages are forked, and `make x86-smoke`
+      checks a line of ten stages.
 
 ## K5 - A processor with an MMU (in progress)
 
 * [x] Page tables per program on x86-64: the kernel identity map is
       supervisor-only, the window at 32 MiB is user pages over a physical
-      arena at 64 MiB, the null page is not mapped and the stack has a guard
+      arena at 64 MiB (96 MiB at 256 MiB since 2.0, ADR 0057), the null page is not mapped and the stack has a guard
       page (ADR 0007)
 * [x] Ring 3: a GDT with user code and data, a TSS with `RSP0` and `IST1`, an
       `int $0x80` gate with `DPL 3` and an `iretq` entry; the program prints
@@ -115,7 +119,11 @@ written when the project was an operating system for one board; the numbers
       ring 3 is printed as `the program faulted: vector N at 0x...`, the
       program is taken down and the shell stays alive
 * [x] `exit` of a program ends the task it runs in, and the caller of
-      `execve` waits for it; `execve` answers 0 (contract 1.5)
+      `execve` waits for it; `execve` answers 0 (contract 1.5). Since M1 of
+      the 1.5 plan a program's `execve` replaces the image of the caller
+      instead (POSIX), the child of a `fork` is a real process with its own
+      status, and `waitpid(-1)` waits for any child; the caller without an
+      address space (the shell) keeps the task-and-wait shape.
 * [x] An errno per task: the TLS block is copied per task and `IA32_FS_BASE`
       follows the task and the privilege boundary
 * [x] Page tables per *task* and copy on write: a program is a task with its
@@ -137,7 +145,20 @@ written when the project was an operating system for one board; the numbers
 * [x] SMAP/SMEP: a decision, not a feature of 1.0 - the default QEMU
       processor does not advertise either, and SMAP needs `STAC`/`CLAC` in
       the portable copy edge. The reasons are in ADR 0007 section 10 and the
-      debt in `docs/debts.md`
+      debt in `docs/debts.md`. Closed in 2.0 (ADR 0052): the port probes
+      CPUID leaf 7, turns on the bits the processor has and says which case
+      the boot is, and the portable kernel opens the window of
+      `k_port_exec_user_access_begin/end` (contract 1.14) around every copy
+      through a pointer of a program. `make mmu-smoke` runs on
+      `-cpu qemu64,+smep,+smap`
+* [x] The policy of a page (2.0, ADR 0052): `mmap(PROT_WRITE | PROT_EXEC)` is
+      `EINVAL` at the edge and not only an audit of the image, the stack of a
+      program grows into a room of 1 MiB page by page on the fault with the
+      memory limit of the task as its ceiling, an anonymous mapping is
+      counted against the same limit as the heap, the kernel is
+      supervisor-only in every space (a case with error `0x7`, not `0x6`),
+      and a bad access is `EFAULT` with the address in the log. The gate is
+      `make mmu-smoke`
 * [x] Basic signals: `SIGINT`, `SIGTERM`, `SIGCHLD` and `SIGPIPE`, the
       dispositions `SIG_DFL`/`SIG_IGN`, a handler that runs in ring 3 through
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by
@@ -153,7 +174,18 @@ written when the project was an operating system for one board; the numbers
       supervisor-only. The W^X audit walks both halves and `make x86-smoke`
       checks the link address against the ELF (ADR 0007, "The higher half:
       taken")
+* [x] The copy of a process (2.0, ADR 0057): the window of the programs is
+      96 MiB at 256 MiB over a 96 MiB arena, the ceiling of the memory of a
+      task is the port's (`k_port_memory_limit()`, contract 1.15), a fork
+      copies the tables of the parent and shares its frames - one critical
+      section, one CR3 flush, no byte of a page copied - and the child's files
+      are names that the first fault opens. A program of 64 MiB forks in
+      about half a millisecond; the gate is `make fork-smoke` and the counts
+      are the port's lines. What is left is the 2 MiB page of the window (a
+      32-entry walk) and the shared open file description of POSIX.
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
+      (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
+      and the work is not started)
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
 ## K6 - The filesystem and the network (in progress)
@@ -190,13 +222,24 @@ written when the project was an operating system for one board; the numbers
       half-written create or unlink - is freed with its blocks; the check runs
       again afterwards, and the header, the data of a file and a shared
       directory stay `(not repaired)` for a person
+* [x] MicroFS 1.7 ([ADR 0038](adr/0038-a-table-of-records.md)): the `META`
+      section is the map of the free blocks and the table of the records and
+      nothing else, the table is sized by the records and grows into the data
+      section when its reserve runs out, every record of a version 3 volume
+      carries CRC32 of itself - so a write that a power cut stopped is named
+      by `fsck` and repaired - and the record holds the group of the object,
+      which `statx` answers; a volume of version 1 and 2 mounts and writes as
+      it did
 * [ ] A journal or a cache of the changes under a write
 * [x] ext2, the reader with inodes and a superblock a checker can walk
       (ADR 0019): the superblock, the group descriptors, the inode table,
       the direct blocks and the single, double and triple indirection, the
       directories with names up to 255 bytes, and `stat`/`statx` with the
-      mode, the uid and the moments of the inode; read-only, so a write, a
-      new name, a mode or an owner is `KERR_NOTSUP`
+      mode, the uid and the moments of the inode; and the write side of 1.4
+      (ADR 0029): the bitmaps of a group, `create`, `write` through the
+      direct blocks and one table, `truncate`, `unlink`, `mkdir`, `chmod`,
+      `chown`, and `ext2_check` for the counters and the chain of the
+      directories
 * [x] `/etc/fstab` and the `mount` command over the type registry: the boot
       mounts the table after the root, `mount <device> <point> <type>` and
       `umount <point>` work at the console, and a line that does not mount is
@@ -205,6 +248,25 @@ written when the project was an operating system for one board; the numbers
       MicroFS has `mtime` and `ctime` in version 2, an old volume keeps its
       16 bytes, and `statx` (26) reports the moments (ADR 0013)
 * [x] A page of the state over HTTP: `httpd` on the sockets, `/` and `/health`
+* [x] A server of files (1.6, [ADR 0036](adr/0036-a-server-and-an-update.md)):
+      `httpd serve [port] [root]` answers GET and HEAD over HTTP/1.1 with
+      keep-alive, `Content-Length`, the type of the extension, `ETag` and
+      `304`, one `Range` (`206`/`416`), a listing of a directory as a chunked
+      page and a line of the log per request; a `..` that leaves the root is
+      `403`, a directory is never a file, and a session over the ceiling of
+      the machine is `503`. Three sessions on x86-64, three on the board,
+      sixteen on the host
+* [x] The serving side of TLS (`httpd tls`, port 443): the vendored mbedTLS
+      with `MBEDTLS_SSL_SRV_C`, the certificate and the key of `/etc/ssl`
+      read through the VFS, and `curl -k` against the guest in
+      `make x86-net-smoke`; the board has no TLS on either side (the flash of
+      its slot, [debts.md](debts.md))
+* [x] An update over the network (1.6, ADR 0022 §7): `ota fetch URL`
+      downloads a signed image, checks the trailer and the Ed25519 signature
+      **before** a byte of the inactive slot is written, selects the slot and
+      asks for a reboot; a slot that never confirms itself is rolled back, in
+      the file form of x86-64 and in otadata on the board. `ota status`,
+      `ota boot` and `ota confirm` are the state machine at the console
 * [x] MQTT over the sockets: a 3.1.1 client at QoS 0 and 1, with a fake broker in the tests
 * [x] The network on the x86-64 machine: a virtio-net driver (the legacy I/O
       interface, polled, ADR 0008 for the shape of a device of the port) and a
@@ -223,6 +285,13 @@ written when the project was an operating system for one board; the numbers
       eight names in a cache, and the x86-64 stack asks it for every name, so
       `http`, `httpd` and `mqtt` get the cache behind `k_socket_connect`; the
       board still resolves through lwIP, which has one of its own
+* [ ] The WiFi of a laptop: the reconnaissance and the steps of the Intel
+      8265 of a ThinkPad X1 Carbon 6th Gen are [plan-wifi.md](plan-wifi.md)
+      and the decision is [ADR 0039](adr/0039-wifi-on-a-laptop.md). The path
+      is a port of OpenBSD's `iwm(4)` and `net80211` (BSD, not the GPL
+      `iwlwifi`) with the firmware as a file beside the driver; it is **not a
+      lane of 1.7 or 1.8**, because the wire (the I219-V of the machine) and
+      then USB come first, and it is most of a year of one person after them
 
 ## K7 - Quality (done)
 
@@ -236,32 +305,54 @@ written when the project was an operating system for one board; the numbers
       `KERNEL_PSRAM`, `KERNEL_EXEC` and the `MICRO_OS_*` switches of the
       network components, the defaults per build, `make test-minimal` and
       the check of the map
+* [x] The shell of the cleanroom (1.1.2): `ls` and `tree` stream a directory
+      without a table (300 names, not 64 or 16), `tree -d` counts every entry,
+      a path is normalized (`.`/`..`, `//`, a trailing `/`), `memtest`
+      repeats an operation and never divides by a still clock, `config` on a
+      machine without a store says so, and the words of `write`, `mkdir`,
+      `df`, `umount` and the clock are one style
 
-## K8 - Many cores (in progress, after 1.0)
+## K8 - Many cores (x86-64 and host done in 1.3, the guard page open)
 
-> Not a gate of 1.0 (ADR 0012, updated): the release promises a correct
-> single-core kernel; the second core is the first project after it. The
-> first phase is in the tree (`KERNEL_SMP`, `struct k_cpu`, the host gate
-> and the x86-64 processor list); the AP bring-up is the blocker, named in
-> ADR 0012 "The pilot of 1.x".
+> Not a gate of 1.0 (ADR 0012, updated), and not a part of `1.2.0` either:
+> the screen, the stream and the installer were that release. `1.3.0` closes
+> the pilot: the machine of QEMU starts both processors, runs tasks on each of
+> them, passes `make x86-smp-smoke` (34 checks) and the 600-second
+> `make soak-smp` session. `KERNEL_SMP` stays off by default. 1.6 took the
+> I/O APIC and the wake IPI (ADR 0034); the open rows are the stack guard page
+> and the board, and they are the K8 rows of [debts.md](debts.md). The
+> floating point state of a task is saved and loaded at every switch since K9
+> (below).
 
 * [x] A `struct k_cpu` per core and a run queue per core; the scheduler never
       runs one task on two cores (ADR 0012) - `kernel/cpu.h`,
-      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`
-* [ ] The allocator, the VFS, the console and the block layer safe under two
-      cores; the locks that sleep and the locks that spin are named - the
-      sleeping locks are audited in [debts.md](debts.md) under K8; the port
-      critical section of x86-64 is still `cli` and has to become a machine
-      lock before an AP enters the kernel
-* [ ] x86-64: AP bring-up, local APIC timer, I/O APIC and the IPI of a TLB
-      and a reschedule; `make x86-smoke` with `-smp 2` - the processor list
-      (MADT) and `-smp 2` are done; the boot says `2 cpu(s) reported by the
-      firmware, 1 in use`; `make x86-smp-build` builds the two-core kernel
+      `components/kernel/src/sched.c`, `tests/cases/test_smp.c`; the claim of
+      the next task (`k_sched_claim_next()`) and the refusal of a task that
+      is the current of two cores are tested
+* [x] The big kernel lock is a spinlock of the machine, and the per-core
+      state of the port (GDT/TSS/IST, RSP0, the thread pointer, the current
+      context, `CR0.WP`) is in `ports/port_x86_64/src`
+* [x] x86-64: the AP bring-up (the MADT list, the trampoline at `0x7000`,
+      INIT-SIPI-SIPI, a stack and a table per core), the local APIC timer of
+      every AP, the IPI vector; `make x86-smp-build`, `make x86-smp-run`,
+      `make x86-smp-smoke` and `make soak-smp`
+* [x] The console is one resource of the machine: `k_port_write()` holds the
+      big kernel lock for the whole call
+* [x] x86-64: the I/O APIC (the timer and the keyboard off the 8259, the
+      MADT overrides, the LAPIC EOI) and the wake IPI of the scheduler, with
+      the claim that preempts by priority - ADR 0034, `make x86-smp-smoke`
+      (52 checks)
+* [ ] A guard page under a task stack - the K8 row of
+      [debts.md](debts.md)
+* [ ] The allocator, the VFS, the console and the block layer under an
+      aggressive migration: they are sleeping locks and the two-core session
+      runs the full load for ten minutes, but no test migrates a task in the
+      middle of a filesystem operation
 * [ ] ESP32: the kernel tasks on both cores of the Pico, no driver assuming
       one core - not started (ADR 0018, the compatibility port)
 * [x] `KERNEL_SMP` (ADR 0010) and the host TSan run as the gate - the flag is
       off by default; `make test-smp`, `make test-tsan` and `make soak-host`
-      run two cores under TSan, and the plugin into `make ci` is `test-smp`
+      run two cores under TSan
 
 ## K9 - A userland (in progress)
 
@@ -286,11 +377,121 @@ written when the project was an operating system for one board; the numbers
       and Ctrl+C for every stage of a pipeline (the job of ADR 0017)
 * [x] `ls` lists the names of a directory (`-l` with the mode, owner, size and
       date; `-a` with `.` and `..`), and `tree` draws the levels below it
+* [x] A third-party library under a program: PCRE2 10.42 in
+      `third_party/pcre2`, the 8-bit interpreter without JIT and Unicode,
+      linked into `/bin/pcre2grep`; the image is 61,336 bytes of the 64 KiB cap and
+      the library's own test is `tests/cases/test_pcre2.c` (the Unicode and
+      the transfer limit are in `docs/debts.md`)
 * [ ] A shell `export` and the environment of the shell in the programs,
       instead of the four words of the kernel
 * [x] Programs are files on a filesystem of the disk, and a program is added
       by writing a file of the volume (`make x86-disk`), not by embedding it
       in the kernel
+* [x] The library of a program learned the three families a portable source
+      expects: an arena of its own (`malloc`/`free`, the bss of the image, not
+      `KSYS_MALLOC`), `errno` and `strerror`, and the streams of `fopen`; the
+      shims of `<string.h>`, `<stdlib.h>`, `<stdio.h>`, `<errno.h>`,
+      `<unistd.h>`, `<fcntl.h>` and `<sys/types.h>` are in
+      `components/libc/user/include`
+* [x] The first port of a program of somebody else: zlib 1.3.1 as a static
+      archive built by the compiler of the window (`cmake/userland.cmake`,
+      `third_party/zlib/port/`) and `/bin/zcat` on a `.gz` of MicroFS. The
+      recipe is [`porting-programs.md`](porting-programs.md), the library has
+      `tests/cases/test_zlib.c`, and `make x86-smoke` and
+      `make x86-disk-smoke` check the inflated bytes of a fixed fixture. Lua,
+      sbase and SQLite are the next copies of the recipe
+* [x] The second port of a program of somebody else: Lua 5.4.7 (MIT) as a
+      static archive built by the compiler of the window and `/bin/lua`, with
+      the script `/etc/hello.lua` and `/etc/licenses/lua` in the image. The
+      library of a program learned the last pieces a language asks for -
+      `%f`/`%e`/`%g` with a precision, `strtod`, `qsort`, `setjmp`/`longjmp`,
+      `math.h` on the x87 unit, `time`/`localtime`, `getenv`, `signal` and
+      `fprintf` - and the port sets `CR4.OSFXSR` for a program with a
+      `double`. The host test is `tests/cases/test_lua.c`; `make x86-smoke`
+      runs the interpreter, and `make x86-disk-smoke` runs it out of the
+      volume in both boots
+* [x] The floating point state of a task: the port saves and loads the XMM
+      and x87 image of a context at every switch (`fxsave64`/`fxrstor64` in
+      `ports/port_x86_64/src/port_x86_64_task.c`), a fork copies the live
+      state of the parent, an `execve` resets the unit after `fninit`, and
+      the trampoline of an AP sets the bits of CR4 and CR0 the core needs.
+      `/bin/fpu2` is the gate: three tasks with a `double` at once keep their
+      own registers, a fourth dirties the unit and `execve`s the clean one,
+      and `make x86-smoke` and `make x86-smp-smoke` read every line
+* [x] The image of a program larger than `KSYS_MAX_IO`: `execve` reads an
+      image of up to 8 MiB (`K_EXEC_MAX_IMAGE`) in pieces of the transfer
+      edge into one block of the allocator, and a larger file is `E2BIG`
+      before a byte is read (`docs/debts.md`)
+* [x] The third port, and the first set of commands: sbase with ten tools
+      (`cat`, `grep`, `head`, `ls`, `tail`, `wc`, `sort`, `find`, `xargs`,
+      `sed`) under their canonical names in `/bin`, in place of the small
+      programs they replace. It is the port that grew the library of a
+      program the families a POSIX command needs (`opendir`/`readdir`,
+      `struct stat`, `getpwuid`, `localtime`, `fnmatch`, a regular expression
+      engine, `getopt`, `getline`, `fmemopen`), and the ten commands are in
+      `make x86-smoke` and `make x86-disk-smoke`
+* [x] The fourth port: bc 7.2.0 (BSD-2-Clause) as a static archive and the
+      two names `/bin/bc` and `/bin/dc` of the same engine, with the scripts
+      `/etc/bc.bc` and `/etc/dc.dc` and `/etc/licenses/bc` in the image. The
+      release is configured by a force-included `port/bc_port.h` (no history,
+      no NLS, 64-bit limbs) and its two POSIX calls are answered by the port
+      layer (`fstat` of a descriptor and `sigaction`). The library of a
+      program learned `strdup` and `srand`/`rand`; the host test is
+      `tests/cases/test_bc.c` and the smoke tests run the calculator and the
+      RPN one before and after a reset of the disk. The image is 115 KiB and
+      its arena is 768 KiB of the bss
+* [x] The eighth port: the One True Awk of 2024-07-28 (the Lucent permissive
+      license) as `/bin/awk`, with the data `/etc/columns`, the script
+      `/etc/hello.awk` and `/etc/licenses/awk` in the image. The grammar is
+      generated once by byacc and committed with its header, the port layer
+      (`third_party/awk/port/awk_port.h`, `awk_os.c`) answers the calls of the
+      C library the release wants and the library does not have, and
+      `system` is an honest refusal: this machine has no shell and no second
+      process, and the `popen` of a pipe is the library's `ENOSYS`. `tests/cases/test_awk.c` runs the `main` of the release
+      through thirty-two cases, and the smoke tests run the interpreter in
+      the image and out of the volume after a reset
+* [ ] The gaps of the next port: a `malloc` larger than the bss of an image
+      (`brk`/`mmap` of a program), a `poll` for a library that waits on a
+      pipe, and the package that ships `zcat`, `lua` and the tools of sbase
+      with their licenses beside them (`docs/debts.md`)
+* [x] The seventh port, a library with an operating system of its own:
+      SQLite 3.54.1 with `SQLITE_OS_OTHER=1` and the VFS of the port on the
+      calls of the system (`third_party/sqlite/port/sqlite_vfs.c`), and
+      `/bin/sqlite3` (the shell of the release) over a database of MicroFS. It
+      is the first program with a `REAL`: the `FLOAT` option of the recipe
+      leaves `-mgeneral-regs-only` out and the loader turns the SSE and x87
+      units on. The image is 846,080 bytes (826 KiB), `tests/cases/test_sqlite.c`
+      is the
+      host, and the smoke tests create, read and check a database across a
+      reset of the disk
+* [ ] A `chdir` and a wall clock in the ABI: the library works around the two,
+      and the workaround of each is named in `docs/debts.md`
+* [x] The POSIX frame of a fork child: the child of `fork()` comes back from
+      the call with 0 in RAX and a stack page of its own, `execve` from a
+      program replaces the image of the caller, and `waitpid` reaps it (1.5)
+* [x] The fifth port: zstd 1.5.7 (BSD-3-Clause) as a static archive of
+      lib/common, lib/compress and lib/decompress, and `/bin/zstd` as the
+      program of the release itself (`programs/zstdcli.c`), with
+      `/bin/zstdcat` as the same image under a second name and
+      `/etc/setting.zst` as a fixture; `/etc/licenses/zstd` travels in the
+      image. The port caps the memory of the context to the arena of a
+      program (`third_party/zstd/README.md`), and the frames of the guest and
+      of the host are read by one another in `make x86-smoke`; the host test
+      is `tests/cases/test_zstd.c`
+* [x] The sixth port, and the first database: file 5.45 with libmagic
+      (`third_party/file`, BSD-2-Clause) as `/bin/file`, with a compact
+      database of the Magdir rules (`tools/magic_subset.py`, the subset of
+      `third_party/file/magic/subset.json`) compiled into `/etc/magic.mgc`
+      and the text `/etc/magic` as the fallback. It is the port that asked
+      for an image past the transfer edge (`K_EXEC_MAX_IMAGE`), the first
+      whose data does not fit (`magic.mgc` is 359 KiB), and the first whose
+      `-z` names the content of a gzip and of a zstd frame;
+      `tests/cases/test_file.c`, `make x86-smoke` and `make x86-disk-smoke`
+      cover the values, the program and the volume after a reset
+* [ ] The port of 1.3.0 still open: awk (the One True Awk and its C library),
+      whose branch is in progress and is not a promise before it is merged.
+      SQLite landed in this release; a package of it needs `PKG_PACKAGE_MAX`
+      above 1 MiB (`docs/debts.md`)
 
 ## The last major changes of the board (1.1.0)
 
@@ -310,8 +511,12 @@ written when the project was an operating system for one board; the numbers
       the board
 * [x] The programs are files of `progs`, mounted read-only at `/bin`, with no
       image of a program in the firmware (`tools/progs_image.py`)
-* [ ] An update over the network into the inactive slot (ADR 0022, open
-      item; the USB path is the safe update of 1.1)
+* [x] An update over the network into the inactive slot (ADR 0022 §7,
+      ADR 0036): the signed image of an HTTPS server is checked before it
+      reaches the slot, the slot is selected and the boot that does not
+      confirm itself is rolled back. The board's flash path is built and
+      waits for a session with the board; the USB path of 1.1 stays the safe
+      update of a board in the field ([debts.md](debts.md))
 
 ## The road to 2.0
 
@@ -343,8 +548,9 @@ written when the project was an operating system for one board; the numbers
       system file, and a setting a machine cannot honour kept and ignored with
       a warning (`SETTINGS_KEPT`)
 * [x] The screen and the font: rotation, brightness, inversion, the scale of
-      the 5x7 font and the theme; the VGA of x86-64 where it can (the
-      attribute of the cells), the panel of the board everywhere
+      the 5x7 font and the theme; the panel of the board everywhere, and on
+      x86-64 the pair of the framebuffer and the gap between its lines
+      (`font.line_gap`)
 * [x] A table of the keys per machine in the wiki
       ([settings.md](wiki/settings.md)), with a host test that every key of a
       default file is a key of its system, so a key is applied or named
@@ -354,63 +560,164 @@ format: a backlight with a duty cycle for `brightness`, an applier on the host
 when its screen file is a real screen, and a rewrite of a file that is atomic
 on a VFS without `rename` (see [debts.md](debts.md)).
 
-## K11 - The screen of x86-64 (1.2)
+## K11 - The screen of x86-64 (done in 1.2.0)
 
 > The port keeps the text mode of the firmware: 80 columns by 25 rows at
 > `0xB8000`, sixteen colours, no font and no picture. The next screen is a
 > linear framebuffer, not a GPU (ADR 0023); a 3D driver of a real card is
 > not promised, and UEFI GOP is the later door to a physical machine.
 
-* [ ] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
+* [x] A linear framebuffer through Bochs VBE in QEMU: 1280x800, 16 bits per
       pixel, RGB565 so `k_renderer` draws into it unchanged; the PCI device
       is found over the configuration space the network port already reads,
       and `paging.c` maps its window
-* [ ] The console of the screen: cells of the 5x7 font scaled twice (about
-      128 columns by 57 rows), the control characters, the cursor, the
-      scrolling and the two sequences of `clear`; the colours of
+* [x] The console of the screen: cells of the 8x16 font of the PC (Spleen
+      8x16, 160 columns by 50 rows; `font.line_gap` of `/etc/font` widens a
+      line to 18 or 20 pixels, 44 or 40 rows), the control characters, the
+      cursor, the scrolling and the two sequences of `clear`; the colours of
       `/etc/console` (ADR 0021); the keyboard of IRQ1 unchanged
-* [ ] The text mode stays the fallback, improved once to 80x50 with the 8x8
-      font of the VGA; the port chooses the screen at the boot
-* [ ] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
+* [x] A colour per cell: the sixteen of the CGA in RGB565, `(paper << 4) |
+      ink` on every cell of the grid and the attribute byte of the text mode,
+      the SGR sequences of a terminal (`0`, `1`, `22`, `7`, `27`, `30`-`37`,
+      `39`, `40`-`47`, `49`, `90`-`97`, `100`-`107`), the levels of the log
+      (warn amber, error red, success green), `console.ink`/`console.paper`
+      of `/etc/console` (a name or `0xRRRR`) and `ls --color`; the serial
+      line stays plain
+* [x] The text mode stays the fallback; the port chooses the screen at the
+      boot. The 80x50 mode with the 8x8 font of the VGA is not built - the
+      fallback is the screen of a machine without an interface, and the font
+      load and the CRTC timings are a debt of their own
+      ([debts.md](debts.md), K11)
+* [x] `make x86-vga-smoke` reads the framebuffer with `screendump` (a
       picture has no text memory for `pmemsave`) and checks cells and
-      colours; `make x86-run` opens it for a person
-* [ ] Later: a 2D surface for a program, and optionally virtio-gpu 2D in
-      QEMU; UEFI GOP for a real machine, which is a loader of its own
+      colours, and keeps the `pmemsave` checks of the text mode on a card
+      without the interface; `make x86-run` opens it for a person
+* [x] A picture a program draws on (ADR 0028, ADR 0030): `/dev/fb0` and
+      `/dev/input0`, the window model, the canvas and the keyboard of
+      `components/ui`, the arrows of the E0 prefix as keys of the machine, and
+      the programs `/bin/ui`, `/bin/edit` and `/bin/fm`
+* [ ] Later: a 2D engine of the device through the contract of `kernel/fb_ops.h`
+      (virtio-gpu 2D in QEMU, the blitter of a real card); a mouse is there and a
+      compositor is not; the UEFI GOP of the firmware is the screen of the UEFI
+      boot (ADR 0037)
 
-The desktop is not a step of this list. A picture, a mouse and a compositor
-are the parts of one, and the compositor has to be a program of the system
-and not the kernel (see [releases/2.0.md](releases/2.0.md)); the first thing
-to build is the screen a program can draw on.
+The desktop of 1.7 is not a step of this list of the screen: it is a program
+of the userland. `ports/port_x86_64/src/ps2.c` reads the second port of the
+8042 and `/dev/input0` carries `key.pointer.x`, `key.pointer.y` and
+`key.button.left` beside the keys; `/bin/wm` owns the picture, composites the
+buffer of every window, draws the panel and the pointer, and the editor and
+the file manager of 1.5 are its clients through `components/ui/client`
+([desktop.md](desktop.md)). The compositor stays a program of the system and
+not the kernel, and the device may fill and copy a rectangle itself through the
+contract of `kernel/fb_ops.h` - there is no such device in this release.
 
-## K12 - The stream and the installer (1.2, in parallel with K11)
+## K12 - The stream and the installer (done in 1.2.0)
 
 > The programs are a repository of their own (`microos-progs`); the machine
 > that installs one needs a stream, TLS and a signature (ADR 0024). The board
 > has no installer - its `progs` belongs to the firmware (ADR 0018) - so this
 > is the work of x86-64 and of the host substrate.
 
-* [ ] A streaming HTTP client: `Content-Length` and a chunked body, a
+* [x] A streaming HTTP client: `Content-Length` and a chunked body, a
       bounded number of redirects, a timeout, and a sink that is a
-      `struct vfs_file` or the inactive slot of an update; `wget URL FILE`
-      at the console and a `Range` resume for a file
-* [ ] mbedTLS on x86-64 with a freestanding platform layer: `kmm` for the
+      `struct vfs_file` (a callback); `wget URL FILE` at the console and a
+      `Range` resume for a file. The inactive slot of an update is the same
+      stream and is not wired yet: the update of the board is over USB
+      (ADR 0022) and there is no `esp_ota_*` writer in the tree
+      ([debts.md](debts.md))
+* [x] mbedTLS 3.6.2 on x86-64 with a freestanding platform layer:
+      `third_party/mbedtls` with a client-only configuration, `kmm` for the
       allocations, `RDRAND` for entropy (the timer as the fallback), NTP for
-      the clock and `/etc/ssl/certs.pem` through the VFS; the board keeps the
-      copy of ESP-IDF
-* [ ] The signed index and a signed `.mox`: `index.json` with the name, the
+      the clock and `/etc/ssl/certs.pem` through the VFS; `http_parse_url`
+      takes `https`, the stream wraps the plain transport, and `wget`,
+      `http` and `pkg` speak HTTPS with the chain, the name and the dates
+      checked. A machine of 1970 is a refusal with a sentence. The board
+      keeps the copy of ESP-IDF and its shell has no command of TLS yet
+      (ADR 0024 §3, [debts.md](debts.md))
+* [x] The signed index and a signed `.mox`: `index.json` with the name, the
       version, the machine, the ABI, the size and the digest; the verifier
       reuses the Ed25519 of ADR 0020
-* [ ] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
+* [x] `pkg update/install/remove/list/info` over `/var/pkg` and `/usr/bin`,
       atomic through a new `vfs_rename` (MicroFS and FAT implement it; a
-      volume without it installs with a warning)
-* [ ] The interface of the console is pacman's, the build is not: `-S`, `-R`,
+      volume without it installs with a warning). A directory is renamed
+      only inside its parent yet (see debts.md)
+* [x] The interface of the console is pacman's, the build is not: `-S`, `-R`,
       `-Q`, `-Sy`, `-Su`, `-Syu`, `-U`, `--noconfirm`, `--needed`,
       `--download-only`, `--dry-run`, `--allow-downgrade`, `--offline`,
       `--root`, `--repo`, `--color`, `NAME=VERSION` (ADR 0024 §6)
-* [ ] The repository `microos-progs`: CI builds a program per machine, signs
-      it and publishes the index with the artifacts; `make` in the kernel
-      tree keeps only the programs of the tests
-* [ ] Tests: the fake transport of `components/net` serves a chunked body, a
+* [x] The repository `microos-progs`: a public tree with a signed index at
+      <https://turbososiska304.github.io/microos-progs/>, the key
+      `microos-progs.pub` and the artifacts the index names; the kernel tree
+      keeps only the programs its tests and its `bin` need. The CI of the
+      repository and the packages of the programs with their licenses are
+      the next pass ([debts.md](debts.md))
+* [x] Tests: the fake transport of `components/net` serves a chunked body, a
       redirect and a dropped connection; the installer is tested on a
       temporary volume with a bad signature, a wrong machine and a downgrade;
-      `make x86-net-smoke` fetches a file from a local server
+      `make x86-net-smoke` fetches a file from a local server and installs it,
+      and serves three certificates of a test authority over TLS: the
+      trusted one arrives (1.3 and 1.2), the one of another name and the one
+      of another authority are refused, and the repository of `pkg` is HTTPS
+
+## K13 - A bootable image of x86-64 (prototype, done in 1.2.0)
+
+> The machine of the port boots in QEMU from `-kernel` and `-initrd`: the
+> hypervisor is the boot loader. A medium is the other half of "a machine":
+> a firmware reads it, a boot loader starts the port's loader, and the root
+> filesystem comes with the image. The decision is
+> [ADR 0026](adr/0026-bios-iso.md), the page is
+> [ports/x86_64/iso.md](ports/x86_64/iso.md).
+
+* [x] An El Torito ISO (BIOS) with the loader, the signed kernel and the
+      root image: `make x86-iso` writes `build-x86-iso/microos.iso` with
+      GRUB when `grub-mkrescue` is installed and with limine otherwise; the
+      boot loader is not vendored
+* [x] The root image as the second module of the boot: the port registers
+      its bytes as a read-only block device (`boot0`, `boot0p1`), the boot
+      mounts it at `/` and `/bin` is the tree of the CD; the heap starts
+      above the modules, and the loader refuses a module over the kernel
+* [x] `make x86-iso-smoke`: the ISO boots with `-cdrom` and nothing else,
+      mounts the root image and runs `/bin/hello` from the boot and from the
+      shell
+* [x] UEFI: the EFI application of the tree (`loader/uefi`, a PE/COFF image
+      built by clang and lld-link), the map of the memory of the firmware in
+      the shape the port reads, GOP as the screen of the machine (a shadow of
+      the console's RGB565 and the conversion of the cells that change,
+      `src/gop.c`), the root of the ACPI tables from the configuration table,
+      `ExitBootServices` and the page tables of the boot; `make uefi` writes
+      a FAT volume with `BOOTX64.EFI`, the kernel and `disk.img`, and
+      `make uefi-smoke` boots it under OVMF and checks the machine, the shell
+      and the picture of the card (ADR 0037,
+      [ports/x86_64/uefi.md](ports/x86_64/uefi.md))
+* [ ] The laptop of a person: a USB keyboard, a stick and a wire of the USB
+      (xHCI with the classes of HID, BOT/SCSI and CDC-ECM) - done in the lane
+      of 1.8 (`make usb-smoke`, ADR 0040) -, a disk the kernel drives itself
+      (AHCI, then NVMe) and a writable root, the clock and the shutdown of
+      ACPI, and the I/O APIC of a real chipset - the table of
+      `ports/x86_64/uefi.md` "What is not done" is the order
+* [ ] A hybrid image: the ISO written to a USB stick boots as a disk
+      (`limine bios-install`, or a protective MBR and the GRUB record)
+* [ ] A writable root: the root of the CD is read-only, and a person's files
+      need a disk (or an overlay in the memory of the machine) and the
+      installer of K12
+* [ ] A reproducible ISO: the volume descriptor follows
+      `SOURCE_DATE_EPOCH`, the directory records still carry the clock
+
+## The release of 1.2.0
+
+> The notes are [`docs/releases/1.2.md`](releases/1.2.md); the page of the
+> wiki is [`wiki/release-1.2.md`](wiki/release-1.2.md). The board is the
+> compatibility port of ADR 0018, and the second core is `1.3.0`.
+
+* [x] K11: the framebuffer of 1280x800, the Spleen 8x16 console, the colour
+      of a cell and SGR, the text mode as the fallback (ADR 0023)
+* [x] K12: the stream and `wget`, the signed index and `pkg`, mbedTLS and
+      HTTPS (ADR 0024)
+* [x] K13: the BIOS ISO with the read-only root module (ADR 0026)
+* [x] `make x86-user`: the tar of the release is the machine that runs
+* [x] The ports: zlib, sbase as the canonical `/bin`, PCRE2, Lua and bc/dc,
+      the 8 MiB ceiling of an image, and the repository `microos-progs`
+* [x] The shell fixes of `1.1.2` (a directory without a table, `.` and `..`
+      as a path)
+* [ ] The gates of the release: the three sessions of 600 seconds, run after
+      the integration of the branches (the table in the notes)

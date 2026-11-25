@@ -7,6 +7,12 @@
   "The gate, changed")
 * Updated: 2026-11-22 - the shape, the host and the x86-64 processor list are
   in the tree; the AP bring-up is the blocker (see "The pilot of 1.x")
+* Updated: 2026-11-23 - the AP bring-up is done on x86-64: two cores run, the
+  smoke of the port passes 34 of 34 and the two-core session soaks for 600
+  seconds. The remaining work is named at the end of the section
+* Updated: 2026-11-23 - the I/O APIC and the wake IPI are done (ADR 0034): the
+  timer and the keyboard are lines of the table, the scheduler wakes a core
+  with the interrupt, and the smoke of the two cores passes 52 checks
 
 
 ## Context
@@ -108,79 +114,98 @@ The reason is not that the work is small; it is that the work is large and the
 promise of the release does not need it. A gate that is moved is written down,
 not quietly dropped.
 
-## The pilot of 1.x (2026-11-22)
+## The pilot of 1.x, closed (2026-11-23)
 
-The first phase of the plan is in the tree, and it stops at the line the
-machine of QEMU draws:
+The first phase of the plan began on 2026-11-22 and stopped at the line QEMU
+draws: the shape and the host gate were in the tree, and the AP bring-up was
+the blocker. The work closed on 2026-11-23, and the machine of two processors
+is the gate of 1.3.
 
 * **The shape.** `struct k_cpu` (kernel/cpu.h): the current task, the idle
   slot, the tick count, the nesting of the interrupt state, the kernel stack,
   the thread pointer, the tables of the port and the number of the core.
   `KERNEL_SMP` (default off, ADR 0010) builds one core or `KERNEL_CPUS_MAX`
   (four) from the same sources; with it off the array has one slot and the
-  kernel is the kernel of 1.0.
-* **The scheduler is per-CPU.** Every core has its own run queue per priority,
-  a task has one `cpu` field, and the field is written only by the scheduler
-  (create, wake, claim, migrate). A core that has nothing of its own takes the
-  head of the best queue of another core when that task has a higher priority;
-  that is the only migration, and a running task is never moved - the promise
-  of this ADR. `k_sched_migrate()` is the call, and it refuses a running task.
-* **The lock.** `k_cpu_lock()` is the critical section of the port (saved
-  flags, interrupts off, a lock of the machine on the ports that can have
-  another core) plus the kernel's own nesting count. It protects the queues,
-  the sleeping list and the current task, and it is dropped before the tick
-  charges a task, before a sleep and before a switch. The kmm, the VFS, the
-  console and the block layer keep their sleeping locks and their critical
-  sections; the audit of what they need under two cores is in
-  [debts.md](../debts.md) (K8).
+  kernel is the kernel of 1.1.
+* **The scheduler is per-CPU, and a core picks only from its own queue.**
+  Every core has a run queue per priority, a task has one `cpu` field, and
+  only the scheduler writes it: a new task goes to the next core of a round
+  robin, a woken task to the core it already had, and `k_sched_migrate()`
+  moves a task that is not running. The pilot let a core take a ready task
+  from another queue; the implementation removed it, because this kernel
+  keeps the task that runs in its queue and marks it READY for the few
+  instructions between the end of its quantum and the switch. A second core
+  that took it in that window would resume a stack that is still in use: a
+  task on two cores at once, which this ADR forbids. The claim
+  (`k_sched_claim_next()`) chooses the task and marks it RUNNING on the
+  calling core in one critical section, so the window between the choice and
+  the switch is closed as well.
+* **The lock.** `k_cpu_lock()` is the critical section of the port - saved
+  flags, interrupts off, one spinlock of the machine - plus the kernel's own
+  nesting count. It protects the queues, the sleeping list and the current
+  task, and it is dropped before the tick charges a task, before a sleep and
+  before a switch. The console (`k_port_write()`) is under the same lock for
+  the whole call: with two cores the bytes of a line were interleaved
+  otherwise. The kmm, the VFS and the block layer keep their sleeping locks;
+  the audit is K8 of [debts.md](../debts.md).
 * **The host is the gate.** `MICRO_OS_CPUS` (default 1) tells the host port
   how many cores the kernel has; `make test-smp` runs the whole suite on two
   of them, `make test-tsan` and `make soak-host` do the same under the thread
-  sanitizer. The port gives every task a pthread, so the tasks really run in
-  parallel; a "core" is a queue and an identity of the kernel, and a task is
-  on one of them because it is one pthread with one field. The tests check
-  that the port and the record agree, that a task is in one queue, that a
-  wake-up is not lost and that the queues stay consistent while they move.
-  TSan found three pairs of the new code (the `cpu` field of a task, the
-  `current` of a core, the mark of a signal) and they are fixed with the same
-  lock or an atomic read; the 20-second soak of two cores runs a million
-  operations and six thousand forks with no error. The first five-minute soak
-  then reported one "inconsistency of the queues" in ten million operations:
-  the switch of this kernel keeps the running task in its run queue until its
-  quantum, a sleep or a block (that is 1.0), and the check of the queues had
-  been written as "a task in a queue is ready". The check now says what the
-  kernel means - a queue holds the ready tasks of a core and the task that
-  runs there - and it names the task, its state and its core when it fails.
-  The eight-worker run of two minutes (18 million operations, 92 thousand
-  forks) and the five-minute run of the thread sanitizer after the change are
-  clean.
-* **x86-64 reads the processors and starts one.** The port finds the root
-  pointer of ACPI (the extended BIOS area, then the last kilobyte of the BIOS),
-  walks the RSDT or the XSDT, reads the MADT and remembers the local APIC.
-  The boot prints both numbers - the processors the firmware calls enabled and
-  the ones that run - so a machine of two processors says `2 cpu(s) reported
-  by the firmware, 1 in use`. `make x86-smoke` boots with `-smp 2` and reads
-  that line; the kernel of `KERNEL_SMP=ON` builds and boots
-  (`make x86-smp-build`) and the portable side of the second core is exercised
-  on the host, not on the machine.
-* **The blocker of the AP bring-up** is not the MADT. It is, in order:
-  (1) the critical section of the port is `cli` and a depth counter, which
-  stops the local core only - every kernel structure that trusts it would need
-  a real spinlock in it (a global one, with the interrupts saved) before a
-  second core may enter the kernel at all; (2) the port's `g_current`, the
-  TSS (RSP0 and IST) and the thread pointer are singletons per machine and
-  need one set per core; (3) the trampoline in low memory (real mode, GDT,
-  PAE, long mode, a stack, the entry into the kernel), INIT-SIPI-SIPI through
-  the local APIC, and its MMIO page mapped; (4) the local APIC timer and its
-  vector, because the PIT and the 8259 deliver to the boot processor only, and
-  the I/O APIC for the keyboard and the disk. Doing (1)-(4) half way would
-  boot a second core into a kernel that can corrupt its own tables, so the
-  pilot stops before it and the numbers say so. The work is the plan below,
-  not a claim.
-* **The board is untouched**, as ADR 0018 says: its two cores run under
-  FreeRTOS and the kernel scheduler of that port is not asked to use both.
-  The weak default of `kernel/port/cpu.h` answers "one core" for a port that
-  predates the calls, which is what the board does until its own work.
+  sanitizer. The tests cover the queues, the wake-up, the migration, the
+  claim and the one failure this ADR names: a task that is the current of two
+  cores is refused and named by `k_sched_validate()`.
+* **x86-64 starts every processor the firmware lists.** The port keeps the
+  MADT list with the hardware identifier of each processor, gives every core
+  a 64 KiB stack, sends INIT and the start-up IPI through the local APIC to
+  the trampoline the loader carries at `0x7000` (parameters at `0x8000`:
+  CR3, stack top, C entry, core number), and waits for the core to answer
+  from C. The numbers are printed: `2 cpu(s) reported by the firmware, 2 in
+  use (apic 0xfee00000)`, and a core that does not answer is counted out and
+  named. The core waits before the scheduler exists and `kmain()` releases it
+  after `kernel_boot()` has made the array of the kernel.
+* **One identity per core.** IA32_GS_BASE points at the record of the core
+  whose first word is its kernel number; `k_port_cpu_id()` is `movl %gs:0`.
+  The boot is found by CPUID (leaf 1, EBX[31:24]) and keeps the number 0; the
+  other processors follow the MADT. The boot's `TSS.RSP0`, the thread pointer
+  of the TLS and the current context are per core for the same reason.
+* **The clock is one, the timers are per core.** The PIT of the core 0
+  advances the millisecond of the kernel; an AP takes its ticks from its own
+  local APIC timer (1 kHz, calibrated against the TSC; QEMU counts at about
+  62.6 MHz with divider 16). The 8259 is wired to the boot processor and its
+  LINT0 is ExtINT only there: with the external mode open on every core, QEMU
+  delivered the PIT to either of them (1889 ticks on the core 0 and 4933 on
+  the core 1 of 6822) and the clock ran at a third of real time.
+* **An exit gives the core back.** A task that ends with nothing else to run
+  returns the core to its boot context (kmain on the core 0, the idle loop of
+  an AP) instead of waiting in the context of a dead task, whose slot the
+  parent may reap at any moment; the idle context claims the next task.
+  `CR0.WP` is set on every core, because it is a register of the core and the
+  kernel's copy into a read-only page of a program has to fault there too.
+* **The I/O APIC carries the two lines, and the 8259 is the fallback.** Since
+  1.6 the port programs the redirection table of the chip the MADT names
+  (`src/ioapic.c`): the timer of the PIT on the vector `0x20` and the keyboard
+  on `0x21`, one entry per line, the destination core in the entry, and the
+  8259 masked as a whole. A machine whose firmware describes no chip keeps the
+  legacy path exactly as 1.5.0 had it, and the EOI follows the controller that
+  delivered the line. The table is also how a line of the machine reaches a
+  core other than the boot: `smp irq keyboard 1` moves the keyboard and the
+  smoke test sees the interrupts arrive on the core it was sent to (ADR 0034).
+* **The scheduler wakes a core with the interrupt.** A task that is put in the
+  queue of another core is followed by `k_port_cpu_wake()`
+  (`kernel/port/cpu.h`) once the scheduler lock is dropped, and the x86-64 port
+  sends the IPI vector `0x51`: the other core claims and switches at once
+  instead of at its next tick. The claim chooses by priority from the top of
+  the queue, so a task of a higher priority preempts the one that runs there.
+  The port counts the tasks that began in the body of the IPI and the ones that
+  began at the tick of the core, and `smp` prints the pair; `smp wake` stops the
+  clock of the other core to show that an interrupt, and nothing else, starts a
+  task there (ADR 0034).
+* **What is still open.** There is no guard page under the stack of a task: an
+  overflow writes into the heap and the port does not see it. A machine with
+  several I/O APICs keeps the first, a level-triggered line whose device needs
+  its entry masked while it is served is not programmed, and the disk and the
+  network are still polled. The board stays out of this release, as ADR 0018
+  says.
 
 ## Consequences
 
