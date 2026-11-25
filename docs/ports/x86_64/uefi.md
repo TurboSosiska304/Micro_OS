@@ -14,8 +14,8 @@ laptop.
 | volume | one FAT32 volume: `EFI/BOOT/BOOTX64.EFI`, `microos64.bin`, `disk.img` (`tools/uefi_esp.py`) |
 | kernel | the same `microos64.bin` as `make x86-build`: one kernel for the BIOS path and the firmware path |
 | screen | `EFI_GRAPHICS_OUTPUT_PROTOCOL`, the biggest mode within 8 MiB of frame; a shadow in RGB565 and a conversion of the cells that change (`src/gop.c`) |
-| disk | none: `disk.img` is read by the loader and mounted from the memory (`boot0p1`) |
-| keyboard | PS/2 (the port's own `src/ps2.c`), which a laptop of UEFI does not have |
+| disk | the ESP carries `disk.img` as the read-only root of a machine whose USB did not come up (`boot0p1`); the medium of a person is the stick of [ADR 0056](../../adr/0056-the-stick-of-a-person-is-a-disk.md), whose second partition is mounted `rw` as `usb0p2` |
+| keyboard | PS/2 (the port's own `src/ps2.c`, including the embedded controller of a laptop) and USB HID of the xHCI (`src/xhci.c`); the page of a person is [`docs/install.md`](../../install.md) |
 | serial | COM1, 115200 8N1, from the first line of the loader |
 
 ## What the loader does
@@ -131,6 +131,12 @@ Two consequences worth naming:
   writable root is the next lane (§ "What is not done").
 
 ## Writing the volume to a USB stick
+
+> The medium a person installs now is the **stick of two partitions**:
+> `make uefi-stick` writes `build-uefi/stick.img` and the second partition is
+> the writable root ([ADR 0056](../../adr/0056-the-stick-of-a-person-is-a-disk.md),
+> [`docs/install.md`](../../install.md)). The section below is the first
+> medium, the ESP alone, and it stays for a machine that only reads.
 
 The image `make uefi` writes is a FAT32 filesystem in a file
 (`build-uefi/esp.img`, 48 MB). Two ways to a stick:

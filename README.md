@@ -26,7 +26,9 @@ machine runs it, and the x86-64 port is the proof that this one does.
 The plan of the kernel is [docs/roadmap.md](docs/roadmap.md). The board has a
 plan of its own, with the port: [docs/ports/esp32/roadmap.md](docs/ports/esp32/roadmap.md).
 The user guide is the wiki in [docs/wiki](docs/wiki/README.md); the same pages
-build a site with `mkdocs build` and `mkdocs.yml`.
+build a site with `mkdocs build` and `mkdocs.yml`. To put the system on a
+laptop, from a USB stick to a file that survives the power:
+[docs/install.md](docs/install.md).
 The changes of every release are in [CHANGELOG.md](CHANGELOG.md); a machine
 from 0.x moves with [docs/migration.md](docs/migration.md), and the security
 model, with the way to report a problem, is in [SECURITY.md](SECURITY.md).

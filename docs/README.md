@@ -10,6 +10,7 @@ the board live in `hardware/`.
 | If you want to... | Read |
 |---|---|
 | know what the system is | [../README.md](../README.md) |
+| put the system on a laptop, from a USB stick | [install.md](install.md) |
 | use the system, not read about it | [wiki/](wiki/README.md) (build, shell, files, programs, ports, troubleshooting) |
 | contribute, build, run the checks | [../CONTRIBUTING.md](../CONTRIBUTING.md) |
 | understand the design | [architecture.md](architecture.md) |

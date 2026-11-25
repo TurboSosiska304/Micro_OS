@@ -19,6 +19,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | see what 1.1 changed on the board | [release-1.1.md](release-1.1.md) |
 | see what 1.2 brought to x86-64 | [release-1.2.md](release-1.2.md) |
 | see what the system is and run it in ten minutes | [getting-started.md](getting-started.md) |
+| put it on a laptop from a USB stick | [install.md](install.md) |
 | build the host, x86-64 or ESP32 image | [build.md](build.md) |
 | type a command at the prompt | [shell.md](shell.md) |
 | understand the filesystems and `/etc` | [files.md](files.md) |
@@ -43,6 +44,7 @@ canonical Russian documents are in [`docs/ru/`](../ru/README.md).
 | **The 1.1 release** | [release-1.1.md](release-1.1.md) | the last major changes of the board, and the first phase of many cores |
 | **The 1.2 release** | [release-1.2.md](release-1.2.md) | the screen of x86-64, the stream and the installer, the ISO, and the ports |
 | **Start here** | [getting-started.md](getting-started.md) | what the system is, the first commands |
+| **Install** | [install.md](install.md) | the stick, the firmware, the first boot, the file that survives the power |
 | **Build and run** | [build.md](build.md) | host, x86-64, ESP32, dependencies |
 | **Shell** | [shell.md](shell.md) | the commands, `PATH`, `stat`, `fsck`, `httpd` |
 | **Files** | [files.md](files.md) | MicroFS, `/etc`, `mkfs`/`fsck`, disks |

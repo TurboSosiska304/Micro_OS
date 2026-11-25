@@ -523,8 +523,9 @@ uefi: x86-build x86-disk
 # of the memory. `tools/uefi_stick.py` writes the table and the two parts.
 UEFI_STICK := $(UEFI_BUILD)/stick.img
 
-uefi-stick: uefi x86-disk
-	python3 tools/uefi_stick.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS)
+uefi-stick: uefi x86-disk $(PORTS_STAMP)
+	python3 tools/uefi_stick.py --image $(UEFI_STICK) --build $(X86_BUILD) --mkfs $(X86_MKFS) \
+		--ports $(PORTS_DIR)
 	@echo "$(UEFI_STICK): write it with dd to a stick and start it from the menu of the firmware"
 	@echo "  it is a stick of two partitions: the ESP of the firmware and the volume of the machine"
 
