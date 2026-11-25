@@ -178,10 +178,12 @@ behind the same answer.
 
 **Good**
 
-* A program of 64 MiB forks in **0.34 - 0.62 ms** on the machine of the gate
-  (the line of the port: 16 404 pages shared, 322 - 601 µs for the tables),
-  under the millisecond the release promises, and the call copies no byte of
-  the memory.
+* A program of 64 MiB forks in **0.34 - 0.87 ms** on the machine of the gate
+  (the line of the port: 16 404 pages shared, 322 - 840 µs of it in the
+  tables; the median of the runs of the gate is about 0.6 ms), under the
+  millisecond the release promises, and the call copies no byte of the
+  memory. The spread is the speed of the emulated processor of the host and
+  not the algorithm.
 * A program may own as much memory as its machine's window holds: 95 MiB on
   x86-64 and not the 2 MiB of a microcontroller; the ceiling is a call of the
   port and a machine that grows a window does not have to edit the kernel.
@@ -195,7 +197,8 @@ behind the same answer.
 **Bad**
 
 * The cost of the call is still **the number of pages** and not the number of
-  chunks: the window is mapped in 4 KiB pages, and 64 MiB is 16 384 entries.
+  chunks: the window is mapped in 4 KiB pages, and 64 MiB is 16 384 entries
+  (0.6 ms of the emulated machine, a tenth of that on a processor of silicon).
   A window mapped in 2 MiB pages when a mapping is large and aligned would be
   32 entries and a much cheaper call; it is not done because the memory of a
   program - its heap, its mappings, `munmap` of a part of one, the copy on
