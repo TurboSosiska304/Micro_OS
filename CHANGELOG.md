@@ -44,6 +44,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   was on the screen of a laptop. `make usb-smoke` is 66 checks, with a USB 3
   port among them.
 
+- A guide a stranger can follow: `docs/install.md` - from a stick to a machine
+  that keeps a file, with the exact lines the boot prints, a table of
+  "symptom -> the line of the log -> what to send", and the recipe of the image
+  that has the network. The lane walked its own guide in QEMU and found what a
+  guide written by the author cannot: **the stick did not carry `/bin/ports`** -
+  the volume of the stick was built by a tool that was never given the SDK
+  programs, so `kilo` and the set of sbase were on the disk image of `make
+  x86-disk` and on none of the sticks a person writes. `make uefi-stick-smoke`
+  is 21 checks with `ls /bin/ports` among them.
 ### Added
 
 - The accounts of a person, second half (ADR 0044, ADR 0053): `chgrp` is the
