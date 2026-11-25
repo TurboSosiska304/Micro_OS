@@ -11,7 +11,7 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine six times and checks the
+presses keys (sendkey). The test boots the machine seven times and checks the
 two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
 0030, ADR 0054):
 
@@ -54,7 +54,12 @@ two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
      screen, two screenshots around a key differ only in the row of the key,
      Ctrl+C stops the command, Ctrl+T is the second size of the font, and the
      last window gives the prompt of the shell back. The pictures of the
-     windows are kept in the directory of `--shots`.
+     windows are kept in the directory of `--shots`;
+  7. the same desk started by a person at the prompt (the laptop that died on
+     `exec /bin/wm`): the machine is given SMEP and SMAP, the shell types the
+     line, and a window and a living shell after the desk prove that every
+     copy the kernel made of the memory of the program was inside the window
+     of ADR 0052.
 
     tools/x86_vga_smoke.py [--timeout SECONDS] [--display none|gtk] [--verbose]
                            [--image PATH] [--shots DIR]
@@ -834,13 +839,19 @@ class Machine:
     """
 
     def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
-                 image: str | None = None) -> None:
+                 image: str | None = None, cpu: str | None = None) -> None:
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
 
-        command = [
-            "qemu-system-x86_64",
+        # A machine of a person has SMEP and SMAP; the default processor of
+        # QEMU does not. A test of a copy the kernel makes from the memory of
+        # a program has to ask for the two bits or it checks a machine that
+        # never refuses the copy made outside the window of ADR 0052.
+        command = ["qemu-system-x86_64"]
+        if cpu is not None:
+            command += ["-cpu", cpu]
+        command += [
             "-kernel",
             loader,
             "-initrd",
@@ -3529,6 +3540,95 @@ def wait_meter(machine, start: int, timeout: float):
     return None
 
 
+def run_shell_desktop(
+    loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str
+) -> list:
+    """The desk a person starts at the prompt, on a machine with SMAP.
+
+    `run_desktop` types `exec /bin/wm` at the prompt too, but its QEMU has the
+    default processor, which does not advertise SMAP: a read the kernel makes
+    from the memory of a program outside the window of ADR 0052 is an
+    ordinary read there, and the fault of the laptop of a person is invisible.
+    This boot asks for SMEP and SMAP and types the same line, then reads the
+    picture of a window and checks that the machine is still answering after
+    the desk has closed.
+
+    The window that comes up is the proof of the whole path: the path of the
+    open of `/dev/fb0`, the fork and execve of the two clients, the `poll` of
+    their pipes and the copies of their revents into the array of the server.
+    Any of those that faults in ring 0 ends with "the machine stops here"
+    instead of a painted window.
+    """
+    checks = []
+
+    def expect(name: str, condition: bool, detail: str = "") -> None:
+        checks.append((f"shell exec wm: {name}", bool(condition), detail))
+
+    with tempfile.TemporaryDirectory(prefix="microos-x86-shell-wm-") as workdir:
+        disk = os.path.join(workdir, "disk.img")
+        shutil.copyfile(image, disk)
+        machine = Machine(loader, kernel, workdir, "std", display, disk,
+                          cpu="qemu64,+smep,+smap")
+
+        try:
+            expect("the shell of the machine is up", machine.wait_serial(PROMPT, timeout),
+                   "the shell never printed its prompt")
+            boot = machine.read_serial()
+            expect("the machine advertises the two bits",
+                   "x86-64: SMEP and SMAP are on" in boot,
+                   "the boot did not say that SMAP is on: the machine would not check the window")
+
+            machine.type_line("exec /bin/wm")
+            expect("the server takes the screen",
+                   machine.wait_serial("fb: the console is taken", timeout),
+                   "the kernel never said that /dev/fb0 was taken")
+            expect("the desk of the shell comes up",
+                   machine.wait_serial("wm: the desktop is up", timeout),
+                   "the server never finished starting its windows; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+            expect("the machine did not stop on the way",
+                   "the machine stops here" not in machine.read_serial(),
+                   "a fault of ring 0 ended the machine before the desk was up")
+
+            def title(seen) -> bool:
+                return seen.text_at(WM_EDIT_RECT[0] + UI_FRAME_PAD,
+                                    WM_EDIT_RECT[1] + UI_TITLE_Y, "edit - /doc.txt",
+                                    EDIT_TITLE_INK_RGB, EDIT_BAR_RGB)
+
+            picture = settled_picture(
+                machine, workdir,
+                lambda seen: seen.pixel(4, 4) == WALL_TOP_RGB and title(seen),
+                seconds=10.0,
+            )
+            # settled_picture gives the last picture even when the condition
+            # never held, so the picture is read here and not only its
+            # existence: a stopped machine keeps the grid of the console on
+            # the screen and must not pass for a desk with a window.
+            painted = picture is not None and picture.pixel(4, 4) == WALL_TOP_RGB and title(picture)
+            expect("a window of the desk is on the screen", painted,
+                   "screendump never showed the wallpaper and the title of the editor")
+            if picture is not None:
+                keep_picture(machine, workdir, "shell-wm.ppm")
+
+            expect("Alt+F4 closes the file manager",
+                   press_until(machine, "alt-f4", "wm: close fm - /", timeout),
+                   "the key did not reach the file manager")
+            expect("Alt+F4 closes the editor",
+                   press_until(machine, "alt-f4", "wm: close edit - /doc.txt", timeout),
+                   "the key did not reach the editor")
+            expect("the last window ends the desk",
+                   machine.wait_serial("wm: the desktop is closed", timeout),
+                   "the server did not close with its last window")
+            expect("the shell answers after the desk",
+                   machine.run_line("help", timeout),
+                   "the machine was not alive after the desk; the log ends with "
+                   + repr(machine.read_serial()[-300:]))
+        finally:
+            machine.close()
+
+    return checks
+
+
 def run_boot_desktop(
     loader: str, kernel: str, image: str, timeout: float, verbose: bool, display: str
 ) -> list:
@@ -4011,6 +4111,9 @@ def main(argv: list) -> int:
         checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_desktop(loader, kernel, args.image, args.timeout, args.verbose, args.display)
+        checks += run_shell_desktop(
+            loader, kernel, args.image, args.timeout, args.verbose, args.display
+        )
         checks += run_boot_desktop(
             loader, kernel, args.image, args.timeout, args.verbose, args.display
         )

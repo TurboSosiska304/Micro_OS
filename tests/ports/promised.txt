@@ -78,6 +78,9 @@ sha256sum /bin/ports
 # --- 1.9: the terminal, a program we did not write ----------------------
 kilo /bin/ports
 
+# --- 2.0: the terminal window of the desk ------------------------------
+term /bin
+
 # --- the shell of the kernel: the clock and the accounts ----------------
 date shell
 id shell

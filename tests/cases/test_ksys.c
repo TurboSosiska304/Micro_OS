@@ -2038,6 +2038,55 @@ static void test_poll(void)
 }
 
 /*
+ * The two ways a `poll` can be handed something that is not there: a list
+ * whose pointer names no memory of the caller, and a number that is not a
+ * descriptor of the task. Both are answers of the call - EFAULT and the
+ * error bit of the entry - and neither may bring down the machine. The
+ * pointer of 0x8 is the shape a program with a broken argument gives; on a
+ * machine with pages the walk refuses it, and on the host the null-page
+ * check of user_range() refuses it before any copy is made.
+ */
+static void test_poll_bad_edges(void)
+{
+    struct ksys_pollfd list[2];
+
+    ktest_begin("ksys: poll answers EFAULT for a bad list and POLLERR for a bad descriptor");
+
+    setup();
+
+    memset(list, 0, sizeof(list));
+    list[0].events = KSYS_POLLIN;
+    list[1].events = KSYS_POLLIN;
+
+    /* A short list and a full one at a near-null address: neither is copied,
+     * and neither writes into the caller's memory. */
+    KT_CHECK_INT_EQ(ksys_poll((struct ksys_pollfd *)(uintptr_t)8, 1, 0), KERR_FAULT);
+    KT_CHECK_INT_EQ(ksys_poll((struct ksys_pollfd *)(uintptr_t)8, KSYS_POLL_MAX, 0), KERR_FAULT);
+
+    /* A number at the end of the table and one past the widest signed int
+     * are not open descriptors: the first is the error of its entry, the
+     * second is ignored like every negative number. */
+    list[0].fd = (k_u32_t)TASK_MAX_FDS;
+    list[1].fd = (k_u32_t)-1;
+    KT_CHECK_INT_EQ(ksys_poll(list, 2, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLERR);
+    KT_CHECK_INT_EQ(list[1].revents, 0);
+
+    list[0].fd = (k_u32_t)0x7FFFFFFFu;
+    KT_CHECK_INT_EQ(ksys_poll(list, 1, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLERR);
+
+    /* The same call through the raw ABI: a number past the table stays past
+     * it, and the wide registers of the call do not change the answer. */
+    list[0].fd = (k_u32_t)(TASK_MAX_FDS + 100u);
+    KT_CHECK_INT_EQ(ksys_call(KSYS_POLL, (ksys_arg_t)(uintptr_t)list, 2, 0, 0, 0, 0), 1);
+    KT_CHECK_INT_EQ(list[0].revents, KSYS_POLLERR);
+    KT_CHECK_INT_EQ(list[1].revents, 0);
+
+    teardown();
+}
+
+/*
  * The reader of a pipe whose writer is late. The read has nothing to take
  * and the writer is still there: the call waits, and the bytes arrive. An
  * answer of EAGAIN would be a machine that gave up on a pipeline that was
@@ -3063,6 +3112,7 @@ void test_ksys(void)
     test_dup2();
     test_pipe_errors();
     test_poll();
+    test_poll_bad_edges();
     test_mmap_edges();
     test_fd_table_full();
     test_ftruncate();

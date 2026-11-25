@@ -131,7 +131,8 @@ made the rest of the machine a secret of the repository (`/bin/edit` was never
 named); the whole of it is printed now, and `make x86-smoke` reads `/bin` with
 the shell and asks `help` for every name of it, so the two cannot drift apart.
 A program is not a command of the shell and was missing from this list before
-1.2.1.
+1.2.1. There is no `vi`: the editor is `kilo` in `/bin/ports` (or `/bin/edit`
+in a window), and `exec /bin/vi` answers `no such file or directory`.
 
 `help NAME` answers with the command of the shell, the program, or both. A
 name that is only a program says where it is:

@@ -56,6 +56,17 @@ static bool user_range(ksys_arg_t address, k_size_t size, bool write)
         return true;
     }
 
+    /*
+     * The null page is never memory of a caller. A machine with page tables
+     * says so in the walk below, but the host and the board have no window
+     * to walk and would copy their own address 8 instead of answering
+     * EFAULT - a crash of the process or of the machine for a bad pointer of
+     * a program. The rule belongs here, where every port asks it.
+     */
+    if (address < K_MM_PAGE_SIZE || address > UINTPTR_MAX - size) {
+        return false;
+    }
+
     if (space != 0) {
         /* A range that runs out of the mappings is refused below, by the
          * walk of the tables; the pages before it are already made. */
@@ -177,13 +188,26 @@ static int path_check(const char *path)
 static int path_copy(char *out, ksys_arg_t path)
 {
     const char *name = (const char *)(uintptr_t)path;
+    k_size_t size;
     int rc = path_check(name);
 
     if (rc != 0) {
         return rc;
     }
 
-    return copy_from_user(out, path, strlen(name) + 1);
+    /*
+     * The length is measured in the memory of the caller, so the read of the
+     * string needs the same window as the copy below: `path_check` opens a
+     * window for each byte it looks at, but it closes it before it returns,
+     * and a processor with SMAP refuses this strlen in ring 0 (ADR 0052).
+     * The terminator is already known to be inside the window, so a bad
+     * pointer still ends in EFAULT from path_check and never reaches here.
+     */
+    k_port_exec_user_access_begin();
+    size = strlen(name) + 1u;
+    k_port_exec_user_access_end();
+
+    return copy_from_user(out, path, size);
 }
 
 /*

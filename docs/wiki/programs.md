@@ -583,6 +583,12 @@ built by the SDK with `tools/ports_build.sh`, and run by `make tty-smoke` and
 `make ports-smoke`. The transcript of `make tty-smoke` is the proof: a line is
 typed, Ctrl+S saves it, Ctrl+Q leaves, and `cat /tmp/k.txt` prints it back.
 
+There is no `vi` on this machine. The console editor is `kilo` in
+`/bin/ports`, and the editor of a window is `/bin/edit`; `exec /bin/vi`
+answers `no such file or directory`. The name is documented here instead of
+being added as an alias: an alias would promise a second editor the image
+does not carry.
+
 What the terminal gives a program of the console:
 
 | Question | Call | The answer of this machine |
