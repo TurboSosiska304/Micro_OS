@@ -3093,15 +3093,26 @@ def run_desktop(
                 picture is not None and picture.pixel(4, VBE_HEIGHT - 4) == PANEL_LIGHT_RGB,
                 "the panel of the light theme is not its surface",
             )
-            sheet = (
-                picture.pixel(WM_EDIT_RECT[0] + 20, WM_EDIT_RECT[1] + 60)
-                if picture is not None
-                else None
-            )
+            # The body of the editor is white in the light theme, and a single
+            # pixel of it is not the body: the first line of the file is a
+            # glyph there, and a picture taken a frame early is the dark theme.
+            # The share of the body that is white is the fact; one pixel is a
+            # coin toss (it failed twice in the gate of 2.0.0-rc1 and passed on
+            # the same tree a minute later).
+            white = palette_rgb(255, 255, 255)
+            body_total = 0
+            body_white = 0
+            if picture is not None:
+                for x in range(WM_EDIT_RECT[0] + 8, WM_EDIT_RECT[0] + WM_EDIT_RECT[2] - 8, 3):
+                    for y in range(WM_EDIT_RECT[1] + 40, WM_EDIT_RECT[1] + WM_EDIT_RECT[3] - 8, 3):
+                        body_total += 1
+                        if picture.pixel(x, y) == white:
+                            body_white += 1
             expect(
                 "the light theme is the sheet of a window",
-                sheet == palette_rgb(255, 255, 255),
-                f"the body of the editor of the light theme is {sheet!r}, not white",
+                body_total > 0 and body_white * 10 >= body_total * 9,
+                f"the body of the editor of the light theme is white in "
+                f"{body_white} of {body_total} sample(s)",
             )
 
             machine.keys(["alt-f4"])
