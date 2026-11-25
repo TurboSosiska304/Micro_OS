@@ -35,8 +35,10 @@
 
 #include <string.h>
 
+#include "kernel/log.h"
 #include "kernel/mm.h"
 #include "kernel/port/lock.h"
+#include "port_x86_64_task.h"
 
 #define PAGE_SIZE 4096u
 #define PAGE_SHIFT 12u
@@ -123,7 +125,7 @@ static bool g_smap_on;
  * because the pool has to outlive the allocator's bookkeeping and be page
  * aligned by the linker, not by a request.
  */
-#define PAGE_POOL_PAGES 256u
+#define PAGE_POOL_PAGES 512u
 #define PAGE_POOL_WORDS (PAGE_POOL_PAGES / 64u)
 
 /* True once the port has replaced the tables of the loader with its own. The
@@ -230,7 +232,14 @@ static k_u8_t *pool_page(k_u8_t *page)
  * recursive and therefore safe from a fault that interrupted a section the
  * same core already holds.
  */
+static void *page_pool_take(bool zero);
+
 static void *page_pool_alloc(void)
+{
+    return page_pool_take(true);
+}
+
+static void *page_pool_take(bool zero)
 {
     k_u32_t word;
     void *page = NULL;
@@ -260,7 +269,7 @@ static void *page_pool_alloc(void)
 
     k_port_exit_critical();
 
-    if (page != NULL) {
+    if (page != NULL && zero) {
         memset(page, 0, PAGE_SIZE);
     }
 
@@ -289,36 +298,81 @@ static void page_pool_free(void *page)
 
 /* --- the frames of the physical arena ------------------------------------- */
 
-static void frame_ref(k_u64_t address)
+/*
+ * A page of the arena is taken by the first space that maps it and given back
+ * by the last one: the count is the number of spaces that name the frame, and
+ * a fork is what makes it two. `g_frame_hint` is where the allocator starts
+ * looking: a frame that is free is usually the one after the last one taken,
+ * and the linear scan of a 96 MiB arena (24576 frames) would be the price of
+ * every fault. The release pulls the hint back to the frame it gave up.
+ */
+static k_u32_t g_frame_hint;
+
+static inline __attribute__((always_inline)) bool frame_index(k_u64_t address, k_size_t *index)
+{
+    if (address < PORT_X86_64_USER_PHYS ||
+        address >= PORT_X86_64_USER_PHYS + (k_u64_t)USER_FRAME_COUNT * PAGE_SIZE) {
+        return false;
+    }
+
+    *index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
+
+    return true;
+}
+
+/* The two halves a caller that holds the critical section already needs:
+ * a fork shares a program of 64 MiB with one lock and not sixteen thousand,
+ * and the release of a space is the same walk in the other direction. */
+static inline __attribute__((always_inline)) void frame_ref_locked(k_u64_t address)
 {
     k_size_t index;
 
-    if (address < PORT_X86_64_USER_PHYS ||
-        address >= PORT_X86_64_USER_PHYS + USER_FRAME_COUNT * PAGE_SIZE) {
+    if (!frame_index(address, &index)) {
         return;
     }
-
-    index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
-
-    k_port_enter_critical();
 
     if (g_frame_ref[index] != 0xFFFFu) {
         g_frame_ref[index]++;
     }
+}
 
-    k_port_exit_critical();
+static inline __attribute__((always_inline)) void frame_release_locked(k_u64_t address)
+{
+    k_size_t index;
+
+    if (!frame_index(address, &index)) {
+        return;
+    }
+
+    if (g_frame_ref[index] == 0) {
+        return;
+    }
+
+    g_frame_ref[index]--;
+
+    if (g_frame_ref[index] == 0 && index < g_frame_hint) {
+        g_frame_hint = (k_u32_t)index;
+    }
 }
 
 k_u64_t port_x86_64_frame_alloc(void)
 {
     k_size_t index;
+    k_size_t slot;
     k_u64_t address = 0;
 
     k_port_enter_critical();
 
-    for (index = 0; index < USER_FRAME_COUNT; index++) {
+    for (slot = 0; slot < USER_FRAME_COUNT; slot++) {
+        index = (k_size_t)g_frame_hint + slot;
+
+        if (index >= USER_FRAME_COUNT) {
+            index -= USER_FRAME_COUNT;
+        }
+
         if (g_frame_ref[index] == 0) {
             g_frame_ref[index] = 1;
+            g_frame_hint = (k_u32_t)((index + 1u) % USER_FRAME_COUNT);
             address = PORT_X86_64_USER_PHYS + (k_u64_t)index * PAGE_SIZE;
             break;
         }
@@ -337,21 +391,8 @@ k_u64_t port_x86_64_frame_alloc(void)
 
 void port_x86_64_frame_release(k_u64_t address)
 {
-    k_size_t index;
-
-    if (address < PORT_X86_64_USER_PHYS ||
-        address >= PORT_X86_64_USER_PHYS + USER_FRAME_COUNT * PAGE_SIZE) {
-        return;
-    }
-
-    index = (k_size_t)(address - PORT_X86_64_USER_PHYS) / PAGE_SIZE;
-
     k_port_enter_critical();
-
-    if (g_frame_ref[index] != 0) {
-        g_frame_ref[index]--;
-    }
-
+    frame_release_locked(address);
     k_port_exit_critical();
 }
 
@@ -756,7 +797,6 @@ k_u64_t port_x86_64_paging_space_create(void)
     k_u64_t *pdpt;
     k_u64_t *pd;
     k_u64_t *low_pt;
-    k_u64_t *pt[USER_PD_COUNT] = {0};
     k_u32_t index;
 
     pml4 = page_pool_alloc();
@@ -766,13 +806,6 @@ k_u64_t port_x86_64_paging_space_create(void)
 
     if (pml4 == NULL || pdpt == NULL || pd == NULL || low_pt == NULL) {
         goto fail;
-    }
-
-    for (index = 0; index < USER_PD_COUNT; index++) {
-        pt[index] = page_pool_alloc();
-        if (pt[index] == NULL) {
-            goto fail;
-        }
     }
 
     /*
@@ -799,8 +832,18 @@ k_u64_t port_x86_64_paging_space_create(void)
 
     pd[0] = page_phys(low_pt) | PTE_PRESENT | PTE_WRITABLE;
 
+    /*
+     * The window starts with no table at all: a chunk of 2 MiB gets its table
+     * of 4 KiB pages on the first page of that chunk that is mapped
+     * (port_x86_64_paging_map_user). A program that uses one megabyte of
+     * window costs three tables and not the forty-eight of 96 MiB, and a
+     * program that uses all of it costs them all - the same number it would
+     * have paid eagerly. The copy of the kernel's low map above has the
+     * identity entries of the window, and they are cleared here: a program
+     * may not name the physical memory behind its own window.
+     */
     for (index = 0; index < USER_PD_COUNT; index++) {
-        pd[USER_PD_FIRST + index] = page_phys(pt[index]) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+        pd[USER_PD_FIRST + index] = 0;
     }
 
     /*
@@ -828,12 +871,6 @@ k_u64_t port_x86_64_paging_space_create(void)
 fail:
     /* Every table that was handed out above is this function's to give
      * back; the ones that were never asked for are NULL. */
-    for (index = 0; index < USER_PD_COUNT; index++) {
-        if (pt[index] != NULL) {
-            page_pool_free(pt[index]);
-        }
-    }
-
     if (pml4 != NULL) {
         page_pool_free(pml4);
     }
@@ -856,12 +893,13 @@ fail:
  * marked as copy-on-write. The caller is the parent, so the parent's CR3 is
  * the one in the register and its TLB entries can be dropped here.
  */
-k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
+k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3, k_u32_t *out_shared)
 {
     k_u64_t child_cr3;
     k_u64_t *parent_pd;
     k_u64_t *child_pd;
     k_u32_t pd_index;
+    k_u32_t shared = 0;
 
     if (parent_cr3 == 0) {
         return 0;
@@ -880,39 +918,51 @@ k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
         return 0;
     }
 
+    /*
+     * The walk is one critical section: the frames are a state of the machine
+     * and a fork of a program of 64 MiB names sixteen thousand of them. The
+     * tables are copied whole - a chunk of 2 MiB is 512 entries and one
+     * memcpy - and the pages are not touched at all: the child gets the same
+     * frames, and the first write of either side copies the one page it
+     * wrote (port_x86_64_paging_handle_cow). The cost of the call is the
+     * tables of the parent and the count of its frames, and not their
+     * contents.
+     */
+    k_port_enter_critical();
+
     for (pd_index = 0; pd_index < USER_PD_COUNT; pd_index++) {
         k_u64_t *parent_pt = space_pt(parent_cr3, USER_PD_FIRST + pd_index);
-        k_u64_t *child_pt = space_pt(child_cr3, USER_PD_FIRST + pd_index);
+        k_u64_t *child_pt;
         k_u32_t pt_index;
 
-        if (parent_pt == NULL || child_pt == NULL) {
+        if (parent_pt == NULL) {
+            continue;
+        }
+
+        child_pt = page_pool_take(false);
+        if (child_pt == NULL) {
+            k_port_exit_critical();
             port_x86_64_paging_space_destroy(child_cr3);
             return 0;
         }
 
+        /*
+         * The table of the parent is made the shared table first - the count
+         * of every frame and the copy-on-write mark - and the child gets it
+         * by the memcpy: one store per page instead of two, and no zeroing of
+         * a page that the copy fills.
+         */
         for (pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
             k_u64_t entry = parent_pt[pt_index];
-            k_u64_t address;
 
             if ((entry & PTE_PRESENT) == 0) {
                 continue;
             }
 
-            /*
-             * The index of the PD entry already carries the base of the
-             * window (USER_PD_FIRST is the base in units of 2 MiB), so the
-             * address is the two indices and not the base again: an invlpg
-             * of a virtual address 32 MiB above the page leaves the stale
-             * entry in the TLB, and the first write of the parent after the
-             * fork then goes to the frame it now shares with the child - the
-             * copy of the stack the child needs, overwritten by its parent.
-             */
-            address =
-                ((k_u64_t)(USER_PD_FIRST + pd_index) << 21) | ((k_u64_t)pt_index << PAGE_SHIFT);
-
             /* The frame is shared by the two spaces, even when it is the text:
              * the last space to leave it is the one that releases it. */
-            frame_ref(entry & PTE_ADDRESS);
+            frame_ref_locked(entry & PTE_ADDRESS);
+            shared++;
 
             /*
              * Only a page that was writable becomes copy-on-write. The text
@@ -926,23 +976,37 @@ k_u64_t port_x86_64_paging_space_clone(k_u64_t parent_cr3)
                 /* The complement has to be 64 bits wide: a `~PTE_WRITABLE` of
                  * the 32-bit constant is zero-extended and takes the NX bit
                  * of the entry with it. */
-                k_u64_t shared = entry & ~(k_u64_t)PTE_WRITABLE;
-
-                child_pt[pt_index] = shared | PTE_COW;
-                parent_pt[pt_index] = shared | PTE_COW;
-
-                /* The parent wrote through this entry before the fork. */
-                invlpg(address);
-            } else {
-                child_pt[pt_index] = entry;
+                parent_pt[pt_index] = (entry & ~(k_u64_t)PTE_WRITABLE) | PTE_COW;
             }
         }
+
+        memcpy(child_pt, parent_pt, PAGE_SIZE);
+        child_pd[USER_PD_FIRST + pd_index] =
+            page_phys(child_pt) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
+    }
+
+    k_port_exit_critical();
+
+    /*
+     * The parent's own entries changed under it. A flush of the whole TLB (a
+     * write of CR3, which is the parent's) costs one entry of the pipeline
+     * and not one `invlpg` per page: sixteen thousand of those were the
+     * larger half of the call. The port writes CR3 at every context switch
+     * anyway, so no core holds a stale entry of this space for longer than
+     * that (the K8 debt of the TLB, docs/debts.md).
+     */
+    write_cr3(parent_cr3);
+
+    if (out_shared != NULL) {
+        *out_shared = shared;
     }
 
     /*
      * The memory of the child is the memory of the parent: the records of the
      * mappings go with the new tables, and the pages the child has not
-     * touched are still pages of the files behind them.
+     * touched are still pages of the files behind them. The call opens files
+     * and takes the lock of the kernel heap, so it is made outside the
+     * critical section of the tables above.
      */
     (void)k_mm_fork(parent_cr3, child_cr3);
 
@@ -982,8 +1046,14 @@ void port_x86_64_paging_space_destroy(k_u64_t cr3)
     pd = table_entry(pdpt[0]);
     low_pt = (pd[0] & PTE_PRESENT) && (pd[0] & PTE_PAGE_SIZE) == 0 ? table_entry(pd[0]) : NULL;
 
-    /* The frames of the window belong to the spaces, not to the kernel: the
-     * last one to leave releases the page. */
+    /*
+     * The frames of the window belong to the spaces, not to the kernel: the
+     * last one to leave releases the page. The walk is one critical section,
+     * for the reason the clone is: a program of 64 MiB leaves sixteen
+     * thousand frames, and the lock of each of them was the price of leaving.
+     */
+    k_port_enter_critical();
+
     for (pd_index = 0; pd_index < USER_PD_COUNT; pd_index++) {
         if ((pd[USER_PD_FIRST + pd_index] & PTE_PRESENT) != 0 &&
             (pd[USER_PD_FIRST + pd_index] & PTE_PAGE_SIZE) == 0) {
@@ -992,13 +1062,15 @@ void port_x86_64_paging_space_destroy(k_u64_t cr3)
 
             for (pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
                 if ((pt[pt_index] & PTE_PRESENT) != 0) {
-                    port_x86_64_frame_release(pt[pt_index] & PTE_ADDRESS);
+                    frame_release_locked(pt[pt_index] & PTE_ADDRESS);
                 }
             }
 
             page_pool_free(pt);
         }
     }
+
+    k_port_exit_critical();
 
     if (low_pt != NULL) {
         page_pool_free(low_pt);
@@ -1044,7 +1116,26 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         pt = space_pt(cr3, pd_index);
 
         if (pt == NULL) {
-            return -1;
+            /*
+             * The first page of a chunk of 2 MiB: the table comes now, from
+             * the pool, and the entry of the program's PD opens the chunk to
+             * ring 3 (the user bit is checked at every level). A chunk that
+             * holds a 2 MiB page is not a chunk of this window - the port
+             * maps it in 4 KiB pages only - and is refused rather than
+             * overwritten.
+             */
+            k_u64_t *pd = space_pd(cr3);
+
+            if (pd == NULL || (pd[pd_index] & PTE_PRESENT) != 0) {
+                return -1;
+            }
+
+            pt = page_pool_alloc();
+            if (pt == NULL) {
+                return -1;
+            }
+
+            pd[pd_index] = page_phys(pt) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
         }
 
         pt[pt_index] = (physical_address & ~(k_u64_t)(PAGE_SIZE - 1u)) | entry_flags;
@@ -1378,6 +1469,16 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
     port_x86_64_frame_release(old_frame);
+
+    /*
+     * The copy is counted in the context that made it, and the count goes to
+     * the log when that task ends - not one line per page, which would land
+     * inside the output of a program that prints (ADR 0057). The debug line
+     * names the page for a person with the log level of the debug.
+     */
+    port_x86_64_task_cow_copy();
+    klog(K_LOG_LEVEL_DEBUG, "x86-64: copy on write of the page at 0x%08x%08x",
+         (unsigned)(vaddr >> 32), (unsigned)(vaddr & 0xFFFFFFFFu));
 
     return 1;
 }

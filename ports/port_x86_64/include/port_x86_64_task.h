@@ -59,6 +59,14 @@ void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip)
 bool port_x86_64_task_is_user(void);
 
 /*
+ * A page of the running task was copied on write (ADR 0057): the count of the
+ * context grows, and `k_port_task_exit()` puts it in the log. The port of the
+ * page is the one that copies it (src/paging.c); this call is the other half
+ * of the line.
+ */
+void port_x86_64_task_cow_copy(void);
+
+/*
  * The C side of the first instruction of a task. The arguments arrive in the
  * registers the frame carries, not from a caller; the RFLAGS are applied
  * here, because the interrupts of a new task were never saved on its stack.

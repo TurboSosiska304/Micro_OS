@@ -318,7 +318,12 @@ set_source_files_properties("${KSHELL_DIR}/src/kshell_memtest.c"
 # (ADR 0018). The default of mkprog.sh is the same number; the flag is written
 # out so that a port that builds for two machines says which one this is.
 set(PROGRAM_DIR "${CMAKE_CURRENT_SOURCE_DIR}/programs")
-set(PROGRAM_BASE 0x02000000)
+# The base of the window is the one of the port (PORT_X86_64_USER_BASE in
+# include/port_x86_64.h): a program is linked where it will be mapped, and the
+# 96 MiB of ADR 0057 moved the window from 32 MiB to 256 MiB. The two numbers
+# are one promise and a test of the image (`mkprog.sh` refuses an image of
+# another base) is what keeps them together.
+set(PROGRAM_BASE 0x10000000)
 set(MKPROG "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/mkprog.sh")
 set(LINK_PROGRAM "${CMAKE_CURRENT_SOURCE_DIR}/../../tools/link_program.sh")
 
@@ -433,6 +438,12 @@ add_program_image(mmu_wx mmu_wx_main)
 add_program_image(mmu_stray mmu_stray_main)
 add_program_image(mmu_stack mmu_stack_main)
 add_program_image(mmu_io mmu_io_main)
+
+# The fork of a program of 64 MiB (ADR 0057): the pages are shared and not
+# copied, the child writes four of them, the parent reads the old ones, and
+# the port's line carries the count of the shared pages and the time of the
+# call. `make fork-smoke` types the line and reads it.
+add_program_image(forksmoke forksmoke_main)
 
 # A program that uses the library of a program: the runtime sources are
 # compiled for the window together with the file of the program, linked with

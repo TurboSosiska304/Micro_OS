@@ -172,12 +172,36 @@ static void region_free(struct k_mm_region *region)
  * past the end of the file is zeros, which is what a mapping of a file that
  * is shorter than its region reads.
  */
+static int region_attach_file(struct k_mm_region *region, const char *path, k_u32_t flags);
+
+/*
+ * The file of a region that was copied by a fork is not open: the child gets
+ * the name and not a descriptor, and the first page of the file that the
+ * child touches is the one that opens it (ADR 0057). A fork of a program of
+ * 64 MiB is then the walk of its tables and not four opens of the disk, and a
+ * child that never reads a page of the file - the one that calls `execve` a
+ * line later - never opens it at all.
+ */
+static int region_open(struct k_mm_region *region)
+{
+    if (region->file_open || region->path[0] == '\0') {
+        return 0;
+    }
+
+    return region_attach_file(region, region->path, region->flags);
+}
+
 static int region_fill(struct k_mm_region *region, k_u64_t vaddr, void *page)
 {
     k_u64_t offset;
-    int got = 0;
+    int got;
 
     memset(page, 0, K_MM_PAGE_SIZE);
+
+    got = region_open(region);
+    if (got != 0) {
+        return got;
+    }
 
     if (!region->file_open) {
         return 0;
@@ -268,7 +292,15 @@ static int region_writeback(struct k_mm_space *space, struct k_mm_region *region
     k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);
     k_size_t index;
 
-    if (!region->file_open || !region_is_shared(region)) {
+    if (!region_is_shared(region)) {
+        return 0;
+    }
+
+    if (region_open(region) != 0) {
+        return 0;
+    }
+
+    if (!region->file_open) {
         return 0;
     }
 
@@ -473,7 +505,7 @@ static int region_attach_file(struct k_mm_region *region, const char *path, k_u3
 
     region->file_open = true;
 
-    if ((flags & K_MM_SHARED) != 0) {
+    if ((flags & K_MM_SHARED) != 0 && region->dirty == NULL) {
         k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);
 
         region->dirty = (k_u8_t *)kmm_alloc((pages + 7u) / 8u, KMM_PRIORITY_SYSTEM);
@@ -910,7 +942,6 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
     for (region = from->regions; region != NULL; region = region->next) {
         struct k_mm_region *copy = region_new();
-        int rc;
 
         if (copy == NULL) {
             return KERR_NOMEM;
@@ -918,17 +949,16 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 
         *copy = *region;
         copy->next = NULL;
+
+        /*
+         * The file of the child is a name and not a descriptor (ADR 0057): it
+         * is opened by the first page of it that the child faults on
+         * (region_open), so the fork writes no record of a volume and reads
+         * none. The map of the dirty pages of a shared mapping is a copy, and
+         * it is the one the child writes back with.
+         */
         copy->file_open = false;
         copy->dirty = NULL;
-
-        if (region->file_open) {
-            rc = region_attach_file(copy, region->path, copy->flags);
-
-            if (rc != 0) {
-                region_free(copy);
-                return rc;
-            }
-        }
 
         if (region->dirty != NULL) {
             k_size_t pages = (k_size_t)(region->len / K_MM_PAGE_SIZE);

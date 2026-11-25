@@ -24,8 +24,8 @@
 #include "prog.h"
 
 #define FAR_POINTER ((void *)0xdead0000ul)
-#define EDGE_POINTER ((void *)(0x03000000ul - 4ul))
-#define GUARD_POINTER ((void *)0x02fef000ul)
+#define EDGE_POINTER ((void *)(0x16000000ul - 4ul))
+#define GUARD_POINTER ((void *)0x15fef000ul)
 
 /* One line: the name of the call and the number it answered. */
 static void report(const char *what, long rc)
