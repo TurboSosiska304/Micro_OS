@@ -39,6 +39,16 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   `kerror` and returns (ADR 0055).
 - The rings of the card are static arrays of the kernel, not blocks of the
   heap: the init of the wire no longer asks the allocator at all.
+- The path of a program is read inside the window of the user:
+  `path_copy()` called `strlen()` on the string of a program outside the SMAP
+  window - `path_check()` opened it per byte and closed it before the length
+  was asked - and `exec /bin/wm` from the shell was the first call that took a
+  machine down with a page fault, on a laptop whose processor has SMAP. The
+  range of a call that starts on the null page or wraps is refused before any
+  copy, so `poll()` with a pointer of `0x8` answers `EFAULT` on a machine with
+  page tables and without them. The smoke of the desktop started `wm` from
+  `init` and stayed green; `make x86-vga-smoke` starts it from the shell now,
+  ten checks more (277).
 - The MAC falls back to the filter register when the NVM does not answer (the
   management engine of a laptop can hold the flash busy), and a card that
   names no station leaves the wire off with a line in the log.
