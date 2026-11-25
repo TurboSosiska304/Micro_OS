@@ -257,7 +257,7 @@ kernel's own; on the x86-64 port the kernel walks the page tables of the
 program that made the call and refuses a range that is not there with
 `EFAULT` (`KERR_FAULT`, POSIX 14). The null page, the guard page under the
 stack, the part of the window that was never mapped and a range that runs past
-`0x03000000` are all "not there". The kernel then copies the bytes with
+`0x16000000` are all "not there". The kernel then copies the bytes with
 `copy_from_user()`/`copy_to_user()`; a path is first checked byte by byte and
 copied into a buffer of the kernel, so the VFS and the filesystems under it
 never see a pointer of the program. A pointer that is not mapped is therefore
@@ -916,7 +916,7 @@ a caller that wants the set in one place.
 
 | Selector | Resource | Unit | Ceiling |
 |---|---|---|---|
-| `KSYS_RLIMIT_MEMORY` (1) | the user blocks the task holds | bytes | 2 MiB (the PSRAM of the board) |
+| `KSYS_RLIMIT_MEMORY` (1) | the user blocks the task holds | bytes | the machine: 2 MiB on the board and the host, the window of the programs on x86-64 (99 540 992 bytes, ADR 0057) |
 | `KSYS_RLIMIT_CPU` (2) | the time the task spent running | milliseconds | 4294967295 (about 49 days) |
 | `KSYS_RLIMIT_FDS` (3) | the descriptors the task may open | descriptors | `TASK_MAX_FDS` (16) |
 

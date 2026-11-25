@@ -21,6 +21,7 @@ and the chips on it. None of them replaces another.
 | `make x86-smp-build` | the same kernel with `KERNEL_SMP=ON` (ADR 0012) | `gcc`, `cmake`, `ninja` |
 | `make x86-smoke` | the kernel boots, runs `/bin/hello`, the shell answers | `qemu-system-x86_64` |
 | `make mmu-smoke` | the policy of a page (ADR 0052): the attacks of W^X, the kernel, the stray page, the limit of a task, the stack that grows and a copy that sleeps | `qemu-system-x86_64` |
+| `make fork-smoke` | the fork of a program of 64 MiB (ADR 0057): the pages shared, the time of the call and the pages copied | `qemu-system-x86_64` |
 | `make x86-vga-smoke` | the VGA screen and the PS/2 keyboard, no display | `qemu-system-x86_64` |
 | `make x86-disk-smoke` | a file written by one boot is read by the next | `qemu-system-x86_64` |
 | `make x86-net-smoke` | the network: ping, UDP, HTTP, `httpd` and DNS | `qemu-system-x86_64` |
@@ -219,7 +220,7 @@ calling itself a release.
 ## `make ci`: the local half
 
 ```text
-build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], [mmu-smoke], reproducible,
+build, test, test-asan, test-tsan, test-smp, smoke, coverage, [x86-smoke], [mmu-smoke], [fork-smoke], reproducible,
 integrity
 ```
 

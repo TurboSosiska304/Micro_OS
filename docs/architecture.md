@@ -105,11 +105,12 @@ We honestly call this **Linux-like**, not Linux. On the board there is no
 MMU: the separation of user and kernel space is logical, system calls are
 ordinary function calls with a uniform ABI, and the boundary is kept by
 discipline. The x86-64 port has an MMU and uses it: a program gets page tables
-of its own, a 16 MiB window at 32 MiB, a guard page under its stack and ring
+of its own, a 96 MiB window at 256 MiB, a guard page under its stack and ring
 3, and the kernel is supervisor-only and out of its reach. A fault of a
 program is reported and the program is taken down; the shell that ran it is
 alive. A program is a task of the scheduler with a CR3 of its own, and `fork()`
-clones its page tables and copies a page on the first write (ADR 0007). The
+clones its page tables, shares its frames and copies a page on the first write
+(ADR 0007, ADR 0057): a program of 64 MiB forks in about half a millisecond. The
 pointers of a program are checked and copied at the edge of the call: the
 port says whether a range is memory of the caller, and an address that is not
 mapped is `EFAULT` instead of a page fault of ring 0. The kernel is in the
@@ -286,9 +287,12 @@ A task has three limits - the memory it holds, the processor time it spends
 and the descriptors it opens - and the calls `getlimit` (32) and `setlimit`
 (33) read and lower them. The limits are fields of `struct task`, so a fork
 inherits them and the scheduler does not have a second table to keep in step.
-They start at the ceiling of the machine (2 MiB of PSRAM, about 49 days of
-CPU, sixteen descriptors) and only go down: the ceiling belongs to the
-machine, and neither a task nor root lifts it.
+They start at the ceiling of the machine (the PSRAM of the board, 2 MiB; the
+window of the programs on x86-64, just under 95 MiB, ADR 0057; about 49 days
+of CPU; sixteen descriptors) and only go down: the ceiling belongs to the
+machine, and neither a task nor root lifts it. The memory ceiling is the one
+of the three that the port answers (`k_port_memory_limit()`, contract 1.15),
+because it is a fact of the machine and not of the kernel.
 
 The memory is counted by the allocator: `kmm` asks `task_memory_fits()` before
 it looks for a block, charges the user blocks to the task that allocated them
@@ -651,7 +655,7 @@ internal SRAM is ~100 KB for everything (ADR 0018 gives it a partition and a
 loader; the port has the machine, not the loader). The host says no too: jumping into
 the bytes of a program inside the address space of the simulator would run it
 with the libc of the host under it. x86-64 says yes: it builds page tables for
-the program, maps the window at 32 MiB onto a physical arena at 64 MiB, keeps
+the program, maps the window at 256 MiB onto a physical arena at 64 MiB, keeps
 a 64 KiB stack at the top of the window with an unmapped guard page below it
 and enters ring 3 through an `iretq`. Its boot mounts MicroFS on a volume of
 the port's RAM, writes eleven images to `/bin` - `hello`, `crash`, `fork`,

@@ -65,7 +65,7 @@ and the port, asked later.
 `tools/mkprog.sh` turns a linked object into an image:
 
 ```bash
-tools/mkprog.sh [--base 0x02000000] [--data-base 0x3FFCE000] \
+tools/mkprog.sh [--base 0x10000000] [--data-base 0x3FFCE000] \
                 [--arch x86-64|xtensa] hello.elf hello.mox hello_main
 ```
 
@@ -79,7 +79,7 @@ against that number instead of the contiguous rule and also checks where the
 bss will be cleared. The x86-64 port builds its thirty-one images this way:
 the
 object is compiled for the window, linked with `programs/program.ld`, turned
-into a `.mox` by the script (`--base 0x02000000 --arch x86-64`), and written
+into a `.mox` by the script (`--base 0x10000000 --arch x86-64`), and written
 into the MicroFS volume of the disk by `make x86-disk` (see below). The kernel
 carries no copy of a program. The board builds `hello` and `cat` with
 `--arch xtensa --base 0x4009E000 --data-base 0x3FFCE000` and the toolchain of
@@ -544,8 +544,8 @@ so the engine on the machine and the engine in the test are one.
 
 A program is a task of the scheduler with page tables of its own:
 
-* the window is 16 MiB at 32 MiB (`0x02000000`-`0x03000000`), mapped onto a
-  physical arena at 64 MiB; the kernel reaches the bytes through its identity
+* the window is 96 MiB at 256 MiB (`0x10000000`-`0x16000000`), mapped onto a
+  physical arena of 96 MiB at 64 MiB (ADR 0057); the kernel reaches the bytes through its identity
   map, the program through its own pages;
 * the stack starts as 64 KiB at the top of the window and grows into a room
   of 1 MiB below it, one page per fault and up to the memory limit of the task

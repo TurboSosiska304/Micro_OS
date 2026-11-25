@@ -151,7 +151,10 @@ Micro_OS/
 * **`fork()` is a placeholder on those ports.** Without an MMU the child
   shares the memory of the parent and re-enters its program; the answer (pid
   in the parent, 0 in the child) is the POSIX one. On x86-64 the pages are
-  copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)).
+  copied on write ([ADR 0005](docs/adr/0005-programs-and-protection.md)), and
+  since 2.0 the copy is cheap: a program of 64 MiB forks in about half a
+  millisecond, with the pages shared and copied on the first write
+  ([ADR 0057](docs/adr/0057-the-copy-of-a-process.md), `make fork-smoke`).
 * **A user, a mode, an owner and a group.** A file has a mode, an owner and a
   group in its record, the mode is checked at the edge of the system against
   the effective uid and the gid of the task (owner triad, group triad,

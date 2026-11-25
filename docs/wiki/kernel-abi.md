@@ -116,7 +116,7 @@ Every argument is checked where it enters, in
 `EFAULT` is the most interesting of them, because it is what a machine with an
 MMU can finally say. On x86-64 the null page, the guard page under the stack,
 the part of the window that was never mapped and a range that runs past
-`0x03000000` are all "not there": the call answers `-14` instead of taking a
+`0x16000000` are all "not there": the call answers `-14` instead of taking a
 page fault in ring 0. `/bin/badptr` is the program of that test - it hands
 `write`, `stat` and `read` a pointer outside the window, a range that crosses
 its end and the guard page, and every call answers 14 while the machine goes on
@@ -181,7 +181,8 @@ is `EBADF`. [ADR 0014](../adr/0014-pipes.md) has the design and
 ## Limits
 
 A task starts with the ceiling of three resources and may only lower them:
-the memory it holds (2 MiB), the processor time it spends (about 49 days) and
+the memory it holds (2 MiB on the board and the host, the window of the
+programs on x86-64), the processor time it spends (about 49 days) and
 the descriptors it opens (16). `setlimit` (33) takes a selector
 (`KSYS_RLIMIT_MEMORY`, `_CPU`, `_FDS`) and a value; `getlimit` (32) copies the
 current limit to the caller. A raise is `EPERM`: the ceiling belongs to the

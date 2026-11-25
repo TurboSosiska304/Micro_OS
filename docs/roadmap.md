@@ -110,7 +110,7 @@ written when the project was an operating system for one board; the numbers
 
 * [x] Page tables per program on x86-64: the kernel identity map is
       supervisor-only, the window at 32 MiB is user pages over a physical
-      arena at 64 MiB, the null page is not mapped and the stack has a guard
+      arena at 64 MiB (96 MiB at 256 MiB since 2.0, ADR 0057), the null page is not mapped and the stack has a guard
       page (ADR 0007)
 * [x] Ring 3: a GDT with user code and data, a TSS with `RSP0` and `IST1`, an
       `int $0x80` gate with `DPL 3` and an `iretq` entry; the program prints
@@ -174,6 +174,15 @@ written when the project was an operating system for one board; the numbers
       supervisor-only. The W^X audit walks both halves and `make x86-smoke`
       checks the link address against the ELF (ADR 0007, "The higher half:
       taken")
+* [x] The copy of a process (2.0, ADR 0057): the window of the programs is
+      96 MiB at 256 MiB over a 96 MiB arena, the ceiling of the memory of a
+      task is the port's (`k_port_memory_limit()`, contract 1.15), a fork
+      copies the tables of the parent and shares its frames - one critical
+      section, one CR3 flush, no byte of a page copied - and the child's files
+      are names that the first fault opens. A program of 64 MiB forks in
+      about half a millisecond; the gate is `make fork-smoke` and the counts
+      are the port's lines. What is left is the 2 MiB page of the window (a
+      32-entry walk) and the shared open file description of POSIX.
 * [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
       (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
       and the work is not started)
