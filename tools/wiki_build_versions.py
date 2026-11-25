@@ -509,7 +509,7 @@ def write_root_pages(site: Path, versions: list, cname: str) -> None:
   <link rel="stylesheet" href="{base}assets/wiki.css">
   <title>All versions — Micro OS wiki</title>
 </head>
-<body>
+<body class="versions-list">
 <header class="top">
   <div class="top-inner">
     <a class="brand" href="{base}">Micro&nbsp;OS <span>wiki</span></a>
