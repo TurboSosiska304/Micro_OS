@@ -1,5 +1,6 @@
 ---
 description: Олег — машины и устройства: порты x86-64/host/esp32, PCI, USB, сеть, питание, экран
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#ffd166"
 steps: 120

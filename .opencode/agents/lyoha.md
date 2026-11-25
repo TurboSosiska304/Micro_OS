@@ -1,5 +1,6 @@
 ---
 description: Лёха — cleanroom: заходит в Micro OS как посторонний человек, работает и приносит логические дефекты L1-L4
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#ff8c42"
 steps: 120

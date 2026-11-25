@@ -1,5 +1,6 @@
 ---
 description: Марк — диски и файловые системы: MicroFS, ext2, FAT32, журнал, блочный слой
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#7ac47a"
 steps: 120

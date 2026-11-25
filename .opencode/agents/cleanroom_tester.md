@@ -1,5 +1,6 @@
 ---
 description: A cleanroom user of Micro OS - boots it, works as a person, and reports logical bugs
+model: opencode-go/hy4-flash-free
 mode: subagent
 color: "#ff8c42"
 steps: 80
