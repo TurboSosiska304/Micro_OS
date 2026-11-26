@@ -49,6 +49,15 @@ void k_logfile_console_write(const char *data, k_size_t len);
 /* Write one detached batch. Safe to call from a test without the service. */
 int k_logfile_flush(void);
 
+/*
+ * The last step of a clean poweroff: stop accepting console bytes, wait for a
+ * batch already being written, flush the remainder and clear the ring. The
+ * caller does this before it syncs and unmounts the volumes. Returns 0, or a
+ * kernel error if the writer did not finish or the last batch did not reach
+ * the volume; on an error the log accepts bytes again and the machine stays on.
+ */
+int k_logfile_stop_for_poweroff(void);
+
 /* The service task of the ports: wake ten times a second and flush a batch. */
 void k_logfile_service_task(void *arg);
 int k_logfile_service_start(void);

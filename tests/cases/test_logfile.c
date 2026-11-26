@@ -332,6 +332,29 @@ static void test_console_buffer(void)
     teardown_storage();
 }
 
+static void test_poweroff_close(void)
+{
+    ktest_begin("logfile: poweroff drains the last batch and refuses later bytes");
+
+    setup_storage();
+    KT_CHECK_INT_EQ(k_logfile_start("boot\n", 5u, true), 0);
+    KT_CHECK_INT_EQ(k_logfile_flush(), 0);
+    k_console_write("last power line\n", 16);
+
+    KT_CHECK_INT_EQ(k_logfile_stop_for_poweroff(), 0);
+    KT_CHECK_INT_EQ((int)k_logfile_pending(), 0);
+
+    /* The volume is still mounted here, but the log behaves as it must after
+     * the close: a late power/sync message cannot reopen it or reach the VFS. */
+    k_console_write("too late\n", 9);
+    KT_CHECK_INT_EQ(k_logfile_flush(), 0);
+    KT_CHECK(read_text(K_LOGFILE_RUN_PATH, g_read, sizeof(g_read)) > 0);
+    KT_CHECK(strstr(g_read, "last power line\n") != NULL);
+    KT_CHECK(strstr(g_read, "too late\n") == NULL);
+
+    teardown_storage();
+}
+
 static void test_password_not_logged(void)
 {
     static const char secret[] = "password-7f31c9";
@@ -363,5 +386,6 @@ void test_logfile(void)
     test_read_only_ram();
     test_board_ram();
     test_console_buffer();
+    test_poweroff_close();
     test_password_not_logged();
 }

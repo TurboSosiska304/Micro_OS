@@ -14,6 +14,7 @@
 /* The producer never waits for the volume: one bounded ring feeds one batch. */
 #define K_LOGFILE_BUFFER_SIZE 4096u
 #define K_LOGFILE_FLUSH_MS 100u
+#define K_LOGFILE_POWER_WAIT_MS 2000u
 
 static const char g_rotated[] = "log: rotated at 65536 bytes\n";
 
@@ -34,6 +35,7 @@ static k_size_t g_batch_size;
 static k_size_t g_dropped;
 static bool g_active;
 static bool g_ram;
+static bool g_flushing;
 static bool g_service_started;
 
 static int image_alloc(struct log_image *image)
@@ -436,7 +438,7 @@ int k_logfile_start(const char *boot, k_size_t boot_size, bool storage)
     return 0;
 }
 
-int k_logfile_flush(void)
+static int flush_pending(void)
 {
     char loss[80];
     k_size_t loss_size = 0;
@@ -444,6 +446,11 @@ int k_logfile_flush(void)
     int rc = 0;
 
     k_port_enter_critical();
+    if (g_flushing) {
+        k_port_exit_critical();
+        return KERR_BUSY;
+    }
+    g_flushing = true;
     g_batch_size = g_pending_size;
 
     if (g_batch_size > 0) {
@@ -498,7 +505,58 @@ int k_logfile_flush(void)
     }
 
     g_batch_size = 0;
+    k_port_enter_critical();
+    g_flushing = false;
+    k_port_exit_critical();
     return rc;
+}
+
+int k_logfile_flush(void)
+{
+    return flush_pending();
+}
+
+int k_logfile_stop_for_poweroff(void)
+{
+    k_u32_t waited = 0;
+    bool was_active;
+    int rc;
+
+    k_port_enter_critical();
+    was_active = g_active;
+    g_active = false;
+
+    /* A writer that already detached a batch owns the VFS until it returns.
+     * The power task waits here instead of racing it into an unmount. */
+    while (g_flushing && waited < K_LOGFILE_POWER_WAIT_MS) {
+        k_port_exit_critical();
+        k_sched_sleep_ms(1);
+        waited++;
+        k_port_enter_critical();
+    }
+
+    if (g_flushing) {
+        g_active = was_active;
+        k_port_exit_critical();
+        return KERR_BUSY;
+    }
+
+    k_port_exit_critical();
+
+    rc = flush_pending();
+    if (rc != 0) {
+        /* The clean end is refused before any unmount; let a living service
+         * keep collecting if the machine stays on. */
+        k_port_enter_critical();
+        g_active = was_active;
+        k_port_exit_critical();
+        return rc;
+    }
+
+    k_port_enter_critical();
+    pending_clear();
+    k_port_exit_critical();
+    return 0;
 }
 
 void k_logfile_service_task(void *arg)
@@ -506,9 +564,18 @@ void k_logfile_service_task(void *arg)
     K_UNUSED(arg);
 
     for (;;) {
+        bool active;
+
         k_sched_sleep_ms(K_LOGFILE_FLUSH_MS);
-        if (k_logfile_pending() > 0) {
-            (void)k_logfile_flush();
+        if (k_logfile_pending() == 0) {
+            continue;
+        }
+
+        k_port_enter_critical();
+        active = g_active;
+        k_port_exit_critical();
+        if (active) {
+            (void)flush_pending();
         }
     }
 }
