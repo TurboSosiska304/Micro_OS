@@ -1421,6 +1421,76 @@ static void test_mount(void)
     ls_teardown();
 }
 
+static void test_rm_guards(void)
+{
+    struct vfs_stat info;
+    char buf[2048];
+    FILE *sink = tmpfile();
+    size_t used;
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/home"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /etc/keep hello"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("write /home/keep hello"), KSHELL_OK);
+
+    port_host_set_sink(sink);
+
+    /* The root is never removed: not with -r, and not with the hint. */
+    KT_CHECK_INT_EQ(kshell_execute("rm /"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /"), KSHELL_ERROR);
+
+    /* A mount point is a boundary, not a directory of the volume. */
+    KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm /dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/dev"), 0);
+
+    KT_CHECK_INT_EQ(devfs_register("/proc"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /proc"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm /proc"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/proc"), 0);
+
+    /* A mount inside the tree is a boundary: the walk stops, it does not
+     * cross into the mounted filesystem. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/safe"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /safe/keep hi"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mkdir("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(devfs_register("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /safe"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/safe/mnt", &info), 0);
+
+    /* A normal recursive removal still works. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/tree"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /tree/file hi"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /tree"), KSHELL_OK);
+    KT_CHECK(vfs_stat("/tree", &info) != 0);
+
+    /* The guard must not have touched the volume. */
+    KT_CHECK_INT_EQ(vfs_stat("/etc/keep", &info), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/home/keep", &info), 0);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "the root of the filesystem is not removed by the shell") != NULL);
+    KT_CHECK(strstr(buf, "rm: /dev: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "rm: /proc: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "rm: /safe/mnt: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "is a directory, use -r") == NULL);
+
+    ls_teardown();
+}
+
 void test_kshell(void)
 { /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
@@ -1436,6 +1506,7 @@ void test_kshell(void)
     test_memtest();
     test_mfetch();
     test_ls();
+    test_rm_guards();
     test_ls_color();
     test_attr();
     test_help_programs();
