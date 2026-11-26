@@ -1437,10 +1437,12 @@ def check(output: str) -> list:
     # --- the shell
     expect("the shell starts", "MicroOS shell ready" in output)
     bootlog = answer("cat /etc/bootlog.log").partition("\n")[2]
-    first_boot_line = next((line for line in output.splitlines() if line.startswith("MicroOS ")), "")
+    bootlog_first = bootlog.splitlines()[0] if bootlog.splitlines() else ""
     expect(
         "the writable root keeps the captured boot",
-        bool(first_boot_line) and bootlog.startswith(first_boot_line),
+        bool(bootlog_first)
+        and bootlog_first in output
+        and output.find(bootlog_first) < output.find("board: "),
         bootlog[:200],
     )
     expect(
@@ -3493,7 +3495,7 @@ USERS_SCRIPT = [
     # The right password after a wrong one: the first answer fails and the
     # second opens the session, which is the three attempts of `login`.
     (PROMPT, "login root"),
-    ("password: ", "wrong"),
+    ("password: ", "never-log-7f31c9"),
     ("login: authentication failure", ""),
     ("password: ", "microos"),
     (PROMPT, "id"),
@@ -3563,6 +3565,9 @@ USERS_SCRIPT = [
     (PROMPT, "write /bin/suidcat x"),
     (PROMPT, "cat /tmp/g/team.txt"),
     (PROMPT, "write /tmp/g/team.txt x"),
+    # The pattern differs from the secret by one wildcard: the echoed command
+    # cannot put the literal password into run.log while asking whether it is there.
+    (PROMPT, "exec /bin/grep never-log-7f31.9 /etc/run.log"),
     (PROMPT, ""),
 ]
 
@@ -3719,6 +3724,12 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "a login of root leaves the shell root",
         "uid=0(root)" in answer("id", 1),
         answer("id", 1),
+    )
+    password_in_log = answer("exec /bin/grep never-log-7f31.9 /etc/run.log")
+    expect(
+        "run.log does not contain the password typed at login",
+        "never-log-7f31c9" not in password_in_log,
+        password_in_log,
     )
 
     # `su - guest` from root: no password, the credentials of the account and

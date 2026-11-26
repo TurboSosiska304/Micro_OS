@@ -143,10 +143,40 @@ static void test_log_colors(void)
     KT_CHECK(strstr(buf, "warm 1") != NULL);
 }
 
+static void test_log_capture(void)
+{
+    FILE *sink = tmpfile();
+    char buf[128];
+    size_t used;
+
+    ktest_begin("log: a mirrored capture keeps the line and still prints it");
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    klog_init(K_LOG_LEVEL_INFO);
+    port_host_set_sink(sink);
+    klog_capture_start_mirroring();
+    kinfo("captured and printed");
+    klog_capture_stop();
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1u, sink);
+    buf[used] = '\0';
+    port_host_set_sink(NULL);
+
+    KT_CHECK_STR_EQ(klog_captured_text(), "captured and printed\n");
+    KT_CHECK_INT_EQ((int)klog_captured_size(), 21);
+    KT_CHECK_STR_EQ(buf, "captured and printed\n");
+}
+
 void test_log(void)
 {
     test_log_levels();
     test_log_ring();
     test_log_wrap();
     test_log_colors();
+    test_log_capture();
 }

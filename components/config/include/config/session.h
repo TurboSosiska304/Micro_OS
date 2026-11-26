@@ -69,7 +69,9 @@ void session_write_fmt(const char *fmt, ...);
  * unless `secret` is true or the terminal asked for no echo, backspace
  * erases a character, Ctrl+C drops the line (and closes a secret one), and
  * the answer ends with a newline. False when the terminal is gone; a line
- * that did not fit is thrown away and `too_long` says so.
+ * that did not fit is thrown away and `too_long` says so. A secret line also
+ * mutes the machine's file log for this task from the prompt to the answer,
+ * so an echo by the port cannot put the password in `run.log`.
  */
 bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret, bool *too_long);
 
