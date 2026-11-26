@@ -118,6 +118,35 @@ VALUE_PRESS = 1
 # the file the test reads through the USB.
 SETTING = ["hello", "hostname=x86_64", "console=vga"]
 
+# The INFO line of a root port that finished its reset. Keep both values: the
+# before state diagnoses a bad PLS/PP sequence, and the after state is the gate.
+PORTSC_LINE = re.compile(
+    r"xhci: port (\d+): a device at speed (\d+) \((\w+)\), "
+    r"PORTSC ([0-9a-f]{8}) -> ([0-9a-f]{8})"
+)
+
+
+def portsc_devices(text: str) -> list:
+    return [
+        (int(match.group(1)), int(match.group(2)), match.group(3),
+         int(match.group(4), 16), int(match.group(5), 16))
+        for match in PORTSC_LINE.finditer(text)
+    ]
+
+
+def portsc_enabled(value: int, usb3: bool = False) -> bool:
+    speed = (value >> 10) & 0xF
+    pls = (value >> 5) & 0xF
+    return ((value & 0x3) == 0x3 and pls == 0 and
+            (speed >= 4 if usb3 else 1 <= speed <= 3))
+
+
+def portsc_detail(devices: list) -> str:
+    return ", ".join(
+        f"port {port}: {before:08x}->{after:08x} speed {speed} ({name})"
+        for port, speed, name, before, after in devices
+    )
+
 
 def sha256_file(path: str, limit: int = 0) -> str:
     digest = hashlib.sha256()
@@ -386,10 +415,12 @@ def run_usb(loader: str, kernel: str, image: str, ext2_image: str, workdir: str,
             "no interrupt of the controller arrived in the five seconds of the boot",
         )
         match = re.search(r"xhci: controller at [0-9a-f]+, version \d+\.\d+, (\d+) port", text)
+        portsc = portsc_devices(text)
+        enabled = [item for item in portsc if portsc_enabled(item[4], item[1] >= 4)]
         expect(
-            "the controller reports its ports",
-            match is not None and int(match.group(1)) >= 1,
-            "no line of the controller in the boot",
+            "the controller reports its ports and enables the devices",
+            match is not None and int(match.group(1)) >= 1 and len(enabled) >= 2,
+            portsc_detail(portsc) or "no PORTSC before -> after lines in the boot",
         )
         expect(
             "the boot names the keyboard of the boot protocol",
@@ -835,24 +866,25 @@ def run_usb3(loader: str, kernel: str, image: str, workdir: str, timeout: float)
             "the controller of the run did not name its port",
         )
 
-        found = re.search(r"xhci: port 1: a device at speed (\d+) \((\w+)\), PORTSC ([0-9a-f]{8})",
-                          text)
+        found = PORTSC_LINE.search(text)
         expect(
             "the port of the third generation is enabled after its reset",
             found is not None and "not enabled after its reset" not in text,
-            "the reset of the port did not end in PED",
+            portsc_detail(portsc_devices(text)) or "the reset of the port did not end in PED",
         )
         expect(
             "the speed of the port is the one of a SuperSpeed device",
-            found is not None and found.group(1) == "4" and found.group(2) == "super",
+            found is not None and found.group(1) == "1" and found.group(2) == "4"
+            and found.group(3) == "super",
             found.group(0) if found is not None else text[-400:],
         )
         if found is not None:
-            portsc = int(found.group(3), 16)
+            before = int(found.group(4), 16)
+            after = int(found.group(5), 16)
             expect(
                 "PORTSC of the port says connected and enabled at speed 4",
-                (portsc & 0x3) == 0x3 and ((portsc >> 10) & 0xF) == 4,
-                f"PORTSC {found.group(3)}",
+                portsc_enabled(after, usb3=True),
+                f"PORTSC {before:08x} -> {after:08x}",
             )
         else:
             expect("PORTSC of the port says connected and enabled at speed 4", False,

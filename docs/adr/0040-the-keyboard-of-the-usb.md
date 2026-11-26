@@ -126,6 +126,20 @@ sub-class 1, protocol 1 (the boot protocol of a keyboard) and its interrupt
 endpoint of the device to the host. A device that is not that one is
 enumerated to the point of its configuration and gives its slot back.
 
+The reset itself follows xHCI 1.2b §4.3.1, §4.19.5 and §5.4.8. The Supported
+Protocol Capability (§7.2) says which one-based root port numbers are USB2 or
+USB3; the Port Speed field cannot answer that before a USB2 reset. A USB2 port
+in PLS=Polling is in its Disabled state and is reset, while a USB3 port in
+Polling is still training and is left alone. Every PORTSC write preserves only
+read-only and sticky control fields: PED and the change bits are RW1CS, so
+copying a read-back PED=1 into a change clear would disable the very port being
+enumerated, and PED and PR may never be written as one (footnote 82). The
+driver asserts PR once, waits for PRC with PR cleared, then waits for CCS, PED,
+U0 and a valid speed. It gives the device 10 ms of USB2 TRSTRCY or 50 ms of
+USB3 reset recovery before the first command, rechecks the port, and clears
+only the change bits it observed. A failed enable gets a delayed second look,
+not five resets in a row.
+
 The keyboard is then configured (`SET_CONFIGURATION`), told to speak the boot
 protocol (`SET_PROTOCOL`, 0), and its endpoint 1 IN is set up with
 `Configure Endpoint`: the type 7 of the context, the largest packet of the
