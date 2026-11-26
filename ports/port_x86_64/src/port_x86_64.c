@@ -1850,8 +1850,6 @@ static void critical_debug_dump(k_u32_t self)
     }
 }
 
-
-
 static void critical_lock_acquire(void)
 {
     k_u32_t spins = 0;
@@ -1903,9 +1901,9 @@ void k_port_enter_critical(void)
         critical_lock_acquire();
     } else if (g_critical_owner != cpu) {
         char buf[80];
-        int n = snprintf(buf, sizeof(buf), "\r\n[BKL] owner mismatch cpu=%u owner=%u depth=%u\r\n",
-                         (unsigned)cpu, (unsigned)g_critical_owner,
-                         (unsigned)g_critical_depth[cpu]);
+        int n =
+            snprintf(buf, sizeof(buf), "\r\n[BKL] owner mismatch cpu=%u owner=%u depth=%u\r\n",
+                     (unsigned)cpu, (unsigned)g_critical_owner, (unsigned)g_critical_depth[cpu]);
         for (int i = 0; i < n; i++) {
             com1_byte(buf[i]);
         }
