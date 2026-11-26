@@ -1912,6 +1912,29 @@ static k_ssize_t sys_getppid(ksys_arg_t a0, ksys_arg_t a1, ksys_arg_t a2, ksys_a
     return (k_ssize_t)self->parent->pid;
 }
 
+static k_ssize_t sys_getpgid(ksys_arg_t pid, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return (k_ssize_t)task_getpgid((k_u32_t)pid);
+}
+
+static k_ssize_t sys_setpgid(ksys_arg_t pid, ksys_arg_t pgid, ksys_arg_t a2, ksys_arg_t a3,
+                             ksys_arg_t a4, ksys_arg_t a5)
+{
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    return (k_ssize_t)task_setpgid((k_u32_t)pid, (k_u32_t)pgid);
+}
+
 /* --- the credentials of the caller --- */
 
 /*
@@ -3163,6 +3186,8 @@ void ksys_init(void)
     ksys_register(KSYS_CHDIR, "chdir", sys_chdir);
     ksys_register(KSYS_CLOCK_GETTIME, "clock_gettime", sys_clock_gettime);
     ksys_register(KSYS_GETRUSAGE, "getrusage", sys_getrusage);
+    ksys_register(KSYS_GETPGID, "getpgid", sys_getpgid);
+    ksys_register(KSYS_SETPGID, "setpgid", sys_setpgid);
 }
 
 /* --- the wrappers --- */
@@ -3313,6 +3338,16 @@ int ksys_fork(void)
 int ksys_getppid(void)
 {
     return (int)ksys_call(KSYS_GETPPID, 0, 0, 0, 0, 0, 0);
+}
+
+k_i32_t ksys_getpgid(k_u32_t pid)
+{
+    return (k_i32_t)ksys_call(KSYS_GETPGID, (ksys_arg_t)pid, 0, 0, 0, 0, 0);
+}
+
+int ksys_setpgid(k_u32_t pid, k_u32_t pgid)
+{
+    return (int)ksys_call(KSYS_SETPGID, (ksys_arg_t)pid, (ksys_arg_t)pgid, 0, 0, 0, 0);
 }
 
 int ksys_waitpid(int pid, int *status, int flags)

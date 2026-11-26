@@ -316,6 +316,7 @@ static void test_abi_is_stable(void)
         {KSYS_MSYNC, "msync"},         {KSYS_BRK, "brk"},
         {KSYS_CHDIR, "chdir"},         {KSYS_CLOCK_GETTIME, "clock_gettime"},
         {KSYS_GETRUSAGE, "getrusage"}, {KSYS_CHGRP, "chgrp"},
+        {KSYS_GETPGID, "getpgid"},     {KSYS_SETPGID, "setpgid"},
     };
     size_t i;
 

@@ -92,6 +92,10 @@ int dup2(int oldfd, int newfd);
 pid_t fork(void) __attribute__((returns_twice));
 pid_t getpid(void);
 pid_t getppid(void);
+pid_t getpgid(pid_t pid);
+int setpgid(pid_t pid, pid_t pgid);
+pid_t tcgetpgrp(int fd);
+int tcsetpgrp(int fd, pid_t pgrp);
 /*
  * The credentials of the program: the uid and the gid of the task, and the
  * two calls that change them. Root may take any number; a program of another

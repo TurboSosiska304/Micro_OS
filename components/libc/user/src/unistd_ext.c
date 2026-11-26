@@ -10,6 +10,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -282,6 +283,32 @@ pid_t fork(void)
 pid_t getppid(void)
 {
     return (pid_t)__ulibc_syscall6(KSYS_GETPPID, 0, 0, 0, 0, 0, 0);
+}
+
+pid_t getpgid(pid_t pid)
+{
+    return (pid_t)posix((int)__ulibc_syscall6(KSYS_GETPGID, pid, 0, 0, 0, 0, 0));
+}
+
+int setpgid(pid_t pid, pid_t pgid)
+{
+    return posix((int)__ulibc_syscall6(KSYS_SETPGID, pid, pgid, 0, 0, 0, 0));
+}
+
+pid_t tcgetpgrp(int fd)
+{
+    pid_t pgrp = 0;
+
+    if (ioctl(fd, TIOCGPGRP, &pgrp) < 0) {
+        return (pid_t)-1;
+    }
+
+    return pgrp;
+}
+
+int tcsetpgrp(int fd, pid_t pgrp)
+{
+    return ioctl(fd, TIOCSPGRP, &pgrp);
 }
 
 pid_t waitpid(pid_t pid, int *status, int options)
