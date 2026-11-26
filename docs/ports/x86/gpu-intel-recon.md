@@ -113,7 +113,7 @@ to BAR0. None of them is written.
 |---:|---|---|---|
 | `0x42000` | `SKL_FUSE_STATUS` | PG0/PG1/PG2 distribution status; corroborates display power state | no GT forcewake |
 | `0x44440` | `GEN8_DE_PORT_ISR` | read-only display-engine port interrupt state; a liveness sample, not a version register | display power domain must be awake |
-| `0x44460` | `GEN8_DE_MISC_IIR` | read-only miscellaneous display interrupt state; another liveness sample | display power domain must be awake |
+| `0x44460` | `GEN8_DE_MISC_ISR` | read-only miscellaneous display interrupt state; another liveness sample | display power domain must be awake |
 | `0x45400` | `HSW_PWR_WELL_CTL1` | BIOS request/state view for KBL power wells | always-on control bank |
 | `0x45404` | `HSW_PWR_WELL_CTL2` | driver request/state view; PW1 state is bit 28, PW2 state bit 30 | always-on control bank |
 | `0x6f400` | `TRANS_DDI_FUNC_CTL_EDP` | bit 31 says whether the eDP transcoder is enabled; bits 12:14 name its input pipe | read only; i915 treats this EDP register as always-on |

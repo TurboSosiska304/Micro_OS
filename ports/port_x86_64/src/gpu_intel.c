@@ -57,7 +57,7 @@ const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
 /* Read-only state and identity registers justified in the reconnaissance. */
 #define GPU_INTEL_SKL_FUSE_STATUS 0x42000u
 #define GPU_INTEL_GEN8_DE_PORT_ISR 0x44440u
-#define GPU_INTEL_GEN8_DE_MISC_IIR 0x44460u
+#define GPU_INTEL_GEN8_DE_MISC_ISR 0x44460u
 #define GPU_INTEL_HSW_PWR_WELL_CTL1 0x45400u
 #define GPU_INTEL_HSW_PWR_WELL_CTL2 0x45404u
 #define GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP 0x6F400u
@@ -268,8 +268,8 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     }
 
     info->de_port_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_PORT_ISR);
-    info->de_misc_iir = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_MISC_IIR);
-    if (info->de_port_isr == 0xFFFFFFFFu || info->de_misc_iir == 0xFFFFFFFFu) {
+    info->de_misc_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_MISC_ISR);
+    if (info->de_port_isr == 0xFFFFFFFFu || info->de_misc_isr == 0xFFFFFFFFu) {
         kerror("gpu: Intel display MMIO did not answer (KMOD_FAIL)");
         return KMOD_FAIL;
     }

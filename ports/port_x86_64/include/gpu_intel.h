@@ -53,7 +53,7 @@ struct gpu_intel_info {
     k_u32_t power_well_bios;
     k_u32_t power_well_driver;
     k_u32_t de_port_isr;
-    k_u32_t de_misc_iir;
+    k_u32_t de_misc_isr;
     k_u32_t edp_ctl;
     k_u16_t panel_width;
     k_u16_t panel_height;
