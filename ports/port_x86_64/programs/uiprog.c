@@ -168,7 +168,8 @@ static int backbuffer_fill(struct uiprog *program, int x, int y, int w, int h, k
     return 0;
 }
 
-static int backbuffer_blit(struct uiprog *program, int x, int y, int w, int h, const k_u16_t *pixels)
+static int backbuffer_blit(struct uiprog *program, int x, int y, int w, int h,
+                           const k_u16_t *pixels)
 {
     int pitch = (int)program->info.width;
     int row;
@@ -900,7 +901,8 @@ int uiprog_enable_backbuffer(struct uiprog *program)
     bytes = (size_t)program->info.width * (size_t)program->info.height * FB_PIXEL_BYTES;
     size = (bytes + KSYS_PAGE_SIZE - 1u) / KSYS_PAGE_SIZE * KSYS_PAGE_SIZE;
 
-    mapping = mmap(NULL, size, KSYS_PROT_READ | KSYS_PROT_WRITE, KSYS_MAP_PRIVATE | MAP_ANON, -1, 0);
+    mapping =
+        mmap(NULL, size, KSYS_PROT_READ | KSYS_PROT_WRITE, KSYS_MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mapping == MAP_FAILED) {
         return -1;
     }
@@ -945,8 +947,8 @@ static int present_rect(const struct uiprog *program, int x, int y, int w, int h
         memcpy(program->transfer, &header, sizeof(header));
 
         for (line = 0; line < take; line++) {
-            const k_u16_t *src = program->backbuffer +
-                                 (k_size_t)(y + row + line) * (k_size_t)pitch + (k_size_t)x;
+            const k_u16_t *src =
+                program->backbuffer + (k_size_t)(y + row + line) * (k_size_t)pitch + (k_size_t)x;
             unsigned char *dst = program->transfer + sizeof(header) + (size_t)line * row_bytes;
 
             memcpy(dst, src, row_bytes);

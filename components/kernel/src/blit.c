@@ -85,8 +85,8 @@ static int software_fill(k_blit_surface *surface, const k_blit_rect *rect, k_u16
     }
 
     for (row = 0; row < part.h; row++) {
-        k_u16_t *line = surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch +
-                        (k_size_t)part.x;
+        k_u16_t *line =
+            surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
 
         fill_row(line, part.w, pixel);
     }

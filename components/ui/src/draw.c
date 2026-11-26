@@ -232,7 +232,7 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
                     for (gcol = 0; gcol < cell_w; gcol++) {
                         slot->pixels[grow * ATLAS_MAX_W + gcol] =
                             (glyph[grow / scale] & (k_u8_t)(0x80u >> (gcol / scale))) != 0u ? ink
-                                                                                              : paper;
+                                                                                            : paper;
                     }
                 }
             }
