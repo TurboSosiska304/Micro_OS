@@ -8,6 +8,7 @@
 #include "kernel/kmm.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
 
@@ -567,6 +568,13 @@ void k_logfile_service_task(void *arg)
         bool active;
 
         k_sched_sleep_ms(K_LOGFILE_FLUSH_MS);
+
+        /* A plain kernel sleep is not a syscall wait and therefore does not
+         * answer SIGTERM by itself. The writer must consume the shutdown mark
+         * before the power task waits for it, or every clean end wastes the
+         * whole task timeout on a task that was only sleeping. */
+        task_signal_check(task_self(), 0, false);
+
         if (k_logfile_pending() == 0) {
             continue;
         }
