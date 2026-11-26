@@ -250,15 +250,17 @@ Open items from `docs/roadmap.md`:
 ## Subagents
 
 **Every** subagent runs on a **free model of the tariff** - a model whose price
-is zero, which is `opencode/*-free` or `opencode-go/*-free` - the named agents
-of `.opencode/agents/` included (their `model:` field says it). The names change
-often; the fresh list is the console of the organisation,
+is zero - and the free models are two families with one difference that decides
+the order: `opencode-go/*-free` has **no usage limit**, `opencode/*-free` has
+one. So the first choice is `opencode-go/*-free`; an `opencode/*-free` model is
+the fallback for the day the go list answers "this model is not available in
+your country" or refuses the request, not the default. The named agents of
+`.opencode/agents/` carry their model in the frontmatter and follow the same
+order. The names change often; the fresh list is the console of the
+organisation,
 `https://opencode.ai/console/org_01M5DMN4878N24E7VNZT19HA36/models?filter=free`
 (every entry marked `Free` with a zero price), and `tools.opencode.models(type:
-"chat")` filtered by a zero price is the same list as the harness sees it. A
-free model of one provider may be refused in a country where the other is not
-("this model is not available in your country" is not a bug of the lane, it is
-a reason to take the next free name). The
+"chat")` filtered by a zero price is the same list as the harness sees it. The
 only exception is an instruction from the owner for that run: "use this model"
 or "the same model as yours". The brief names the files, the constraints and
 the command that decides "done"; the answer is a report, not a transcript.
