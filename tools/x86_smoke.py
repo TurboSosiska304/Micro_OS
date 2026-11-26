@@ -583,10 +583,10 @@ EXPECTED = [
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build-x86")
 
-# The number of processors of the machine of the smoke test (ADR 0012). It is
-# a constant of the test and not a setting: the point of the line is that the
-# firmware describes two and the kernel knows how many it has started.
-MACHINE_SMP = "2"
+# The number of processors of the machine of the smoke test (ADR 0012). The
+# image we ship uses every core the firmware reports, so the gate boots the
+# same machine: eight processors, and the kernel has to start all of them.
+MACHINE_SMP = "8"
 DEFAULT_IMAGE = os.path.join(BUILD, "programs.img")
 
 # The names an image of the release promises: the one list of the tree
@@ -1059,11 +1059,10 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: 
     commands have to arrive after the shell is ready, and the answer of a
     command is the proof the next command may go out.
 
-    The machine has two processors (ADR 0012): the firmware then describes
-    both in the MADT of ACPI, and the boot line of the kernel says how many it
-    found and how many it runs. The second one is 1 until the AP bring-up is
-    written, and the smoke test reads both numbers - a detection that stopped
-    working and an AP that was started without the test knowing it are both
+    The machine has eight processors (ADR 0012): the firmware then describes
+    them all in the MADT of ACPI, and the boot line of the kernel says how
+    many it found and how many it runs. The smoke test reads both numbers - a
+    detection that stopped working and an AP that was not started are both
     visible here.
     """
     command = machine_argv(loader, kernel, image, disk)
@@ -1385,13 +1384,18 @@ def check(output: str) -> list:
 
     # --- the processors of the machine (ADR 0012)
     expect(
-        "the firmware lists both processors of the machine",
-        re.search(r"x86-64: 2 cpu\(s\) reported by the firmware", output) is not None,
-        "the MADT of ACPI was not read, or QEMU was not given -smp 2",
+        "the firmware lists the processors of the machine",
+        re.search(rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware", output) is not None,
+        f"the MADT of ACPI was not read, or QEMU was not given -smp {MACHINE_SMP}",
     )
     expect(
-        "the kernel runs on the cores it has started",
-        re.search(r"reported by the firmware, [12] in use", output) is not None,
+        "the kernel starts every core the firmware reports",
+        re.search(
+            rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware, {MACHINE_SMP} in use",
+            output,
+        )
+        is not None,
+        "the port reported the cores but did not start all of them",
     )
     expect(
         "a kernel without KERNEL_SMP says the core 0 runs alone",

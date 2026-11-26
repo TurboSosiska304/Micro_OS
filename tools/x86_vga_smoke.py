@@ -839,7 +839,7 @@ class Machine:
     """
 
     def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
-                 image: str | None = None, cpu: str | None = None) -> None:
+                 image: str | None = None, cpu: str | None = None, smp: str = "8") -> None:
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
@@ -858,6 +858,8 @@ class Machine:
             kernel,
             "-m",
             "256",
+            "-smp",
+            smp,
             "-no-reboot",
             # The card of the machine is the subject of the test and not its
             # instrument: by default no display of QEMU is opened, the video

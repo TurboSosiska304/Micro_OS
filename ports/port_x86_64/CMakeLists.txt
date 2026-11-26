@@ -59,7 +59,7 @@ option(MICRO_OS_FS_RAMFS "ramfs, the writable /tmp of a read-only root" ON)
 # here so that the defaults of the port are in one place.
 option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
 option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
-option(KERNEL_SMP "the second core: a run queue per core (ADR 0012)" OFF)
+option(KERNEL_SMP "the cores of the machine: a run queue per core (ADR 0012)" ON)
 option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
 option(MICRO_OS_WIFI "the WiFi station" OFF)
 

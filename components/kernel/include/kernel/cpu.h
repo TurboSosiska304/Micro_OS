@@ -21,13 +21,13 @@ struct task;
 
 /*
  * The number of the slots. A build without SMP has one, and the static
- * memory of a build with it is the per-CPU run queue of the scheduler; four
- * cores cover the machines of the project (the two of the board, the two of
- * the smoke test) with room for a machine of a person.
+ * memory of a build with it is the per-CPU run queue of the scheduler; eight
+ * cores cover the machines of the project (the two of the board, the eight of
+ * the smoke test and of the laptop the image is shipped on) with room to spare.
  */
 #if KERNEL_SMP
 #ifndef KERNEL_CPUS_MAX
-#define KERNEL_CPUS_MAX 4
+#define KERNEL_CPUS_MAX 8
 #endif
 #else
 #define KERNEL_CPUS_MAX 1
