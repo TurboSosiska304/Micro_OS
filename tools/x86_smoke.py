@@ -1436,21 +1436,6 @@ def check(output: str) -> list:
 
     # --- the shell
     expect("the shell starts", "MicroOS shell ready" in output)
-    bootlog = answer("cat /etc/bootlog.log").partition("\n")[2]
-    bootlog_first = bootlog.splitlines()[0] if bootlog.splitlines() else ""
-    expect(
-        "the writable root keeps the captured boot",
-        bool(bootlog_first)
-        and bootlog_first in output
-        and output.find(bootlog_first) < output.find("board: "),
-        bootlog[:200],
-    )
-    expect(
-        "the console session has a non-empty run.log",
-        re.search(r"[1-9][0-9]* /etc/run\.log", answer("exec /bin/wc -c /etc/run.log"))
-        is not None,
-        answer("exec /bin/wc -c /etc/run.log"),
-    )
     expect(
         "the shell runs in a task",
         "no tasks yet" not in output,
@@ -1478,6 +1463,22 @@ def check(output: str) -> list:
         "every command is answered",
         len(blocks) > len(COMMANDS),
         f"{len(blocks)} block(s) for {len(COMMANDS)} command(s)",
+    )
+
+    bootlog = answer("cat /etc/bootlog.log").partition("\n")[2]
+    bootlog_first = bootlog.splitlines()[0] if bootlog.splitlines() else ""
+    expect(
+        "the writable root keeps the captured boot",
+        bool(bootlog_first)
+        and bootlog_first in output
+        and output.find(bootlog_first) < output.find("board: "),
+        bootlog[:200],
+    )
+    expect(
+        "the console session has a non-empty run.log",
+        re.search(r"[1-9][0-9]* /etc/run\.log", answer("exec /bin/wc -c /etc/run.log"))
+        is not None,
+        answer("exec /bin/wc -c /etc/run.log"),
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
