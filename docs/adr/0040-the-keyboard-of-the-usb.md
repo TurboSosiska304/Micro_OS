@@ -138,7 +138,12 @@ driver asserts PR once, waits for PRC with PR cleared, then waits for CCS, PED,
 U0 and a valid speed. It gives the device 10 ms of USB2 TRSTRCY or 50 ms of
 USB3 reset recovery before the first command, rechecks the port, and clears
 only the change bits it observed. A failed enable gets a delayed second look,
-not five resets in a row.
+not five resets in a row. Every controller, command, transfer and root-port
+wait has both a time and a spin boundary and names the timed-out operation in
+the log; the event-ring pump serves at most one ringful per call. The smoke has
+its own 300-second overall deadline in addition to each wait's timeout, so a
+missing keyboard cannot turn one regression into a twenty-minute sequence of
+waits.
 
 The keyboard is then configured (`SET_CONFIGURATION`), told to speak the boot
 protocol (`SET_PROTOCOL`, 0), and its endpoint 1 IN is set up with

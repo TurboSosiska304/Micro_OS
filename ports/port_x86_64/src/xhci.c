@@ -145,6 +145,8 @@ extern void isr_irq_xhci(void);
 #define XHCI_RESET_TIMEOUT_US 500000u
 #define XHCI_RESET_ENABLE_US 100000u
 #define XHCI_USB3_TRAINING_US 500000u
+#define XHCI_POLL_SPINS 10000000u
+#define XHCI_DELAY_SPINS_PER_MS 1000000u
 
 /* --- the TRBs -------------------------------------------------------------- */
 
@@ -528,15 +530,21 @@ static k_u64_t now_us(void)
     return k_port_uptime_us();
 }
 
-/* Spend a few milliseconds without a ring to wait on. The clock of the
- * machine is the tick of the PIT, so a wait is a deadline and the loop reads
- * the register of the controller between two of them - which is also the
- * moment the device behind the port needs to be ready. */
+/* Spend a few milliseconds without a ring to wait on. The PIT normally moves
+ * the deadline; the spin limit is a second boundary for a machine whose tick
+ * is not moving, and that failure is reported instead of hanging the boot. */
 static void delay_ms(k_u32_t milliseconds)
 {
     k_u64_t deadline = k_port_uptime_ms() + milliseconds;
+    k_u64_t spins = 0;
+    k_u64_t limit = (k_u64_t)milliseconds * XHCI_DELAY_SPINS_PER_MS;
 
     while (k_port_uptime_ms() < deadline) {
+        if (spins++ >= limit) {
+            kwarn("usb: a %u ms delay did not finish its clock deadline", (unsigned)milliseconds);
+            return;
+        }
+
         __asm__ volatile("pause");
     }
 }
@@ -698,6 +706,7 @@ static bool command_wait(const struct xhci_trb *trb, k_u8_t *code, k_u32_t *slot
 {
     k_u64_t address = trb_phys(trb);
     k_u64_t deadline = k_port_uptime_ms() + 500u;
+    k_u32_t spins = 0;
 
     for (;;) {
         struct xhci_trb event;
@@ -711,7 +720,9 @@ static bool command_wait(const struct xhci_trb *trb, k_u8_t *code, k_u32_t *slot
             return true;
         }
 
-        if (k_port_uptime_ms() > deadline) {
+        if (k_port_uptime_ms() > deadline || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("xhci: command %u did not complete within its 500 ms budget",
+                  (unsigned)XHCI_TRB_GET_TYPE(trb->control));
             *code = 0xFFu;
             return false;
         }
@@ -1011,6 +1022,7 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
 {
     k_u64_t deadline = k_port_uptime_ms() + timeout_ms;
     struct xhci_transfer_wanted wanted;
+    k_u32_t spins = 0;
 
     wanted.slot = slot;
     wanted.dci = dci;
@@ -1027,7 +1039,9 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
             return true;
         }
 
-        if (k_port_uptime_ms() > deadline) {
+        if (k_port_uptime_ms() > deadline || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("xhci: slot %u endpoint %u transfer did not complete within %u ms",
+                  (unsigned)slot, (unsigned)dci, (unsigned)timeout_ms);
             *code = 0xFFu;
             return false;
         }
@@ -1939,8 +1953,14 @@ static bool hub_port_reset(struct xhci_hub *hub, k_u32_t port)
             return false;
         }
 
-        if ((change & HUB_CHANGE_RESET) != 0u || k_port_uptime_ms() > deadline) {
+        if ((change & HUB_CHANGE_RESET) != 0u) {
             break;
+        }
+
+        if (k_port_uptime_ms() > deadline || guard + 1u >= 100000u) {
+            kwarn("usb: the port %u of the hub %u did not finish its reset within 500 ms",
+                  (unsigned)port, (unsigned)hub->slot);
+            return false;
         }
     }
 
@@ -2613,6 +2633,7 @@ static const char *speed_name(k_u32_t speed)
 static bool port_power(k_u32_t address, k_u32_t state)
 {
     k_u64_t started;
+    k_u32_t spins = 0;
 
     if (!g_ppc || (state & XHCI_PORT_PP) != 0u) {
         return true;
@@ -2626,9 +2647,10 @@ static bool port_power(k_u32_t address, k_u32_t state)
     started = now_us();
 
     while ((op_read(address) & XHCI_PORT_PP) == 0u) {
-        if (now_us() - started > (k_u64_t)XHCI_PORT_POWER_MS * 1000u) {
-            kwarn("usb: the port at %x did not take its power (PORTSC %08x)", (unsigned)address,
-                  (unsigned)op_read(address));
+        if (now_us() - started > (k_u64_t)XHCI_PORT_POWER_MS * 1000u ||
+            spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port at %x did not take its power within 20 ms (PORTSC %08x)",
+                  (unsigned)address, (unsigned)op_read(address));
             return false;
         }
     }
@@ -2655,12 +2677,14 @@ static bool port_power(k_u32_t address, k_u32_t state)
  * PR writes cannot restart a reset that is already asserted (footnote 83) and
  * can train a USB3 link over and over instead of letting it finish.
  */
-static bool port_reset_once(k_u32_t address, bool usb3, k_u32_t *final, k_u32_t *speed)
+static bool port_reset_once(k_u32_t port, k_u32_t address, bool usb3, k_u32_t *final,
+                            k_u32_t *speed)
 {
     k_u32_t state = op_read(address);
     k_u64_t started;
     k_u32_t changes;
     k_u32_t settle;
+    k_u32_t spins = 0;
 
     *final = state;
     *speed = 0u;
@@ -2705,7 +2729,9 @@ static bool port_reset_once(k_u32_t address, bool usb3, k_u32_t *final, k_u32_t 
             break;
         }
 
-        if (now_us() - started > XHCI_RESET_TIMEOUT_US) {
+        if (now_us() - started > XHCI_RESET_TIMEOUT_US || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port %u did not report PRC within 500 ms (PORTSC %08x)", (unsigned)port,
+                  (unsigned)state);
             *final = state;
             return false;
         }
@@ -2715,11 +2741,13 @@ static bool port_reset_once(k_u32_t address, bool usb3, k_u32_t *final, k_u32_t 
      * the enable loop instead of freezing the first value after PRC. */
     settle = xhci_portsc_settle_ms(state, usb3);
     started = now_us();
+    spins = 0;
 
     while (!xhci_portsc_enabled(state, usb3)) {
-        if (now_us() - started > XHCI_RESET_ENABLE_US) {
-            /* A second look after TRSTRCY is cheaper and safer than asserting
-             * PR again on a port whose device is still settling. */
+        if (now_us() - started > XHCI_RESET_ENABLE_US || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port %u did not reach PED/U0 within 100 ms (PORTSC %08x); "
+                  "checking again after %u ms",
+                  (unsigned)port, (unsigned)state, (unsigned)settle);
             delay_ms(settle);
             state = op_read(address);
             break;
@@ -2762,6 +2790,7 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
     k_u32_t state;
     k_u32_t final;
     k_u64_t started;
+    k_u32_t spins = 0;
     bool usb3;
 
     *speed = 0u;
@@ -2805,7 +2834,8 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
         started = now_us();
 
         while ((state & XHCI_PORT_CCS) != 0u && !xhci_portsc_enabled(state, true) &&
-               now_us() - started <= XHCI_USB3_TRAINING_US) {
+               now_us() - started <= XHCI_USB3_TRAINING_US && spins < XHCI_POLL_SPINS) {
+            spins++;
             __asm__ volatile("pause");
             state = op_read(address);
         }
@@ -2817,18 +2847,26 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
         }
 
         if (!xhci_portsc_enabled(state, true)) {
-            kwarn("usb: the port %u is still in Polling after 500 ms; no reset asserted "
-                  "(PORTSC %08x)",
+            kwarn("usb: the port %u did not leave Polling within its 500 ms budget; no reset "
+                  "asserted (PORTSC %08x)",
                   (unsigned)port, (unsigned)state);
             return false;
         }
     } else if (!usb3 && xhci_portsc_pls(state) == XHCI_PLS_RXDETECT) {
         started = now_us();
+        spins = 0;
 
         while ((state & XHCI_PORT_CCS) != 0u && xhci_portsc_pls(state) == XHCI_PLS_RXDETECT &&
-               now_us() - started <= XHCI_RESET_ENABLE_US) {
+               now_us() - started <= XHCI_RESET_ENABLE_US && spins < XHCI_POLL_SPINS) {
+            spins++;
             __asm__ volatile("pause");
             state = op_read(address);
+        }
+
+        if (xhci_portsc_pls(state) == XHCI_PLS_RXDETECT) {
+            kinfo("usb: the port %u did not leave RxDetect within its 100 ms budget; no reset "
+                  "asserted (PORTSC %08x)",
+                  (unsigned)port, (unsigned)state);
         }
     }
 
@@ -2839,7 +2877,7 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
         return false;
     }
 
-    if (!port_reset_once(address, usb3, &final, speed)) {
+    if (!port_reset_once(port, address, usb3, &final, speed)) {
         if ((final & XHCI_PORT_CCS) == 0u) {
             kinfo("usb: the port %u lost its device during its reset (PORTSC %08x)", (unsigned)port,
                   (unsigned) final);
@@ -3531,6 +3569,8 @@ static void report_event(k_u32_t slot, k_u32_t dci, k_u64_t param, k_u32_t statu
 static void usb_service(void)
 {
     struct xhci_trb *event;
+    k_u32_t events = 0;
+    bool ring_busy;
 
     if (!g_running) {
         return;
@@ -3538,7 +3578,8 @@ static void usb_service(void)
 
     k_port_enter_critical();
 
-    while ((event = event_peek()) != NULL) {
+    while ((event = event_peek()) != NULL && events < XHCI_EVENT_TRBS) {
+        events++;
         k_u32_t type = XHCI_TRB_GET_TYPE(event->control);
         k_u32_t slot = XHCI_TRB_SLOT(event->control);
         k_u32_t dci = XHCI_TRB_ENDPOINT(event->control);
@@ -3591,7 +3632,13 @@ static void usb_service(void)
         event_pop();
     }
 
+    ring_busy = events == XHCI_EVENT_TRBS && event_peek() != NULL;
     k_port_exit_critical();
+
+    if (ring_busy) {
+        kwarn("xhci: the event ring still has events after a %u-event service bound",
+              (unsigned)XHCI_EVENT_TRBS);
+    }
 }
 
 /* --- the hot-plug of the ports --------------------------------------------- */

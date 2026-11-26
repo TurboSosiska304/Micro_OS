@@ -22,6 +22,9 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   before the first command. The host test replays `0x000286e1` and `0x000806e1`;
   `usb-smoke` checks both PORTSC values and the enabled state without changing
   its 66 checks. The owner's laptop log is still the closing evidence.
+- Every xHCI poll has a time and spin boundary with a timeout line, the event
+  ring has a one-ringful service bound, and `usb-smoke` has a 300-second overall
+  deadline so a failed keyboard cannot leave QEMU waiting through later modes.
 
 ## [2.0.2] - 2026-11-26
 
