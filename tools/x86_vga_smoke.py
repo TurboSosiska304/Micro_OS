@@ -4079,6 +4079,13 @@ def run_boot_desktop(
             while machine.process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.2)
 
+            if machine.process.poll() is None:
+                machine.process.terminate()
+                try:
+                    machine.process.wait(timeout=10)
+                except Exception:
+                    pass
+
             expect("the desk of the machine ends with the power",
                    machine.process.poll() is not None,
                    "QEMU was still running after the shutdown of the desk")
