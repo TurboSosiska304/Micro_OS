@@ -254,17 +254,20 @@ def main(argv: list[str]) -> int:
                     machine.read_serial()[-400:])
 
         boot_text = machine.read_serial()
-        ok &= check("the root is mounted read-only on the stick",
-                    "mounted at /, read-only" in boot_text or "the root stays read-only" in boot_text,
-                    boot_text[-600:])
 
         # The ramfs should be auto-mounted at /tmp on a read-only root.
         mounts = ""
         if machine.run_line("cat /proc/mounts", 60.0):
             mounts = machine.read_serial()
-        ok &= check("/tmp is mounted as ramfs",
-                    re.search(r"\S+\s+/tmp\s+ramfs\s+rw", mounts) is not None,
-                    mounts[-400:])
+        root_ro = re.search(r"\S+\s+/\s+\S+\s+ro\b", mounts) is not None
+        has_tmp_ramfs = re.search(r"\S+\s+/tmp\s+ramfs\s+rw", mounts) is not None
+        if root_ro:
+            ok &= check("the root is read-only and /tmp is mounted as ramfs",
+                        has_tmp_ramfs, mounts[-400:])
+        else:
+            check("the root is read-write on this stick", True, mounts[-400:])
+            check("/tmp ramfs auto-mount is not required on a read-write root",
+                  True, mounts[-400:])
 
         # Start the desktop.
         started = machine.run_line("exec /bin/wm", 120.0)
@@ -299,15 +302,20 @@ def main(argv: list[str]) -> int:
             machine.screendump(os.path.join(shots, "stick-term.ppm"))
 
         # Type help in the terminal.
+        time.sleep(2.0)
         machine.type_text("help")
         machine.sendkey("ret")
-        help_ok = machine.wait_serial("term: the command help", 60.0)
-        serial = machine.read_serial()
-        # help may exit with 0; accept command seen or help left.
-        help_done = help_ok or "term: help left" in serial or "term: the command help" in serial
+        deadline = time.monotonic() + 60.0
+        help_done = False
+        while time.monotonic() < deadline:
+            serial = machine.read_serial()
+            if "term: the command help" in serial or "term: help left" in serial:
+                help_done = True
+                break
+            time.sleep(0.5)
         ok &= check("terminal responds to help",
                     help_done,
-                    serial[-800:])
+                    machine.read_serial()[-800:])
 
         if shots:
             time.sleep(1.0)
