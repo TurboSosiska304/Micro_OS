@@ -29,13 +29,16 @@ enum gpu_probe_result {
     GPU_PROBE_NONE = 0,        /* not this vendor's responsibility */
     GPU_PROBE_OK = 1,          /* card identified */
     GPU_PROBE_UNKNOWN_DEV = 2, /* vendor recognized, device unknown */
+    GPU_PROBE_DEGRADED = 3,    /* known device, read-only handshake incomplete */
+    GPU_PROBE_FAIL = 4,        /* known device, hard probe failure */
 };
 
 /* The result of one vendor probe: enough for the boot log and the `gpu`
  * command. All fields are read-only observations; no display state is changed.
  *
- * This struct is the stable handshake surface for vendor probes. Do not change
- * it silently; Intel/x86 GPU work will build against it.
+ * This struct is the shared handshake surface for vendor probes. The common
+ * prefix is mandatory; the Intel display tail at the end is optional and is
+ * only formatted when display_gen is not zero.
  */
 struct gpu_info {
     bool present; /* a display controller was seen on PCI */
@@ -50,6 +53,16 @@ struct gpu_info {
     k_u32_t mmio_size;  /* size of register MMIO BAR, 0 if unknown */
     k_u64_t vram_bytes; /* VRAM/aperture size in bytes, 0 when unknown */
     char name[64];      /* human name / description, NUL-terminated */
+
+    /* Optional Intel display detail: formatted when display_gen != 0. */
+    k_u8_t display_gen;
+    k_u8_t display_rel;
+    char display_step[8]; /* "C0", "unknown", ... */
+    k_u16_t panel_width;
+    k_u16_t panel_height;
+
+    /* The vendor probe outcome, for the dispatcher to map to kmod state. */
+    enum gpu_probe_result probe_result;
 };
 
 struct gpu_probe {

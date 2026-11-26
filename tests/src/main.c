@@ -24,6 +24,7 @@ static void run_tests(void *arg)
     K_UNUSED(arg);
 
     test_version();
+    test_gpu_intel();
     test_board();
     test_log();
     test_ansi();

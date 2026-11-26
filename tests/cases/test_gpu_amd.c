@@ -80,9 +80,8 @@ static void test_vendor_table(void)
     KT_CHECK_INT_EQ(PORT_X86_64_GPU_PROBES[0].vendor, 0x1002u);
     KT_CHECK_INT_EQ(PORT_X86_64_GPU_PROBES[1].vendor, 0x8086u);
     KT_CHECK(PORT_X86_64_GPU_PROBES[0].probe == port_x86_64_gpu_amd_probe);
-    /* Intel probe is weak; in this build it is not linked, so the symbol is 0.
-     * The dispatcher treats NULL as "vendor known, device unknown". */
-    KT_CHECK(gpu_intel_probe == NULL);
+    /* Intel probe is a weak symbol: linked in the merged build, absent when
+     * gpu_intel.c is not compiled in. The dispatcher must still have the slot. */
     KT_CHECK(PORT_X86_64_GPU_PROBES[1].probe == gpu_intel_probe);
 }
 

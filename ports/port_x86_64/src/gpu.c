@@ -42,22 +42,60 @@ static void format_size(char *buf, k_size_t size, k_u64_t bytes)
 
 static void format_mmio(char *buf, k_size_t size, k_u64_t base, k_u32_t bytes)
 {
+    char base_buf[32];
+    const char *suffix = "B";
+    unsigned value = bytes;
+
     if (base == 0u || bytes == 0u) {
         snprintf(buf, size, "unknown");
         return;
     }
 
-    if (bytes % 1024u == 0u) {
-        snprintf(buf, size, "0x%x+%uK", (unsigned)(k_u32_t)base, (unsigned)(bytes / 1024u));
-    } else {
-        snprintf(buf, size, "0x%x+%u", (unsigned)(k_u32_t)base, (unsigned)bytes);
+    if ((bytes % (1024u * 1024u)) == 0u) {
+        suffix = "M";
+        value = bytes / (1024u * 1024u);
+    } else if ((bytes % 1024u) == 0u) {
+        suffix = "K";
+        value = bytes / 1024u;
     }
+
+    if ((base >> 32) != 0u) {
+        snprintf(base_buf, sizeof(base_buf), "0x%x%08x", (unsigned)(base >> 32),
+                 (unsigned)(k_u32_t)base);
+    } else {
+        snprintf(base_buf, sizeof(base_buf), "0x%x", (unsigned)(k_u32_t)base);
+    }
+
+    snprintf(buf, size, "%s+%u%s", base_buf, value, suffix);
+}
+
+static void format_tail(char *buf, k_size_t size, const struct gpu_info *info)
+{
+    char vram[32];
+
+    if (info->display_gen != 0u) {
+        const char *step = info->display_step[0] != '\0' ? info->display_step : "unknown";
+
+        if (info->panel_width != 0u && info->panel_height != 0u) {
+            snprintf(buf, size, "display %u.%02u stepping %s, panel %ux%u",
+                     (unsigned)info->display_gen, (unsigned)info->display_rel, step,
+                     (unsigned)info->panel_width, (unsigned)info->panel_height);
+        } else {
+            snprintf(buf, size, "display %u.%02u stepping %s, panel unknown",
+                     (unsigned)info->display_gen, (unsigned)info->display_rel, step);
+        }
+        return;
+    }
+
+    format_size(vram, sizeof(vram), info->vram_bytes);
+    snprintf(buf, size, "vram %s", vram);
 }
 
 const char *port_x86_64_gpu_format(char *buf, k_size_t size)
 {
-    char vram[32];
     char mmio[32];
+    char tail[96];
+    const char *name;
 
     if (buf == NULL || size == 0u) {
         return "";
@@ -70,28 +108,25 @@ const char *port_x86_64_gpu_format(char *buf, k_size_t size)
     }
 
     format_mmio(mmio, sizeof(mmio), g_gpu.mmio_base, g_gpu.mmio_size);
-    format_size(vram, sizeof(vram), g_gpu.vram_bytes);
+    format_tail(tail, sizeof(tail), &g_gpu);
 
     if (!g_gpu.known) {
-        const char *vendor_name = "display controller";
-
         if (g_gpu.vendor == 0x1002u) {
-            vendor_name = "AMD display controller";
+            name = "AMD display controller";
         } else if (g_gpu.vendor == 0x8086u) {
-            vendor_name = "Intel display controller";
+            name = "Intel display controller";
+        } else {
+            name = "display controller";
         }
-
-        snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio %s, vram %s",
-                 vendor_name, (unsigned)g_gpu.vendor, (unsigned)g_gpu.device,
-                 (unsigned)g_gpu.revision, (unsigned)g_gpu.bus, (unsigned)g_gpu.slot,
-                 (unsigned)g_gpu.function, mmio, vram);
-        return buf;
+    } else if (g_gpu.name[0] != '\0') {
+        name = g_gpu.name;
+    } else {
+        name = "display controller";
     }
 
-    snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio %s, vram %s",
-             g_gpu.name[0] != '\0' ? g_gpu.name : "display controller", (unsigned)g_gpu.vendor,
-             (unsigned)g_gpu.device, (unsigned)g_gpu.revision, (unsigned)g_gpu.bus,
-             (unsigned)g_gpu.slot, (unsigned)g_gpu.function, mmio, vram);
+    snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio %s, %s", name,
+             (unsigned)g_gpu.vendor, (unsigned)g_gpu.device, (unsigned)g_gpu.revision,
+             (unsigned)g_gpu.bus, (unsigned)g_gpu.slot, (unsigned)g_gpu.function, mmio, tail);
     return buf;
 }
 
@@ -164,15 +199,18 @@ static int gpu_mod_init(void)
                 if (res == GPU_PROBE_OK) {
                     candidate.present = true;
                     candidate.known = true;
+                    candidate.probe_result = res;
                     g_gpu = candidate;
                     port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
                     kinfo("%s", g_gpu_line);
                     return 0;
                 }
 
-                if (res == GPU_PROBE_UNKNOWN_DEV) {
+                if (res == GPU_PROBE_UNKNOWN_DEV || res == GPU_PROBE_DEGRADED ||
+                    res == GPU_PROBE_FAIL) {
                     candidate.present = true;
-                    candidate.known = false;
+                    candidate.known = (res != GPU_PROBE_UNKNOWN_DEV);
+                    candidate.probe_result = res;
                     if (candidate.name[0] == '\0') {
                         snprintf(candidate.name, sizeof(candidate.name), "display controller");
                     }
@@ -245,12 +283,18 @@ void port_x86_64_gpu_init(void)
         if (m != NULL && strcmp(m->name, "gpu") == 0) {
             struct kmod *mw = (struct kmod *)m;
 
-            if (g_gpu.present && g_gpu.known) {
+            if (g_gpu.probe_result == GPU_PROBE_OK) {
                 mw->state = KMOD_OK;
                 kinfo("kmod: gpu ok");
-            } else if (g_gpu.present && !g_gpu.known) {
+            } else if (g_gpu.probe_result == GPU_PROBE_UNKNOWN_DEV) {
                 mw->state = KMOD_UNKNOWN;
                 kinfo("kmod: gpu unknown");
+            } else if (g_gpu.probe_result == GPU_PROBE_DEGRADED) {
+                mw->state = KMOD_DEGRADED;
+                kinfo("kmod: gpu degraded");
+            } else if (g_gpu.probe_result == GPU_PROBE_FAIL) {
+                mw->state = KMOD_FAIL;
+                kinfo("kmod: gpu fail");
             } else {
                 mw->state = KMOD_SKIP;
                 kinfo("kmod: gpu skip");
