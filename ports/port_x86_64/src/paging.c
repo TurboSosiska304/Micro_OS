@@ -607,8 +607,8 @@ k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_
         g_kernel_pd_high[index] = (chunk & PTE_ADDRESS) | flags;
 
         if ((g_kernel_pd_high[index] & flag_mask) != (flags & flag_mask)) {
-            kerror("screen: the framebuffer PTE did not read back as 0x%llx",
-                   (unsigned long long)(flags & flag_mask));
+            kerror("screen: the framebuffer PTE did not read back as 0x%08x%08x",
+                   (unsigned)((flags & flag_mask) >> 32), (unsigned)(flags & flag_mask));
             return 0;
         }
 
@@ -618,19 +618,21 @@ k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_
 
     if (g_pat_wc_ready) {
         kinfo("screen: framebuffer cache is write-combining, "
-              "PAT=0x%016llx (entry %u=0x%02x), PTE flags=0x%016llx",
-              (unsigned long long)g_pat_value, (unsigned)PAT_WC_ENTRY,
-              (unsigned)pat_entry(g_pat_value, PAT_WC_ENTRY),
-              (unsigned long long)(flags & flag_mask));
+              "PAT=0x%08x%08x (entry %u=0x%02x), PTE flags=0x%08x%08x",
+              (unsigned)(g_pat_value >> 32), (unsigned)g_pat_value, (unsigned)PAT_WC_ENTRY,
+              (unsigned)pat_entry(g_pat_value, PAT_WC_ENTRY), (unsigned)((flags & flag_mask) >> 32),
+              (unsigned)(flags & flag_mask));
     } else {
         kinfo("screen: framebuffer cache is write-through (no verified PAT), "
-              "PTE flags=0x%016llx",
-              (unsigned long long)(flags & flag_mask));
+              "PTE flags=0x%08x%08x",
+              (unsigned)((flags & flag_mask) >> 32), (unsigned)(flags & flag_mask));
     }
 
     if (g_mtrr_on) {
-        kinfo("screen: MTRR_DEF_TYPE=0x%016llx (unchanged)",
-              (unsigned long long)port_rdmsr(IA32_MTRR_DEF_TYPE_MSR));
+        k_u64_t mtrr = port_rdmsr(IA32_MTRR_DEF_TYPE_MSR);
+
+        kinfo("screen: MTRR_DEF_TYPE=0x%08x%08x (unchanged)", (unsigned)(mtrr >> 32),
+              (unsigned)mtrr);
     } else {
         kinfo("screen: no MTRR, the framebuffer type comes from PAT and the PTE");
     }
