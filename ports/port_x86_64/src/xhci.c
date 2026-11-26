@@ -289,7 +289,6 @@ static volatile k_u8_t *g_rt;  /* the runtime registers */
 static volatile k_u8_t *g_db;  /* the doorbells */
 static k_u32_t g_max_slots;
 static k_u32_t g_max_ports;
-static k_u32_t g_port_base;
 
 static bool g_running; /* the rings are there and the controller runs */
 static k_u32_t g_cmd_index;
@@ -2772,7 +2771,7 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
         return false;
     }
 
-    address = g_port_base + xhci_portsc_offset(port);
+    address = xhci_portsc_offset(port);
     state = op_read(address);
     final = state;
     *before = state;
@@ -2872,7 +2871,7 @@ static void root_port_scan(void)
     k_u32_t port;
 
     for (port = 1; port <= g_max_ports; port++) {
-        k_u32_t address = g_port_base + xhci_portsc_offset(port);
+        k_u32_t address = xhci_portsc_offset(port);
         k_u32_t state = op_read(address);
         k_u32_t change = state & XHCI_PORT_CHANGE;
 
@@ -3030,7 +3029,6 @@ static bool controller_init(k_u64_t base, k_u32_t size)
     g_op = g_cap + capability_length;
     g_db = g_cap + db_offset;
     g_rt = g_cap + rt_offset;
-    g_port_base = XHCI_OP_PORTS;
 
     parameters2 = *(volatile k_u32_t *)(g_cap + XHCI_CAP_HCSPARAMS2);
     pages_of_scratch = ((parameters2 >> 21) & 0x1Fu) | (((parameters2 >> 27) & 0x1Fu) << 5);
@@ -3789,7 +3787,7 @@ void port_x86_64_xhci_init(void)
             struct xhci_where where;
             k_u32_t before = 0;
 
-            if ((op_read(g_port_base + xhci_portsc_offset(port)) & XHCI_PORT_CCS) != 0u) {
+            if ((op_read(xhci_portsc_offset(port)) & XHCI_PORT_CCS) != 0u) {
                 attached++;
             }
 
@@ -3802,7 +3800,7 @@ void port_x86_64_xhci_init(void)
              * controller named. */
             kinfo("xhci: port %u: a device at speed %u (%s), PORTSC %08x -> %08x", (unsigned)port,
                   (unsigned)speed, speed_name(speed), (unsigned)before,
-                  (unsigned)op_read(g_port_base + xhci_portsc_offset(port)));
+                  (unsigned)op_read(xhci_portsc_offset(port)));
 
             where.root_port = (k_u8_t)port;
             where.depth = 0u;
