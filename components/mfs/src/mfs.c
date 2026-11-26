@@ -6,6 +6,7 @@
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
+#include "kernel/pagecache.h"
 #include "kernel/panic.h"
 #include "mfs_private.h"
 
@@ -4667,6 +4668,7 @@ int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t fla
      */
     bitmap_release();
     mfs_unlock();
+    pagecache_drop_all();
 
     return rc;
 }
@@ -4683,6 +4685,7 @@ int mfs_mount(const struct k_blockdev *dev)
     mfs_lock();
     rc = mfs_mount_locked(dev);
     mfs_unlock();
+    pagecache_drop_all();
 
     return rc;
 }
@@ -4692,6 +4695,7 @@ void mfs_unmount(void)
     mfs_lock();
     mfs_unmount_locked();
     mfs_unlock();
+    pagecache_drop_all();
 }
 
 int mfs_sync(void)
@@ -4969,6 +4973,133 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
     mfs_unlock();
 
     return rc;
+}
+
+int mfs_inode_info(k_u32_t ino, struct mfs_inode *out)
+{
+    int rc;
+
+    if (out == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+    rc = inode_read(ino, out);
+    mfs_unlock();
+    return rc;
+}
+
+int mfs_read_at(k_u32_t inode_num, k_u64_t offset, void *buf, k_size_t size)
+{
+    struct mfs_inode inode;
+    struct mfs_file tmp;
+    int rc;
+
+    if (buf == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+
+    rc = inode_read(inode_num, &inode);
+    if (rc != MFS_OK) {
+        mfs_unlock();
+        return rc;
+    }
+
+    if ((inode.flags & MFS_INODE_USED) == 0u || (inode.flags & MFS_INODE_DIR) != 0u) {
+        mfs_unlock();
+        return MFS_EINVAL;
+    }
+
+    if (offset > (k_u64_t)0xFFFFFFFFu) {
+        mfs_unlock();
+        return 0;
+    }
+
+    memset(&tmp, 0, sizeof(tmp));
+    file_cursor_forget(&tmp);
+    tmp.inode = inode_num;
+    tmp.first_block = inode.first_block;
+    tmp.size = inode.size;
+    tmp.offset = (k_u32_t)offset;
+    tmp.flags = MFS_O_RDONLY;
+    tmp.generation = g.generation;
+    tmp.chain_blocks_valid = false;
+
+    rc = mfs_read_locked(&tmp, buf, size);
+    mfs_unlock();
+    return rc;
+}
+
+int mfs_write_at(k_u32_t inode_num, k_u64_t offset, const void *buf, k_size_t size)
+{
+    struct mfs_inode inode;
+    struct mfs_file tmp;
+    int rc;
+    int written;
+
+    if (buf == NULL) {
+        return MFS_EINVAL;
+    }
+
+    mfs_lock();
+
+    rc = inode_read(inode_num, &inode);
+    if (rc != MFS_OK) {
+        mfs_unlock();
+        return rc;
+    }
+
+    if ((inode.flags & MFS_INODE_USED) == 0u || (inode.flags & MFS_INODE_DIR) != 0u) {
+        mfs_unlock();
+        return MFS_EINVAL;
+    }
+
+    if (offset > (k_u64_t)0xFFFFFFFFu || offset + size > (k_u64_t)0xFFFFFFFFu) {
+        mfs_unlock();
+        return MFS_E2BIG;
+    }
+
+    memset(&tmp, 0, sizeof(tmp));
+    file_cursor_forget(&tmp);
+    tmp.inode = inode_num;
+    tmp.first_block = inode.first_block;
+    tmp.size = inode.size;
+    tmp.offset = (k_u32_t)offset;
+    tmp.flags = MFS_O_RDWR;
+    tmp.generation = g.generation;
+    tmp.chain_blocks_valid = false;
+    tmp.pending = (inode.flags & MFS_INODE_PENDING) != 0u;
+
+    mfs_txn_begin();
+    written = mfs_write_locked(&tmp, buf, size);
+    if (written < 0) {
+        mfs_txn_abort();
+        mfs_unlock();
+        return written;
+    }
+
+    rc = inode_read(inode_num, &inode);
+    if (rc == MFS_OK) {
+        inode.size = tmp.size;
+        inode.first_block = tmp.first_block;
+        inode.flags &= ~MFS_INODE_PENDING;
+        inode_stamp(&inode);
+        rc = inode_write(inode_num, &inode);
+    }
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
+    mfs_unlock();
+    return (rc == MFS_OK) ? written : rc;
 }
 
 int mfs_truncate(struct mfs_file *file, k_u64_t size)

@@ -5,6 +5,7 @@
 #include "kernel/blockdev.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
+#include "kernel/pagecache.h"
 #include "kernel/task.h"
 #include "kernel/volume.h"
 
@@ -1080,6 +1081,12 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
         (void)m->ops->chgrp(m->ctx, path, caller_gid());
     }
 
+    if ((flags & VFS_O_TRUNC) != 0 && (flags & VFS_O_DIRECTORY) == 0) {
+        pagecache_truncate(pagecache_fs_key(out), out->inode, 0);
+        out->size = 0;
+        out->offset = 0;
+    }
+
     return rc;
 }
 
@@ -1094,6 +1101,10 @@ int vfs_read(struct vfs_file *file, void *buf, k_size_t size)
     /* A directory is read through readdir, not as a stream of bytes. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
         return KERR_ISDIR;
+    }
+
+    if (file->ops->readpage != NULL) {
+        return (int)pagecache_read(file, buf, size);
     }
 
     if (file->ops->read == NULL) {
@@ -1116,6 +1127,13 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
     /* A directory is read through readdir and never written. */
     if ((file->flags & VFS_O_DIRECTORY) != 0) {
         return KERR_ISDIR;
+    }
+
+    if (file->ops->readpage != NULL && file->ops->writepage != NULL) {
+        if ((file->flags & VFS_O_APPEND) != 0) {
+            file->offset = file->size;
+        }
+        return (int)pagecache_write(file, buf, size);
     }
 
     if (file->ops->write == NULL) {
@@ -1169,7 +1187,21 @@ int vfs_truncate(struct vfs_file *file, k_u64_t size)
         return KERR_NOTSUP;
     }
 
+    if (file->ops->readpage != NULL && file->ops->writepage != NULL) {
+        rc = pagecache_sync_file(file);
+        if (rc != 0) {
+            return rc;
+        }
+    }
+
     rc = file->ops->truncate(file->fs, file, size);
+    if (rc == 0 && file->ops->readpage != NULL && file->ops->writepage != NULL) {
+        pagecache_truncate(pagecache_fs_key(file), file->inode, size);
+        file->size = size;
+        if (file->offset > size) {
+            file->offset = size;
+        }
+    }
 
     return rc;
 }
@@ -1189,6 +1221,32 @@ int vfs_close(struct vfs_file *file)
     rc = file->ops->close(file->fs, file);
 
     return rc;
+}
+
+int vfs_fsync(struct vfs_file *file)
+{
+    if (file == NULL || file->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if ((file->flags & VFS_O_DIRECTORY) != 0) {
+        return KERR_ISDIR;
+    }
+
+    if (file->ops->readpage != NULL && file->ops->writepage != NULL) {
+        return pagecache_sync_file(file);
+    }
+
+    if (file->ops->sync != NULL) {
+        return file->ops->sync(file->fs, file->inode);
+    }
+
+    return 0;
+}
+
+int vfs_sync(void)
+{
+    return pagecache_sync_all();
 }
 
 /*
@@ -1446,6 +1504,8 @@ int vfs_statfs(const char *path, struct vfs_statfs *out)
 int vfs_unlink(const char *path)
 {
     const struct mount *m = resolve(path, NULL);
+    struct vfs_stat st;
+    bool have_inode = false;
     int rc;
 
     if (m == NULL) {
@@ -1466,7 +1526,15 @@ int vfs_unlink(const char *path)
         return KERR_NOTSUP;
     }
 
+    if (stat_raw(path, &st) == 0) {
+        have_inode = true;
+    }
+
     rc = m->ops->unlink(m->ctx, path);
+    if (rc == 0 && have_inode) {
+        void *fs_key = (m->ctx != NULL) ? m->ctx : (void *)m->ops;
+        pagecache_invalidate(fs_key, st.inode);
+    }
 
     return rc;
 }
@@ -1548,7 +1616,16 @@ int vfs_rename(const char *from, const char *to)
         return KERR_NOTSUP;
     }
 
-    return source->ops->rename(source->ctx, from, to);
+    {
+        struct vfs_stat dst;
+        bool had_dst = (stat_raw(to, &dst) == 0);
+        rc = source->ops->rename(source->ctx, from, to);
+        if (rc == 0 && had_dst) {
+            void *fs_key = (source->ctx != NULL) ? source->ctx : (void *)source->ops;
+            pagecache_invalidate(fs_key, dst.inode);
+        }
+        return rc;
+    }
 }
 
 int vfs_chmod(const char *path, k_u32_t mode)
