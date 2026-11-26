@@ -324,6 +324,30 @@ that EDID was read and not a new mode. It is deliberately labelled `panel
 unknown` when eDP is inactive, the power domain is unavailable, or the timing
 fields are implausible.
 
+### 3.6 Stage 1: the flat GGTT behind the active plane
+
+The gen8 global page table is not a four-level table and BAR2 is not its
+storage. BAR2 is the 256 MiB graphics aperture: byte offset `N` in that window
+is the memory described by global PTE `N / 4096`. The PTE array is reached
+through the BAR0 alias at `BAR0 + 8 MiB`; each entry is a 64-bit, 4 KiB page
+translation with the present bit at bit 0 and the physical page in bits 51:12.
+`GEN8_PDP_*` and the PDE walk belong to private PPGTT address spaces, so this
+stage does not read or program them.
+
+The read-only path selects the primary plane of the pipe named by the active
+eDP transcoder, reads `PLANE_CTL`, `PLANE_STRIDE`, `PLANE_SIZE` and `PLANE_SURF`,
+then resolves every PTE covered by the surface. Linear strides use 64-byte
+units; Kaby Lake X/Y tiles use 512-byte units; Yf uses 128-byte units for the
+supported 16/32-bit formats. The log reports the first physical page, visible
+size, decoded pitch, allocated byte count and whether the physical pages are
+contiguous. No PTE or display register is written.
+
+The parser is covered by synthetic X-tiled, linear RGB565, Yf-padding,
+fragmentation and invalid-entry cases in `tests/cases/test_gpu_intel_ggtt.c`.
+The live physical address and pitch remain unmeasured until the owner boots
+this image on the ThinkPad; QEMU has no Intel card and must keep returning
+`KMOD_SKIP`.
+
 ## 4. EDID through AUX/DDC: the next, separate step
 
 Reading EDID is useful, but it is not part of this read-only probe. Both AUX

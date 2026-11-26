@@ -7,6 +7,7 @@ if(NOT ESP_PLATFORM)
     set(MICRO_OS_TEST_CASES
         cases/test_version.c
         cases/test_gpu_intel.c
+        cases/test_gpu_intel_ggtt.c
         cases/test_board.c
         cases/test_log.c
         cases/test_ansi.c
@@ -119,6 +120,7 @@ if(NOT ESP_PLATFORM)
         src/main.c
         framework/ktest.c
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel_ggtt.c"
         ${MICRO_OS_TEST_CASES}
     )
 

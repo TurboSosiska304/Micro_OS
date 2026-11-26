@@ -1,9 +1,10 @@
 /*
  * Micro OS — the Intel GPU identity table and probe states.
  *
- * Provenance: the PCI identifiers and Kaby Lake display topology are public
- * hardware facts learned from Intel documentation and the GPL-licensed Linux
- * i915 driver. No i915 source expression was copied into this test.
+ * Facts from drivers/gpu/drm/i915/i915_pciids.h,
+ * drivers/gpu/drm/i915/intel_step.c and
+ * drivers/gpu/drm/i915/display/intel_display_device.c (GPL-2.0, Linux v6.12);
+ * code written here for Micro OS (MIT).
  */
 #include "ktest.h"
 #include "tests/tests.h"

@@ -39,6 +39,7 @@
 #include "config/config.h"
 #include "config/session.h"
 #include "kshell/kshell.h"
+#include "gpu_intel.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_screen.h"
@@ -608,6 +609,11 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
      * clock of NTP from components/net when the image has them. */
     if (port_x86_64_net_register() != 0) {
         kwarn("x86-64: not every command of the network is registered");
+    }
+
+    /* The Intel display probe is read-only here; QEMU has no supported card. */
+    if (gpu_intel_register() != 0) {
+        kwarn("x86-64: the gpu command was not registered");
     }
 
     /* The proof of the guard page under a kernel stack (ADR 0048): `guard`

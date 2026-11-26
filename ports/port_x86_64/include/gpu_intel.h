@@ -1,10 +1,10 @@
 /*
- * Micro OS — the read-only Intel GPU probe of the x86-64 port.
+ * Micro OS — the Intel GPU probe and framebuffer contract of the x86-64 port.
  *
- * Provenance: PCI identities and Kaby Lake display/register facts were learned
- * from Intel's public hardware documentation and the GPL-licensed Linux i915
- * driver. No i915 source text, macros, control flow or data-structure
- * expression was copied; this implementation and its layout are original.
+ * Facts from drivers/gpu/drm/i915/i915_reg.h,
+ * drivers/gpu/drm/i915/gt/intel_gtt.h and
+ * drivers/gpu/drm/i915/display/skl_universal_plane.c (GPL-2.0, Linux v6.12);
+ * code written here for Micro OS (MIT).
  *
  * The shared gpu.c/port_x86_64_gpu.h lane is not merged at this base commit.
  * struct gpu_info below is the compatible fallback: after the merge, replace
@@ -14,6 +14,7 @@
 #ifndef MICRO_OS_PORT_X86_64_GPU_INTEL_H
 #define MICRO_OS_PORT_X86_64_GPU_INTEL_H
 
+#include "gpu_intel_ggtt.h"
 #include "kernel/kmod.h"
 #include "kernel/types.h"
 
@@ -23,8 +24,10 @@
 #define GPU_INFO_UNKNOWN_SIZE UINT64_MAX
 
 /*
- * One uncached 2 MiB window above the other devices of the port. The probe
- * maps the page that contains BAR0 and adds BAR0's offset inside that page.
+ * One uncached 16 MiB MMIO window above the other devices of the port. The
+ * first 8 MiB holds registers; the second half is the gen8 GGTT alias. BAR2,
+ * the 256 MiB graphics aperture, is mapped separately when a later stage needs
+ * to access the pages behind those entries.
  */
 #define PORT_X86_64_GPU_INTEL_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
 
@@ -62,6 +65,15 @@ struct gpu_info {
     k_u8_t panel_pipe; /* 0xff when no active eDP timing was read */
     bool mmio_responded;
     bool display_ready;
+
+    /* Read-only stage 1: the firmware-left primary plane and its GGTT frame. */
+    k_u64_t gtt_aperture_base;
+    k_u64_t gtt_aperture_size;
+    k_u32_t plane_control;
+    k_u32_t plane_stride;
+    k_u32_t plane_surface;
+    struct gpu_intel_fb framebuffer;
+    bool framebuffer_known;
 };
 
 /* A supported PCI identity and the display topology known for that identity. */
@@ -88,5 +100,8 @@ const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device);
  * failure. No card is a skip, not a boot failure.
  */
 int gpu_intel_probe(struct gpu_info *out);
+
+/* Register the x86-64 `gpu` command after the read-only boot probe. */
+int gpu_intel_register(void);
 
 #endif /* MICRO_OS_PORT_X86_64_GPU_INTEL_H */

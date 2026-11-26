@@ -25,6 +25,7 @@ static void run_tests(void *arg)
 
     test_version();
     test_gpu_intel();
+    test_gpu_intel_ggtt();
     test_board();
     test_log();
     test_ansi();
