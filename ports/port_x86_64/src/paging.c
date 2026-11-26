@@ -77,10 +77,10 @@
 #define PTE_PWT 0x008u
 #define PTE_CACHE_MASK (PTE_PCD | PTE_PWT | PTE_PAT_LARGE)
 
-/* IA32_PAT has eight three-bit memory types in eight bytes. Entry 5 is the
- * write-combining entry selected by PAT=1, PCD=0 and PWT=1; the firmware's
- * default value already puts WC there, but the port writes and reads it back
- * instead of assuming that a laptop left the register alone. */
+/* IA32_PAT has eight memory-type fields of eight bits (the low three name the
+ * type). Entry 5 is the write-combining entry selected by PAT=1, PCD=0 and
+ * PWT=1. The port writes and reads it back instead of assuming that a laptop
+ * left the register alone. */
 #define IA32_PAT_MSR 0x277u
 #define IA32_MTRR_DEF_TYPE_MSR 0x2FFu
 #define PAT_WC_ENTRY 5u
@@ -127,7 +127,6 @@ static bool g_smap_on;
  * reserved PAT entry and verifies it before it enters the scheduler. A CPU
  * without PAT keeps the framebuffer write-through (PCD=0, PWT=1), which is
  * ordinary cacheable memory and still reaches the device on every write. */
-static bool g_pat_on;
 static bool g_pat_wc_ready;
 static k_u64_t g_pat_value;
 static bool g_mtrr_on;
@@ -877,7 +876,6 @@ void port_x86_64_paging_init_cpu(void)
      * when it already names WC makes the read-back a check of the register the
      * port relies on, not an assumption about the firmware's default.
      */
-    g_pat_on = pat;
     g_mtrr_on = mtrr;
     g_pat_value = 0u;
     g_pat_wc_ready = false;

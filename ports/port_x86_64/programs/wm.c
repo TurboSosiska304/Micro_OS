@@ -2200,11 +2200,12 @@ int main(int argc, char *const argv[], char *const envp[])
      * of a screen of 1280x800 once, and the damage of a key against it is the
      * rest of the report (docs/desktop.md). */
     {
-        unsigned long started = now_ms();
+        unsigned long started;
         unsigned long long first;
         unsigned long long elapsed;
 
         (void)tsc_calibrate();
+        started = now_ms();
         first = tsc_now();
 
         scene_paint(&(struct ui_rect){0, 0, g_width, g_height});

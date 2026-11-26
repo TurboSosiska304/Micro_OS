@@ -732,6 +732,13 @@ static int bench_screen(unsigned long cells)
 
     elapsed = tsc_now() - started;
 
+    /* The measured screen ends in the deferred wrap of its last cell. End the
+     * serial line outside the measurement so the note begins at column zero. */
+    if (write(ULIBC_STDOUT, "\n", 1) != 1) {
+        printf("bench error: the end of the screen: %s\n", strerror(errno));
+        return 1;
+    }
+
     note("screen_text", "cells", cells, tsc_to_ms(elapsed));
     report_ns("screen_text", tsc_to_ns(elapsed));
 

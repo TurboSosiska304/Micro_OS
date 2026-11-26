@@ -277,11 +277,13 @@ The right end of the panel shows the hour of the machine, once a second:
 ## The frame of the compositor, measured
 
 The server counts what it paints: the pixels of every rectangle of every turn,
-the largest rectangle and the milliseconds of the turn. Two lines say it, and
-`make x86-vga-smoke` reads both:
+the largest rectangle, the milliseconds of the turn and the TSC nanoseconds of
+the first full frame. Three lines say it, and `make x86-vga-smoke` reads them:
 
 * at the end of the desk: `wm: 42 frames, the first 1024000 px of 1024000 in 6
   ms; 280000 px after it, 4 ms at the worst; the largest 1280x24`;
+* the first full frame by TSC: `wm: the first frame took 5565531 ns by TSC
+  (1024000 px)`;
 * on **F12**, since the last press: `wm: the meter: 3 frames, 40960 px, the
   largest 640x16, 2 ms at the worst`.
 

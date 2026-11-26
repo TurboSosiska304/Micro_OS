@@ -285,5 +285,7 @@ The console also stopped painting a cell one pixel at a time. Each 8x16 cell
 is now sixteen rows of eight RGB565 pixels: the paper and font bits are
 combined in a local sixteen-byte row and copied to the framebuffer with one
 `memcpy`. A space clears its rows through the same path, and scrolling already
-moved the picture with one `memmove`. The font, colours, cell geometry and
-visible pixels do not change.
+moved the picture with one `memmove`. The UEFI shadow-to-frame conversion builds
+128 pixels in a local chunk and copies each chunk, for the same reason and with
+the same channel expansion and reserved alpha byte. The font, colours, cell
+geometry and visible pixels do not change.
