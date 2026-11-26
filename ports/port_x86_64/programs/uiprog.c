@@ -914,7 +914,7 @@ int uiprog_enable_backbuffer(struct uiprog *program)
     return 0;
 }
 
-static int present_rect(const struct uiprog *program, int x, int y, int w, int h)
+static int present_rect(struct uiprog *program, int x, int y, int w, int h)
 {
     struct fb_rect header;
     size_t row_bytes;
@@ -963,7 +963,7 @@ static int present_rect(const struct uiprog *program, int x, int y, int w, int h
     return 0;
 }
 
-int uiprog_present(const struct uiprog *program, const struct ui_rect *rects, int count)
+int uiprog_present(struct uiprog *program, const struct ui_rect *rects, int count)
 {
     int index;
 

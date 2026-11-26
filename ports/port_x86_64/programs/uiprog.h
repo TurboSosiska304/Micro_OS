@@ -184,6 +184,6 @@ int uiprog_enable_backbuffer(struct uiprog *program);
 
 /* Copy the rectangles of the backbuffer that changed to the device. NULL/0
  * means nothing to present. 0 on success. */
-int uiprog_present(const struct uiprog *program, const struct ui_rect *rects, int count);
+int uiprog_present(struct uiprog *program, const struct ui_rect *rects, int count);
 
 #endif /* MICRO_OS_PORT_X86_64_PROGRAMS_UIPROG_H */
