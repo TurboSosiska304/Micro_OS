@@ -204,6 +204,12 @@ run "uefi-smoke" m uefi-smoke
 run "uefi-stick-smoke" m uefi-stick-smoke
 run "x86-iso-smoke" m x86-iso-smoke
 
+# The desk on the medium a person boots: /tmp is a ramfs when the root is
+# read-only (the ISO by design, the stick of a laptop in the report of 2.0.1),
+# and the terminal of the desk answers. It is the gate of the defect that no
+# smoke of a writable disk could see.
+run "x86-iso-desk-smoke" sh -c "make x86-iso >/dev/null && python3 tools/ramfs_stick_smoke.py --iso build-x86-iso/microos.iso"
+
 # --- the firmware -----------------------------------------------------------
 run "idf-build" m idf-build
 
