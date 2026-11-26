@@ -34,10 +34,10 @@ struct task;
  */
 #define K_TTY_TCGETS 0x5401u
 #define K_TTY_TCSETS 0x5402u
-#define K_TTY_TCSETSW 0x5403u /* the same as TCSETS: the output is never queued */
-#define K_TTY_TCSETSF 0x5404u /* set the mode, then drop the input */
-#define K_TTY_TIOCGPGRP 0x540Fu  /* foreground process group of the tty */
-#define K_TTY_TIOCSPGRP 0x5410u  /* set foreground process group of the tty */
+#define K_TTY_TCSETSW 0x5403u   /* the same as TCSETS: the output is never queued */
+#define K_TTY_TCSETSF 0x5404u   /* set the mode, then drop the input */
+#define K_TTY_TIOCGPGRP 0x540Fu /* foreground process group of the tty */
+#define K_TTY_TIOCSPGRP 0x5410u /* set foreground process group of the tty */
 #define K_TTY_TIOCGWINSZ 0x5413u
 #define K_TTY_TIOCSWINSZ 0x5414u /* accepted and ignored: nothing resizes a machine */
 #define K_TTY_FIONREAD 0x541Bu

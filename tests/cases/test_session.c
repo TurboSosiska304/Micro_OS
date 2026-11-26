@@ -220,7 +220,8 @@ static void test_door(void)
     KT_CHECK(wrote(&terminal, "login: "));
     KT_CHECK(wrote(&terminal, "password: "));
     KT_CHECK(!wrote(&terminal, "microos"));
-    KT_CHECK(wrote(&terminal, "root\r\n") || wrote(&terminal, "root\n")); /* the name is echoed, the answer not */
+    KT_CHECK(wrote(&terminal, "root\r\n") ||
+             wrote(&terminal, "root\n")); /* the name is echoed, the answer not */
     k_terminal_set(NULL);
 
     /* A wrong password, three times: three sentences, one wait each, and no
