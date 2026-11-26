@@ -16,8 +16,10 @@
 #include "kernel/log.h"
 #include "kernel/power.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/sysinfo.h"
 #include "kernel/task.h"
+#include "kernel/tty.h"
 #include "kernel/version.h"
 
 struct command {
@@ -1243,54 +1245,53 @@ int kshell_init(void)
 
 static int shell_read_line(char *buf, k_size_t size)
 {
-    k_size_t len = 0;
-    bool cut = false;
+    char tmp[KSHELL_LINE_MAX];
 
+    if (buf == NULL || size == 0) {
+        return -1;
+    }
+
+    k_tty_set_canonical();
     for (;;) {
-        int c = k_console_getchar();
+        int got = k_tty_read(tmp, sizeof(tmp) - 1u);
 
-        if (c < 0) {
-            buf[len] = '\0';
-            if (cut) {
-                kshell_printf("line too long, it was not executed\n");
-                return LINE_TOO_LONG;
+        if (got == KERR_INTR) {
+            struct task *self = task_self();
+            if (self != NULL) {
+                task_signal_fn old = task_signal_set(self, K_SIGINT, K_SIG_IGN);
+                task_signal_set(self, K_SIGINT, old);
             }
-            return (len > 0) ? (int)len : -1;
+            continue;
         }
 
-        if (c == '\n' || c == '\r') {
-            k_console_write("\r\n", 2);
+        if (got <= 0) {
+            buf[0] = '\0';
+            return -1;
+        }
+
+        {
+            k_size_t len = 0;
+            bool cut = false;
+            int i;
+
+            for (i = 0; i < got; i++) {
+                char c = tmp[i];
+                if (c == '\n' || c == '\r') {
+                    break;
+                }
+                if (len + 1 < size) {
+                    buf[len++] = c;
+                } else {
+                    cut = true;
+                }
+            }
+
             buf[len] = '\0';
             if (cut) {
-                /* A cut line is a different command: it is thrown away. */
                 kshell_printf("line too long, it was not executed\n");
                 return LINE_TOO_LONG;
             }
             return (int)len;
-        }
-
-        if (c == '\b' || c == 127) {
-            if (len > 0) {
-                len--;
-                k_console_write("\b \b", 3);
-            }
-            continue;
-        }
-
-        if (c == 3) { /* Ctrl+C: the line is thrown away */
-            k_console_write("^C\r\n", 4);
-            len = 0;
-            cut = false;
-            continue;
-        }
-
-        if (len + 1 < size) {
-            buf[len++] = (char)c;
-            k_console_write(&buf[len - 1], 1);
-        } else {
-            /* The character does not fit: from here on the line is not
-             * the line any more, and it must not be executed. */
-            cut = true;
         }
     }
 }

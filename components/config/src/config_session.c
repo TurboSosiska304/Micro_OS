@@ -19,11 +19,14 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/power.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
+#include "kernel/tty.h"
 #include "kernel/version.h"
 #include "kernel/vfs.h"
 #include "kshell/kshell.h"
@@ -60,13 +63,6 @@ void session_write_fmt(const char *fmt, ...)
     session_write(buf);
 }
 
-static void echo_bytes(const char *data, k_size_t len)
-{
-    if (k_console_terminal_echo()) {
-        k_console_terminal_put(data, len);
-    }
-}
-
 bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret, bool *too_long)
 {
     k_size_t len = 0;
@@ -84,6 +80,57 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
         session_write(prompt);
     }
 
+    if (!secret) {
+        /* Normal lines go through the tty: line discipline, echo and Ctrl+C
+         * delivery to the foreground process group live there. */
+        k_tty_set_canonical();
+        for (;;) {
+            char tmp[SESSION_LINE_MAX];
+            int got = k_tty_read(tmp, sizeof(tmp) - 1u);
+
+            if (got == KERR_INTR) {
+                /* Ctrl+C: the tty already echoed ^C and sent SIGINT to the
+                 * foreground group. Clear a pending SIGINT on the reader so
+                 * the session itself is not killed by its own prompt. */
+                struct task *self = task_self();
+                if (self != NULL) {
+                    task_signal_fn old = task_signal_set(self, K_SIGINT, K_SIG_IGN);
+                    task_signal_set(self, K_SIGINT, old);
+                }
+                if (too_long != NULL) {
+                    *too_long = false;
+                }
+                buf[0] = '\0';
+                return true;
+            }
+
+            if (got <= 0) {
+                buf[0] = '\0';
+                session_write("\n");
+                return false;
+            }
+
+            len = 0;
+            cut = false;
+            for (int i = 0; i < got; i++) {
+                char c = tmp[i];
+                if (c == '\n' || c == '\r') {
+                    break;
+                }
+                if (len + 1 < size) {
+                    buf[len++] = c;
+                } else {
+                    cut = true;
+                }
+            }
+            buf[len] = '\0';
+            if (too_long != NULL) {
+                *too_long = cut;
+            }
+            return true;
+        }
+    }
+
     for (;;) {
         int c = k_console_getchar();
 
@@ -97,9 +144,6 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
 
         if (c == '\n' || c == '\r') {
             buf[len] = '\0';
-            if (!secret) {
-                echo_bytes("\n", 1);
-            }
             if (cut) {
                 if (too_long != NULL) {
                     *too_long = true;
@@ -112,29 +156,18 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
         if (c == '\b' || c == 127) {
             if (len > 0) {
                 len--;
-                if (!secret) {
-                    echo_bytes("\b \b", 3);
-                }
             }
             continue;
         }
 
         if (c == 3) { /* Ctrl+C: the line is dropped */
-            if (!secret) {
-                echo_bytes("^C\n", 3);
-            }
             len = 0;
             cut = false;
             continue;
         }
 
         if (len + 1 < size) {
-            char typed = (char)c;
-
-            buf[len++] = typed;
-            if (!secret) {
-                echo_bytes(&typed, 1);
-            }
+            buf[len++] = (char)c;
         } else {
             /* A cut line is a different line: it is not executed. */
             cut = true;
@@ -407,25 +440,47 @@ void session_task(void *arg)
         k_terminal_set(&terminal);
     }
 
-    if (tty == TASK_TTY_TELNET) {
-        struct user_account account;
-        int rc = session_authenticate(NULL, &account, SESSION_FAIL_DELAY_MS);
+    {
+        struct vfs_file tty_file;
+        k_u8_t tty_priv[VFS_FILE_DATA_SIZE];
+        bool tty_opened = (vfs_open("/dev/tty", VFS_O_RDWR, &tty_file, tty_priv) == 0);
 
-        if (rc != USERS_OK) {
-            session_finish(SESSION_EXIT_DENIED);
+        if (self != NULL) {
+            (void)k_tty_set_fg_pgrp(task_get_pgid(self));
         }
 
-        rc = users_apply(&account, true);
-        if (rc != USERS_OK) {
-            session_finish(SESSION_EXIT_DENIED);
+        if (tty == TASK_TTY_TELNET) {
+            struct user_account account;
+            int rc = session_authenticate(NULL, &account, SESSION_FAIL_DELAY_MS);
+
+            if (rc != USERS_OK) {
+                if (tty_opened) {
+                    (void)vfs_close(&tty_file);
+                }
+                session_finish(SESSION_EXIT_DENIED);
+            }
+
+            rc = users_apply(&account, true);
+            if (rc != USERS_OK) {
+                if (tty_opened) {
+                    (void)vfs_close(&tty_file);
+                }
+                session_finish(SESSION_EXIT_DENIED);
+            }
+
+            session_write_fmt("\nlogin: %s, uid %u, gid %u, home %s\n", account.name,
+                              (unsigned)account.uid, (unsigned)account.gid,
+                              (account.home[0] != '\0') ? account.home : "/");
         }
 
-        session_write_fmt("\nlogin: %s, uid %u, gid %u, home %s\n", account.name,
-                          (unsigned)account.uid, (unsigned)account.gid,
-                          (account.home[0] != '\0') ? account.home : "/");
+        {
+            int status = session_run();
+            if (tty_opened) {
+                (void)vfs_close(&tty_file);
+            }
+            session_finish(status);
+        }
     }
-
-    session_finish(session_run());
 }
 
 k_u32_t session_start(const struct session_info *info)
