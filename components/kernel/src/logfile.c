@@ -14,7 +14,7 @@
 
 /* The producer never waits for the volume: one bounded ring feeds one batch. */
 #define K_LOGFILE_BUFFER_SIZE 4096u
-#define K_LOGFILE_FLUSH_MS 100u
+#define K_LOGFILE_FLUSH_MS 1000u
 #define K_LOGFILE_POWER_WAIT_MS 2000u
 
 static const char g_rotated[] = "log: rotated at 65536 bytes\n";

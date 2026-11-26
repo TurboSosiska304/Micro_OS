@@ -58,7 +58,7 @@ int k_logfile_flush(void);
  */
 int k_logfile_stop_for_poweroff(void);
 
-/* The service task of the ports: wake ten times a second and flush a batch. */
+/* The service task of the ports: wake once a second and flush a batch. */
 void k_logfile_service_task(void *arg);
 int k_logfile_service_start(void);
 
