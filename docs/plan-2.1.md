@@ -74,44 +74,45 @@ until the plan is merged.
 5. **The release medium built by the runner.** K23 ends when the workflow builds
    or obtains its own `limine`, fails on a missing ISO or stick, and publishes
    the assets it actually booted.
-6. **The MAC and the USB of a real laptop.** K24 replaces the fabricated
-   `0e:0e:0e:0e:0e:0e` with the station of the card or a derived address that
-   says it is derived; K25 makes the xHCI reset follow the specification and
-   records the answer of the laptop (ADR 0040).
+6. **The MAC and the USB of a real laptop.** K24 accepts a derived locally
+   administered address only with a log line that says the station did not come
+   from the NVM and an override in `/etc/network/mac`; K25 makes the xHCI reset
+   follow the specification and records the answer of the laptop (ADR 0040).
 7. **The quality debts that make a report reproducible.** The host account for
-   ramfs runs under ASan, TSan and valgrind instead of skipping, and the console
-   of the board keeps a whole line under two tasks. SMP hang diagnosis runs on
-   the 2.0.3 line in parallel.
-8. **A read-only GPU reconnaissance.** The AMD and Intel probes and their notes
-   may land as observation, not as a display driver. They must not change a
-   mode, take the screen or become a new boot dependency.
-9. **The cleanroom pass.** An independent agent-user exercises the release and
-   returns reproduced L1-L4 findings before the tag. The procedure and the
-   acceptance rule are below, not a claim that the pass has already happened.
+   ramfs runs under ASan, TSan and valgrind instead of skipping. K22 writes a
+   whole board-console line without blocking, with an SMP test and a soak as its
+   proof.
+8. **Phase A of the software rasterizer.** Damage is coalesced at the device,
+   glyphs come from an atlas, fills and copies use word operations, and a RAM
+   back buffer is presented with one batched blit per frame. The pixel and
+   fallback gates are those of `docs/plan-gpu.md`. Virtio-gpu remains an opt-in
+   experiment and is not part of the release gate. Intel display phase C and AMD
+   copy-engine work are not in 2.1.
+9. **The eight-core SMP machine and the clean S5.** K27 is in 2.1: its root cause
+   is not named yet and `feature/smp-default` is preserved as the starting point.
+   K28 is also in 2.1: the defect still reproduces on the owner's laptop, and one
+   run of that machine is required to verify the fix (ADR 0012, ADR 0050).
+10. **The cleanroom pass.** An independent agent-user exercises the release in
+    the simulator and QEMU and returns reproduced L1-L4 findings before the tag.
+    The report is `docs/cleanroom/2.1.md` and ships with the release as evidence.
+    The procedure and the acceptance rule are below.
 
-### The GPU line is a decision, not a promise
+### The GPU line
 
-[`docs/plan-gpu.md`](plan-gpu.md) recommends phase 0 and phase A: measure RAM
-composition, the write-combining present and GOP conversion separately, then
-optimize the software rasterizer. Phase A is a candidate for 2.1 **only if the
-owner approves it**. It is not approved by this plan.
+Phase A of [`docs/plan-gpu.md`](plan-gpu.md) is in 2.1: coalesced damage, a
+bounded glyph atlas, word copies, a RAM back buffer and one batched blit per
+frame. Phase 0 supplies the separate composition, write-combining present and
+GOP conversion numbers; phase A must meet its `wm` <= 4 ms QEMU and full present
+<= 8 ms laptop targets without changing a pixel.
 
-The approval must say whether phase A is in the release, and whether virtio-gpu
-(phase B) is only an opt-in experiment or a required gate. If A is not
-approved, 2.1 still has the probes and the software path of 2.0.2; there is no
-partial rasterizer in the release. If B is approved, `gpu-smoke` compares the
-device frame with the software reference and fails if the device path is slower
-than that reference. A real Intel or AMD display driver is not in 2.1.
+Virtio-gpu, phase B, is an opt-in experiment run by `make gpu-smoke`. It is not
+part of `tools/release_gate.sh` and a failed or absent device backend does not
+block the release. The phase A fallback must remain green. Intel display phase C
+and AMD copy-engine work are not in 2.1; the read-only probes are reconnaissance,
+not a display driver.
 
 ## What is not in this release
 
-* **SMP on eight cores.** 2.0.2 ships one core because the soak can stop
-  answering on eight. The hang, the migration stress and the strict
-  `test_smp_double_claim` locking are 2.0.3 work, not a 2.1 feature lane. The
-  existing two-core `x86-smp-smoke` remains a regression gate (ADR 0012).
-* **A laptop that switches itself off.** The S5 page fault after the write and
-  the real `_S5` sleep type are 2.0.3 work. 2.1 keeps `power-smoke` green; it
-  does not claim the live laptop is fixed (ADR 0050).
 * **A full `dash` or `bash`, and full job control.** The foreground group and
   Ctrl+C are the 2.1 slice. The lists, redirections, variables, background jobs,
   Ctrl+Z, `fg`, `bg` and a userland `/bin/sh` are 2.2 work (ADR 0017).
@@ -128,27 +129,30 @@ than that reference. A real Intel or AMD display driver is not in 2.1.
 ## The debts of 2.1
 
 A debt closes with code and a test, and its row moves to the release notes. K22,
-K25 and K26 belong to 2.1. K27 and K28 are recorded here so that this plan names
-the known holes, but both remain on the 2.0.3 line. The numbers below are the
-identifiers for this plan: K22 and K25 already exist in `docs/debts.md`; K26-K28
-are the three new entries named there by their file.
+K25, K26, K27 and K28 all belong to 2.1. The numbers below are the identifiers
+for this plan: K22 and K25 already exist in `docs/debts.md`; K26-K28 are the three
+new entries named there by their file.
 
 * **K22** - board console lines split under two tasks. The port and the device
   test own the answer.
 * **K26** - ramfs skips the sanitizers. The host test and the host port own the
   answer.
 * **K27** - the eight-core SMP shell can hang. The port, the scheduler and the
-  soak own the answer. This stays on the 2.0.3 line.
+  soak own the answer.
 * **K28** - S5 can fault and leave the laptop on. The ACPI path and the power
-  smoke own the answer. This also stays on the 2.0.3 line.
+  smoke own the answer.
 * **K25** - the xHCI ports do not enumerate. The USB driver, its port test and
   the laptop log own the answer.
+* **K24** - the station address of the card. The driver, its log and the
+  `/etc/network/mac` override own the answer.
 
 ### K22 - the line of the board
 
-`components/port_esp32/src/port_esp32.c` (`k_port_write`) takes one non-blocking
-critical section for the whole UART buffer. A host test of the port path and two
-device-test boots produce whole lines. No lock is added to a path that can sleep.
+`components/port_esp32/src/port_esp32.c` (`k_port_write`) uses a non-blocking
+whole-line write. A short critical section copies the bytes into the ring and
+drains the complete lines already in it; the path never waits for a sleeping
+receiver. An SMP test proves that two writers cannot split a line, and the soak
+proves that the ring still drains. Two device-test boots must print whole lines.
 
 ### K26 - ramfs under the instruments
 
@@ -160,18 +164,30 @@ and the ramfs cases have no sanitizer skip.
 ### K27 - the hang of eight cores
 
 `ports/port_x86_64/src/port_x86_64_task.c`, `components/kernel/src/sched.c`,
-`tools/x86_smp_smoke.py` and `tools/soak.py` own the failing workload. It leaves
-one transcript and one cause; the fix passes `x86-smp-smoke`, the migration
-stress and both 600-second soaks. Strict console checks are restored, not
-relaxed. This stays on the 2.0.3 line.
+`tools/x86_smp_smoke.py` and `tools/soak.py` own the failing workload. Its root
+cause is not named yet. `feature/smp-default` is preserved as the branch that
+turns on the shipped eight-core machine and records the attempts to isolate the
+hang; it is evidence, not a fix. The lane must leave one transcript and one cause,
+then pass `x86-smp-smoke` at 76 checks, the migration stress and both 600-second
+soaks with strict console checks restored.
 
 ### K28 - the laptop that does not switch off
 
 `ports/port_x86_64/src/acpi.c`, `src/cpu.c`, `src/e1000e.c` and
-`tools/x86_power_smoke.py` own the clean end. It reaches S5 without a fault on
-the owner's X1 Carbon, or a named remaining cause belongs to 2.0.3.
-`power-smoke` and the `acpi=off` negative stay green. ADR 0050 records the DSDT
-`_S5` decision. This also stays on the 2.0.3 line.
+`tools/x86_power_smoke.py` own the clean end. The defect still reproduces on the
+owner's X1 Carbon. The fix must pass `power-smoke` and the `acpi=off` negative,
+then one run on that laptop must reach S5 without the page fault and leave the
+machine off. ADR 0050 records the DSDT `_S5` decision; QEMU alone cannot close
+this debt.
+
+### K24 - the station address of the card
+
+A derived locally administered MAC is acceptable when the I219 NVM does not
+answer, but only with both safeguards: the log must say that the station address
+did not come from the NVM, and `/etc/network/mac` must be able to override it.
+The fabricated `0e:0e:0e:0e:0e:0e` is not an acceptable fallback. The driver and a
+negative test must prove the log line, the override and the absence of the old
+fabricated address.
 
 ### K25 - the ports of xHCI
 
@@ -180,13 +196,12 @@ the owner's X1 Carbon, or a named remaining cause belongs to 2.0.3.
 log shows PED with the link in U0 or a named failure; QEMU alone does not close
 the row.
 
-K23 and K24 are release blockers even though they are not kernel defects. K23
-is closed by the workflow and its artifacts; K24 by the driver path and a test
-that refuses the fabricated station address. Their register entries remain in
-`docs/debts.md` K23-K24. K21 (the console under a loaded host) remains open unless
-a loaded-host probe finds and fixes the cause; a quiet rerun is not a closure.
-The TSan race in `test_smp_double_claim` (`tests/cases/test_smp.c`) is fixed on
-the 2.0.3 line; it is not closed by excluding the test from the detector.
+K23 is a release blocker: it is closed by the workflow and its artifacts, not
+by a warning in a green run. K24 is the MAC decision above. K21 (the console
+under a loaded host) remains open unless a loaded-host probe finds and fixes the
+cause; a quiet rerun is not a closure. The TSan race in `test_smp_double_claim`
+(`tests/cases/test_smp.c`) is part of the K27 work in 2.1; it is not closed by
+excluding the test from the detector.
 
 ## The gates of the release
 
@@ -237,14 +252,21 @@ release gate.
    `make x86-iso-smoke`, `make x86-iso-uefi-smoke`, `make x86-iso-usb-smoke` and
    `make x86-iso-desk-smoke`. The ISO and stick smokes boot the artifacts the
    bundle publishes, not a substitute disk image.
-5. **The new slices:** `make tty-pgrp-smoke`, `make log-smoke` and, if the owner
-   approves the device backend, `make gpu-smoke`. The targets do not exist on
-   the base tree yet; adding them is part of the lanes below.
+5. **The new slices and phase A:** `make tty-pgrp-smoke`, `make log-smoke` and
+   the phase A pixel, fallback and benchmark gates. `make gpu-smoke` is the
+   opt-in virtio-gpu experiment and is deliberately absent from this release
+   list. The new targets do not exist on the base tree yet; adding them is part
+   of the lanes below.
 6. **The board and the campaign:** `make idf-build`,
    `tools/device-test.sh /dev/ttyACM0`, `make soak` and `make soak-smp` (600
-   seconds each). The board test is the K22 hardware gate. The two-core soak is
-   mandatory; the eight-core soak is evidence for 2.0.3, not a 2.1 promise.
-7. **The repository and the image:** `make reproducible`,
+   seconds each). The board test is the K22 hardware gate. `soak-smp` must run
+   the shipped eight-core image, not the two-core regression image.
+7. **The live power check:** the same signed candidate is booted on the owner's
+   X1 Carbon and `poweroff` must reach S5 without the page fault and leave the
+   machine off. The report names the image hash and carries the last lines of
+   the console. This K28 check is part of the release gate and cannot be replaced
+   by `power-smoke` in QEMU.
+8. **The repository and the image:** `make reproducible`,
    `make integrity` and a clean Release build from an empty directory. The
    final call is
    `python3 tools/integrity_check.py --expect-tag v2.1.0`.
@@ -262,26 +284,28 @@ release gate.
   64 KiB, and rotation says that it happened. It types a password at `login`,
   `su` or `passwd` and proves that neither log contains it. The ISO must say
   that its log is in RAM. The device test proves the board's RAM fallback.
-* **`gpu-smoke`**, only after approval, draws one full frame and one damaged
-  frame through virtio-gpu, compares the pixels with the software reference,
-  checks a backend failure falls back without losing the console, and compares
-  the same scene's timing with phase A. The thresholds are those of
-  `docs/plan-gpu.md`: the device frame is no slower than A and small damage adds
-  at most 1 ms. No number is inferred from a byte count.
+* **`gpu-smoke`** is opt-in and is not a release gate. When phase B is exercised,
+   it draws one full frame and one damaged frame through virtio-gpu, compares the
+   pixels with the software reference, checks that a backend failure falls back
+   without losing the console, and compares the same scene's timing with phase A.
+   The thresholds are those of `docs/plan-gpu.md`: the device frame is no slower
+   than A and small damage adds at most 1 ms. No number is inferred from a byte
+   count.
 
 The release tag is cut only after these gates and the cleanroom procedure are
 complete. A gate that is not green is not a release; a missing gate is not a pass.
 
 ## The cleanroom pass
 
-The pass is a release procedure, not a promise that the machine already works
-for a stranger. It runs after the candidate has passed the command gates and
-before the release tag.
+The pass is a release procedure, not a claim that the machine already works for
+an independent user. It runs after the candidate has passed the command gates
+and before the release tag.
 
 1. **Who runs it.** A separate agent session receives the candidate image or its
    build, the machine description and the public documentation. It does not read
-   the kernel sources or receive the author's explanation of the internals. Its
-   starting material is `README.md`, `docs/install.md`, `docs/wiki/`,
+   the kernel sources or receive the author's explanation of the internals. It
+   runs in both the simulator and QEMU, never on the laptop. Its starting
+   material is `README.md`, `docs/install.md`, `docs/wiki/`,
    `commands.md`, the messages of the machine and the ADR that names a documented
    limitation. If only the source can explain the intended behaviour, that is a
    documentation finding.
@@ -310,11 +334,11 @@ before the release tag.
    block the release. A fixed finding needs a regression case and a rerun of its
    steps on the candidate. The author does not close a finding by explaining it
    in chat.
-5. **The gate.** The report is stored with the candidate evidence. The pass is
-   complete when it has run and every L1/L2 is either fixed and rerun or
-   explicitly recorded in `docs/debts.md` with the reason it remains. Only L4
-   may remain in the release without such an entry. An L3 without a debt number
-   does not pass the gate.
+5. **The gate.** The report is `docs/cleanroom/2.1.md` and is committed with the
+   release evidence. The pass is complete when it has run in both the simulator
+   and QEMU and every L1/L2 is either fixed and rerun or explicitly recorded in
+   `docs/debts.md` with the reason it remains. Only L4 may remain in the release
+   without such an entry. An L3 without a debt number does not pass the gate.
 
 ## The order of work
 
@@ -327,35 +351,43 @@ when its own gate and the inherited gates are green on its merge base.
 2. **The tty slice.** Merge `feature/tty-pgrp`; document calls 52/53 and the two
    ioctls in `docs/syscall-abi.md`; add `tty-pgrp-smoke`; keep `tty-smoke` and
    the pipeline cases green.
-3. **K22, K24, K26 and K23.** Close the board line, the MAC and the host memory
-   account. Then make the release workflow fail when an artifact is missing.
-   Run the board device test and build both media from the candidate.
+3. **K22, K24, K26 and K23.** Close the board line with the non-blocking ring
+   write and its SMP test and soak. Implement the MAC decision with its log line
+   and override, and close the host memory account. Then make the release
+   workflow fail when an artifact is missing. Run the board device test and
+   build both media from the candidate.
 4. **K25.** Merge the specified xHCI reset with its negative tests. Run
    `usb-smoke`; collect the X1 log that decides the remaining hardware question.
-5. **The GPU merge, if approved.** Rebase the Intel probe onto the shared GPU
-   contract and merge the probes. Run all display and boot fallbacks. Phase A
-   and virtio-gpu are separate merges with their own gates; neither may hold up
-   the cleanup if the owner declines them.
-6. **The 2.0.3 line in parallel.** Diagnose K27 and K28 on their own branch. A
-   fix may land before 2.1, but 2.1 does not claim eight cores or laptop S5 until
-   the patch has its own release and evidence.
-7. **The candidate and the cleanroom.** Build the signed candidate, run the
-   full command gate and freeze the image hash. Run the independent cleanroom
-   pass, close or record its findings as the procedure requires, and run the
-   final integrity check before the tag.
+5. **Phase A and the optional probes.** Implement the software rasterizer and
+   its pixel, fallback and benchmark gates. Rebase the Intel probe onto the
+   shared GPU contract and merge the probes as read-only reconnaissance. Run
+   `gpu-smoke` only as the opt-in virtio-gpu experiment; it does not enter
+   `tools/release_gate.sh`.
+6. **K27 and K28.** Diagnose the eight-core hang from the preserved
+   `feature/smp-default`, name its cause, and pass the eight-core smoke and soak.
+   Fix the S5 path, pass `power-smoke`, and verify `poweroff` in one run on the
+   owner's X1 Carbon. Both debts belong to this release.
+7. **The candidate and the cleanroom.** Build the signed candidate, run the full
+   command gate and freeze the image hash. Run the independent cleanroom pass in
+   the simulator and QEMU, commit `docs/cleanroom/2.1.md`, close or record its
+   findings as the procedure requires, and run the final integrity check before
+   the tag.
 
-## What the owner decides
+## The owner decided
 
-1. Is GPU phase A in 2.1, and is virtio-gpu an opt-in experiment or a required
-   `gpu-smoke`? The recommendation is A first, B only after it beats the
-   software reference.
-2. Which agent session and machine run the cleanroom pass, and where is its
-   report kept with the candidate evidence?
-3. Is a locally administered derived MAC acceptable when the I219 NVM is held
-   by the management engine, or must the wire stay off until a real station
-   address is read?
-4. Does the K22 fix have to wait for proof that every `k_port_write()` caller
-   can tolerate a lock, or may the lane first prove a non-blocking whole-write
-   critical section?
-5. Are K27 and K28 being cut as 2.0.3 before 2.1, or may a proven fix join the
-   candidate? The release notes must name which answer was taken.
+1. **GPU.** Phase A is in 2.1: damage, a glyph atlas, word copies and a RAM back
+   buffer with one blit per frame. Virtio-gpu is opt-in through `make gpu-smoke`
+   and is not in the release gate. Intel display phase C and AMD copy-engine
+   work are not in 2.1.
+2. **Cleanroom.** The independent pass runs in the simulator and QEMU, not on the
+   laptop. `docs/cleanroom/2.1.md` is committed and ships with the release as
+   evidence.
+3. **K24.** A derived locally administered MAC is acceptable only with a log line
+   saying that the station did not come from the NVM and an override in
+   `/etc/network/mac`.
+4. **K22.** The port writes a whole line without blocking: a short critical
+   section copies into the ring and drains complete lines, never through a
+   sleeping receiver. An SMP test and the soak are the proof.
+5. **K27 and K28.** Both are in 2.1. K27 starts from the preserved
+   `feature/smp-default` with its root cause still unnamed. K28 still reproduces
+   on the owner's laptop and needs one run there to verify the fix.
