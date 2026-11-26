@@ -70,6 +70,12 @@ memory window, and memory decode is already set. On this laptop the probe will
 therefore not need its conditional PCI command write. BAR2, BAR4 and the ROM
 are outside the probe's read set.
 
+For the common `gpu_info`, `mmio_base` is read from BAR0. `mmio_size` is the
+16 MiB identity-table value corroborated by the live `lspci`; the probe does
+not write all ones to BAR0 merely to size it. `vram_bytes` stays
+`GPU_INFO_UNKNOWN_SIZE`: no GTT/aperture size was read, and zero would be a
+false claim.
+
 ### 2.1 Where display 9.00 stepping C0 comes from
 
 The live kernel reports:
@@ -538,6 +544,84 @@ sudo dmesg | grep -Ei 'i915|drm|gpu|edid|vbt|dmc' | tail -80
 
 Do not run `intel_reg_dumper`, `devmem`, EDID writers, VBIOS flashers or
 forcewake debug tools for this reconnaissance.
+
+### 8.1 Release handshake contract
+
+The AMD-owned `gpu.c` and `ports/port_x86_64/include/port_x86_64_gpu.h` are
+not merged at this base commit. `gpu_intel.h` therefore contains a compatible
+fallback `struct gpu_info` with the agreed common prefix:
+
+```c
+vendor, device, rev, bus, slot, func,
+mmio_base, mmio_size, vram_bytes, state
+```
+
+After the merge, replace that fallback declaration with the shared header.
+The Intel entry point already has the required shape:
+
+```c
+int gpu_intel_probe(struct gpu_info *out);
+```
+
+Return convention:
+
+* `0`: a known Intel card completed the read-only MMIO handshake;
+* `1`: no completed handshake; `out->state` distinguishes `KMOD_SKIP` (no
+  Intel card), `KMOD_UNKNOWN` (Intel card with an unknown DID), and
+  `KMOD_DEGRADED` (known card, but power/display state is not ready);
+* `-1`: hard failure such as malformed PCI identity/BAR or non-answering MMIO.
+
+The common fields come from these sources:
+
+| Field | Source |
+|---|---|
+| `vendor`, `device`, `rev`, `bus`, `slot`, `func` | PCI configuration read |
+| `mmio_base` | BAR0 read |
+| `mmio_size` | 16 MiB identity-table value, corroborated by live `lspci`; no BAR-size write |
+| `vram_bytes` | `GPU_INFO_UNKNOWN_SIZE`; no GTT/aperture size was read |
+| `state` | probe outcome, not a guessed hardware value |
+
+The Intel tail records the already-justified display/power-well reads and the
+firmware-left eDP timing. Unknown Intel IDs are detected by a read-only PCI
+class/vendor check after the known-ID table misses; no display MMIO is touched.
+No display register is written, no forcewake is requested, and no power well
+is raised.
+
+On a successful live handshake the single fact line is:
+
+```text
+gpu: Intel UHD 620 (8086:5917 rev 07) at 00:02.0, mmio 0x2ff0000000+16M, display 9.00 stepping C0, panel 1920x1080
+```
+
+The `display 9.00 stepping C0` portion is the legitimate DID/revision-derived
+conclusion explained in section 2.1. If the eDP timing is unavailable, the
+same line ends in `panel unknown`; EDID is not claimed.
+
+After the shared dispatcher registers the module, `gpu` and `modules` should
+add the health line:
+
+```text
+kmod: gpu ok
+```
+
+### 8.2 Live check script
+
+Boot the signed Micro OS USB image, wait for its shell, then run this seven-line
+capture on the connected host (use the actual USB-serial port):
+
+```sh
+#!/bin/sh
+set -eu
+# The laptop is already booted into Micro OS and shows its shell.
+PORT=${1:-/dev/ttyACM0}
+OUT=$(mktemp)
+python3 tools/console.py "$PORT" 12 --send gpu modules >"$OUT"
+tail -24 "$OUT"
+```
+
+Expected markers are the `gpu:` fact line and `kmod: gpu ok`; the `modules`
+table should also show `gpu` in state `ok`. If the console is VGA-only, run the
+same two commands and photograph the last screen lines instead of using serial.
 
 ## 9. Sources
 

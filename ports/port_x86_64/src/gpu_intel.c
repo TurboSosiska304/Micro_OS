@@ -15,13 +15,17 @@
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
 
+#include <stdio.h>
+
+#define GPU_INTEL_MMIO_WINDOW (16u * 1024u * 1024u)
+
 /* The laptop first, then nearby Kaby Lake-R/Whiskey Lake identities. */
 static const struct gpu_intel_id g_gpu_intel_ids[] = {
-    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
-    {0x8086u, 0x5916u, "Intel HD 620", 9u, 0u, 3u, 4u, 5u},
-    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
-    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
-    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 0u, 3u, 4u, 5u},
+    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x5916u, "Intel HD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
 };
 
 const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
@@ -132,19 +136,31 @@ static bool gpu_intel_power_state(const struct port_x86_64_pci_device *card, k_u
     return false;
 }
 
-static bool gpu_intel_find(struct port_x86_64_pci_device *card,
-                           const struct gpu_intel_id **identity)
+enum gpu_intel_find_result {
+    GPU_INTEL_NOT_FOUND,
+    GPU_INTEL_KNOWN,
+    GPU_INTEL_UNKNOWN,
+};
+
+/* Separate an absent Intel card from an Intel card whose DID is not in the table. */
+static enum gpu_intel_find_result gpu_intel_find(struct port_x86_64_pci_device *card,
+                                                 const struct gpu_intel_id **identity)
 {
     k_size_t i;
 
     for (i = 0; i < K_ARRAY_SIZE(g_gpu_intel_ids); i++) {
         if (port_x86_64_pci_find(g_gpu_intel_ids[i].vendor, g_gpu_intel_ids[i].device, card)) {
             *identity = &g_gpu_intel_ids[i];
-            return true;
+            return GPU_INTEL_KNOWN;
         }
     }
 
-    return false;
+    if (port_x86_64_pci_find_class(0x03u, 0x00u, 0u, card) &&
+        port_x86_64_pci_read16(card, PCI_VENDOR) == PCI_INTEL_VENDOR) {
+        return GPU_INTEL_UNKNOWN;
+    }
+
+    return GPU_INTEL_NOT_FOUND;
 }
 
 static bool gpu_intel_map(const struct port_x86_64_pci_device *card, k_u64_t *base)
@@ -180,30 +196,45 @@ static bool gpu_intel_map(const struct port_x86_64_pci_device *card, k_u64_t *ba
     return true;
 }
 
-static void gpu_intel_panel(const struct gpu_intel_info *info)
+static void gpu_intel_window(const struct gpu_info *info, char *text, k_size_t text_size)
 {
+    k_u32_t high = (k_u32_t)(info->mmio_base >> 32);
+    k_u32_t low = (k_u32_t)(info->mmio_base & 0xFFFFFFFFu);
+    unsigned mib = (unsigned)(info->mmio_size / (1024u * 1024u));
+
+    if (high == 0u) {
+        (void)snprintf(text, text_size, "0x%x+%uM", (unsigned)low, mib);
+    } else {
+        (void)snprintf(text, text_size, "0x%x%08x+%uM", (unsigned)high, (unsigned)low, mib);
+    }
+}
+
+static void gpu_intel_panel(const struct gpu_info *info)
+{
+    char window[40];
+
+    gpu_intel_window(info, window, sizeof(window));
     if (info->panel_width != 0u && info->panel_height != 0u) {
         kinfo("gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%x, "
-              "mmio 0x%08x%08x, display %u.%02u stepping %s, panel %ux%u",
-              info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->revision,
-              (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->function,
-              (unsigned)(info->mmio_base >> 32), (unsigned)(info->mmio_base & 0xFFFFFFFFu),
+              "mmio %s, display %u.%02u stepping %s, panel %ux%u",
+              info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->rev,
+              (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->func, window,
               (unsigned)info->display_gen, (unsigned)info->display_rel, info->display_step,
               (unsigned)info->panel_width, (unsigned)info->panel_height);
     } else {
         kinfo("gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%x, "
-              "mmio 0x%08x%08x, display %u.%02u stepping %s, panel unknown",
-              info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->revision,
-              (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->function,
-              (unsigned)(info->mmio_base >> 32), (unsigned)(info->mmio_base & 0xFFFFFFFFu),
+              "mmio %s, display %u.%02u stepping %s, panel unknown",
+              info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->rev,
+              (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->func, window,
               (unsigned)info->display_gen, (unsigned)info->display_rel, info->display_step);
     }
 }
 
-kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
+int gpu_intel_probe(struct gpu_info *info)
 {
     struct port_x86_64_pci_device card;
     const struct gpu_intel_id *identity = NULL;
+    enum gpu_intel_find_result found;
     k_u8_t power_state;
     k_u16_t command;
     k_u16_t class_code;
@@ -215,28 +246,43 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     k_u32_t height;
 
     if (info == NULL) {
-        return KMOD_FAIL;
+        return -1;
     }
-    *info = (struct gpu_intel_info){0};
+    *info = (struct gpu_info){0};
+    info->vram_bytes = GPU_INFO_UNKNOWN_SIZE;
+    info->state = KMOD_SKIP;
     info->panel_pipe = GPU_INTEL_PANEL_PIPE_UNKNOWN;
 
-    if (!gpu_intel_find(&card, &identity)) {
-        kinfo("gpu: no supported Intel display found (KMOD_SKIP)");
-        return KMOD_SKIP;
+    found = gpu_intel_find(&card, &identity);
+    if (found == GPU_INTEL_NOT_FOUND) {
+        kinfo("gpu: no Intel display found (KMOD_SKIP)");
+        return 1;
     }
 
-    info->name = identity->name;
     info->vendor = port_x86_64_pci_read16(&card, PCI_VENDOR);
     info->device = port_x86_64_pci_read16(&card, PCI_DEVICE);
-    info->revision = (k_u8_t)(port_x86_64_pci_read32(&card, PCI_REVISION) & 0xFFu);
+    info->rev = (k_u8_t)(port_x86_64_pci_read32(&card, PCI_REVISION) & 0xFFu);
     info->subsystem_vendor = port_x86_64_pci_read16(&card, PCI_SUBSYSTEM_VENDOR);
     info->subsystem_device = port_x86_64_pci_read16(&card, PCI_SUBSYSTEM_DEVICE);
     info->bus = card.bus;
     info->slot = card.slot;
-    info->function = card.function;
+    info->func = card.function;
+    info->state = KMOD_UNKNOWN;
+
+    if (found == GPU_INTEL_UNKNOWN) {
+        info->name = "Intel unknown";
+        kinfo("gpu: Intel %04x:%04x rev %02x at %02x:%02x.%x is not in the probe table "
+              "(KMOD_UNKNOWN)",
+              (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->rev,
+              (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->func);
+        return 1;
+    }
+
+    info->name = identity->name;
+    info->mmio_size = identity->mmio_size;
     info->display_gen = identity->display_gen;
     info->display_rel = identity->display_rel;
-    info->display_step = gpu_intel_display_step(info->device, info->revision);
+    info->display_step = gpu_intel_display_step(info->device, info->rev);
     info->pipes = identity->pipes;
     info->transcoders = identity->transcoders;
     info->ports = identity->ports;
@@ -245,17 +291,20 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     if (info->vendor != PCI_INTEL_VENDOR || info->device != identity->device ||
         card.function != 0u || (k_u8_t)(class_code >> 8) != 0x03u ||
         (k_u8_t)(class_code & 0xFFu) != 0x00u) {
+        info->state = KMOD_FAIL;
         kerror("gpu: Intel PCI identity/class mismatch (KMOD_FAIL)");
-        return KMOD_FAIL;
+        return -1;
     }
 
     if (!gpu_intel_power_state(&card, &power_state)) {
-        kinfo("gpu: Intel power state is not readable; MMIO not touched (KMOD_SKIP)");
-        return KMOD_SKIP;
+        info->state = KMOD_DEGRADED;
+        kinfo("gpu: Intel power state is not readable; MMIO not touched (KMOD_DEGRADED)");
+        return 1;
     }
     if (power_state != PCI_PM_D0) {
-        kinfo("gpu: Intel is in D%u; MMIO not touched (KMOD_SKIP)", (unsigned)power_state);
-        return KMOD_SKIP;
+        info->state = KMOD_DEGRADED;
+        kinfo("gpu: Intel is in D%u; MMIO not touched (KMOD_DEGRADED)", (unsigned)power_state);
+        return 1;
     }
 
     command = port_x86_64_pci_read16(&card, PCI_COMMAND);
@@ -264,8 +313,9 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     }
 
     if (!gpu_intel_map(&card, &info->mmio_base)) {
+        info->state = KMOD_FAIL;
         kerror("gpu: Intel BAR0 is not a mappable memory window (KMOD_FAIL)");
-        return KMOD_FAIL;
+        return -1;
     }
 
     info->fuse_status = gpu_intel_mmio_read(GPU_INTEL_SKL_FUSE_STATUS);
@@ -273,29 +323,33 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     info->power_well_driver = gpu_intel_mmio_read(GPU_INTEL_HSW_PWR_WELL_CTL2);
     if (info->fuse_status == 0xFFFFFFFFu || info->power_well_bios == 0xFFFFFFFFu ||
         info->power_well_driver == 0xFFFFFFFFu) {
+        info->state = KMOD_FAIL;
         kerror("gpu: Intel MMIO did not answer (KMOD_FAIL)");
-        return KMOD_FAIL;
+        return -1;
     }
     info->mmio_responded = true;
 
     combined_wells = info->power_well_bios | info->power_well_driver;
     info->display_ready = (combined_wells & GPU_INTEL_PW1_STATE) != 0u;
     if (!info->display_ready) {
+        info->state = KMOD_DEGRADED;
         gpu_intel_panel(info);
-        return KMOD_DEGRADED;
+        return 1;
     }
 
     info->de_port_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_PORT_ISR);
     info->de_misc_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_MISC_ISR);
     if (info->de_port_isr == 0xFFFFFFFFu || info->de_misc_isr == 0xFFFFFFFFu) {
+        info->state = KMOD_FAIL;
         kerror("gpu: Intel display MMIO did not answer (KMOD_FAIL)");
-        return KMOD_FAIL;
+        return -1;
     }
 
     info->edp_ctl = gpu_intel_mmio_read(GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP);
     if (info->edp_ctl == 0xFFFFFFFFu) {
+        info->state = KMOD_FAIL;
         kerror("gpu: Intel eDP state did not answer (KMOD_FAIL)");
-        return KMOD_FAIL;
+        return -1;
     }
 
     if ((info->edp_ctl & GPU_INTEL_DDI_ENABLE) != 0u) {
@@ -327,6 +381,7 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
         }
     }
 
+    info->state = KMOD_OK;
     gpu_intel_panel(info);
-    return KMOD_OK;
+    return 0;
 }
