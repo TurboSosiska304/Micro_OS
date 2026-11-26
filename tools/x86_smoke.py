@@ -1611,10 +1611,14 @@ def check(output: str) -> list:
         re.search(r"(?m)^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\r?$", moment) is not None,
         repr(moment),
     )
+    # The guest prints UTC (the RTC of the machine, not the zone of the host),
+    # so between midnight and the offset of the host the two days differ and
+    # the check compared a correct clock with the wrong day.
+    day_utc = time.strftime("%Y-%m-%d", time.gmtime())
     expect(
         "date names the day of the machine and not another year",
-        time.strftime("%Y-%m-%d") in moment,
-        f"{repr(moment)}, the host is {time.strftime('%Y-%m-%d')}",
+        day_utc in moment,
+        f"{repr(moment)}, the host is {day_utc} in UTC",
     )
     # The limits of the shell come from the kernel: the memory, the CPU time
     # and the descriptors, at the ceiling of the system after the boot.
