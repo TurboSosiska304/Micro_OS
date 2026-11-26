@@ -12,14 +12,34 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ## [Unreleased]
 
-## [2.0.1] - 2026-11-25
+## [2.0.2] - 2026-11-26
 
 ### The release
 
-- 2.0.1: the machine that starts on a laptop of a real person. 2.0.0 met a
-  card of the family 82574/I219 for the first time and stopped before the
-  shell; the reset of a card that was still the master of the bus is the
-  cause, and the driver no longer does it.
+- 2.0.2 "Composition": 2.0 on the medium a person boots. 2.0.1 was tagged and
+  withdrawn the same day, because the tag named a tree where the work of the
+  wire was still uncommitted and the image hung exactly where 2.0.0 did; its
+  content is the first half of this section.
+
+### Added
+
+- The desk on a read-only root: `/tmp` is a **ramfs** when `/` was mounted
+  read-only (the stick of a laptop, the ISO by design). A file takes 1 KiB
+  blocks from the kernel allocator as it is written and gives them back when
+  it is removed, the last mebibyte of the heap (`RAMFS_RESERVE_KB`) is out of
+  reach of a write and answers `ENOSPC`, `df` names the space honestly, and
+  the board does not build the filesystem at all. Without it `wm` had no file
+  for the pixels of a window, every window stayed empty and `/bin/term` died
+  with code 138 on the stick of 2.0.1.
+- The framebuffer is **write-combining**: `IA32_PAT` entry 5 on every core
+  (set in `paging_init_cpu()`, which each AP runs too), the PTE of the window
+  `0x800000000000108b` instead of write-back, the UEFI GOP window that was
+  uncached at all, and a write-through PTE `0x800000000000008b` on a machine
+  without PAT. A glyph is drawn as one row of 8 bytes and copied with one
+  `memcpy`, and the UEFI conversion copies 128 pixels at a time.
+- `mfetch` says what the machine is and not how it was built: the version, the
+  machine, the cores in use against the cores the firmware reported, the
+  memory and the disk with a bar, the uptime with the tasks, the modules.
 
 ### Fixed
 
@@ -54,9 +74,23 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   names no station leaves the wire off with a line in the log.
 - Every step of the init prints a line, so a boot that stops says where - the
   image of this release was found by reading one screen.
+- The smokes boot the medium the release hands out: `x86-iso-desk-smoke`
+  builds the ISO, boots it, checks that `/tmp` is a ramfs, starts the desk from
+  the shell, opens the terminal with `Alt+T`, types into it and closes it with
+  `Alt+F4`. The frame check of `x86-vga-smoke` searches the frame for the
+  banner instead of assuming its row, so a boot that logs one line more does
+  not turn four checks red.
 
 ### Known
 
+- **The image still runs on one core.** `KERNEL_SMP` stays off in the build of
+  this release: eight cores were made to work (the log says `8 in use`, the
+  gates of two cores pass), but the shell of the soak stops answering once in
+  a few runs and the cause is not named yet. A machine that occasionally
+  freezes is worse than a slower one; the branch is kept for 2.0.3, and
+  `docs/plan-2.0.2.md` says why.
+- The clean `poweroff` does not switch the laptop off and a fault follows the
+  write of S5; it is the defect of 2.0.3 with the SMP one.
 - The MAC of a card whose NVM is held by the management engine comes out of
   the filter as `0e:0e:0e:0e:0e:0e`, which is a locally administered address
   and not the station of the card (K24 of `docs/debts.md`).
