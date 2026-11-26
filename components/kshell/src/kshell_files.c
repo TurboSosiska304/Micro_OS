@@ -12,6 +12,7 @@
 #include "kernel/config.h"
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
+#include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs.h"
@@ -1372,11 +1373,23 @@ static int rm_children(const char *path, int depth)
 {
     static struct vfs_dirent entries[SHELL_RM_ENTRIES];
     char name[VFS_NAME_MAX + 1];
+    char last[VFS_NAME_MAX + 1];
     char child[SHELL_PATH_MAX];
+    unsigned stuck = 0;
+    k_u64_t deadline = k_sched_uptime_ms() + 30000u;
+
+    last[0] = '\0';
 
     for (;;) {
         k_size_t count = 0;
-        int rc = vfs_list(path, entries, SHELL_RM_ENTRIES, &count);
+        int rc;
+
+        if (k_sched_uptime_ms() > deadline) {
+            kshell_printf("rm: %s: the removal took too long\n", path);
+            return KSHELL_ERROR;
+        }
+
+        rc = vfs_list(path, entries, SHELL_RM_ENTRIES, &count);
 
         if (rc != 0) {
             kshell_printf("rm: %s: %s\n", path, path_error_text(path, rc));
@@ -1387,16 +1400,25 @@ static int rm_children(const char *path, int depth)
             return KSHELL_OK;
         }
 
-        /* The name is copied before the walk goes one level down: the table
-         * belongs to the directory that was listed last. */
         snprintf(name, sizeof(name), "%s", entries[0].name);
+
+        if (strcmp(name, last) == 0) {
+            if (++stuck >= 8) {
+                kshell_printf("rm: %s/%s: the entry could not be removed\n", path, name);
+                return KSHELL_ERROR;
+            }
+        } else {
+            snprintf(last, sizeof(last), "%s", name);
+            stuck = 0;
+        }
 
         if (!ls_child_path(path, name, child, sizeof(child))) {
             return path_too_long("rm");
         }
 
-        if (rm_path(child, true, depth + 1) != KSHELL_OK) {
-            return KSHELL_ERROR;
+        rc = rm_path(child, true, depth + 1);
+        if (rc != KSHELL_OK) {
+            return rc;
         }
     }
 }
