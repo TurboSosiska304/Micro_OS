@@ -1564,6 +1564,8 @@ add_executable(microos64
     src/fb.c
     src/font_spleen.c
     src/pci.c
+    src/gpu.c
+    src/gpu_amd.c
     src/ps2.c
     src/acpi.c
     src/xhci.c

@@ -70,6 +70,7 @@ static void run_tests(void *arg)
     test_input_debounce();
     test_input_hid();
     test_ps2();
+    test_gpu_amd();
     test_battery_soc();
     test_fb_draw();
     test_rtc();

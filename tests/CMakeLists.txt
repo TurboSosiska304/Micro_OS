@@ -45,6 +45,7 @@ if(NOT ESP_PLATFORM)
         cases/test_input_debounce.c
         cases/test_input_hid.c
         cases/test_ps2.c
+        cases/test_gpu_amd.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c
@@ -156,6 +157,8 @@ if(NOT ESP_PLATFORM)
         # The verifier of ADR 0020 and its two primitives: the boot loader and
         # the tool compile the same files, and the test is the third caller.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
+        # Pure GPU ID tables for host unit tests.
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/include"
         # The directory of the `progs` partition (ADR 0022): read by the port
         # of the board and by the test, written by tools/progs_image.py.
         "${CMAKE_SOURCE_DIR}/components/port_esp32/include"
