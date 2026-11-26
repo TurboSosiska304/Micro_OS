@@ -614,3 +614,21 @@ usable; the USB of a modern laptop is not. What is needed is a read of the
 port's link state and of the protocol speed before a reset (`PORTSC.CCS` and
 `PLS`), the reset only of a port that is in the `RxDetect` state, and a
 second look after a delay of the root port, not five attempts in a row.
+
+## K27 - The shell that stopped on eight cores
+
+`make soak-smp` sometimes answered `the shell answered nothing in 20 s` after
+25–120 seconds. The BKL was free and no sleeping mutex had been taken under
+it. A live timer sample named the real path: a stage could wait in
+`sys_open -> mfs_stat -> k_port_mutex_lock -> port_x86_64_yield_to_idle()`.
+The mutex was owned by a boot context destroying a dead program's address
+space. Yielding to the waiter's own idle context could not resume the owner
+on another core, so the shell waited for ever.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| A boot context can own a filesystem or cache mutex across a preemption. A task on another core used to yield locally instead of resuming the owner, and the shell then waited for ever. | `ports/port_x86_64/src/{port_x86_64.c,port_x86_64_task.c}` | done | The mutex records the boot owner's core; a remote waiter asks that core to resume its saved boot context through the scheduler IPI. The eight-core soak is the regression gate. |
+| COM1 polled THR without a deadline while `k_port_write()` held the BKL. This was not the K27 spin (the counters stayed zero), but a stopped serial reader could still freeze every core. | `ports/port_x86_64/src/port_x86_64.c` | done | A 100 ms TSC deadline, counted spins before calibration, dropped bytes during an outage, and live RIP/RSP plus counters in `smp`. |
+
+Turning `KERNEL_SMP` on in a release image remains a separate release decision;
+this lane closes the intermittent hang and does not change the default.
