@@ -132,22 +132,10 @@ void *memcpy(void *dest, const void *source, size_t count)
 {
     unsigned char *to = (unsigned char *)dest;
     const unsigned char *from = (const unsigned char *)source;
+    size_t i;
 
-    while (count > 0u && (((size_t)to) & 7u) != 0u) {
-        *to++ = *from++;
-        count--;
-    }
-
-    while (count >= 8u) {
-        __builtin_memcpy(to, from, 8u);
-        to += 8u;
-        from += 8u;
-        count -= 8u;
-    }
-
-    while (count > 0u) {
-        *to++ = *from++;
-        count--;
+    for (i = 0; i < count; i++) {
+        to[i] = from[i];
     }
 
     return dest;
@@ -158,7 +146,7 @@ void *memmove(void *dest, const void *source, size_t count)
     unsigned char *to = (unsigned char *)dest;
     const unsigned char *from = (const unsigned char *)source;
 
-    if (to == from || count == 0u) {
+    if (to == from || count == 0) {
         return dest;
     }
 
@@ -166,28 +154,11 @@ void *memmove(void *dest, const void *source, size_t count)
         return memcpy(dest, source, count);
     }
 
-    to += count;
-    from += count;
-
-    while (count > 0u && (((size_t)to) & 7u) != 0u) {
-        to--;
-        from--;
-        *to = *from;
+    /* The ranges overlap and the destination is above the source: copy from
+     * the end, so that a byte is read before it is overwritten. */
+    while (count > 0) {
         count--;
-    }
-
-    while (count >= 8u) {
-        to -= 8u;
-        from -= 8u;
-        count -= 8u;
-        __builtin_memcpy(to, from, 8u);
-    }
-
-    while (count > 0u) {
-        to--;
-        from--;
-        *to = *from;
-        count--;
+        to[count] = from[count];
     }
 
     return dest;
@@ -196,27 +167,10 @@ void *memmove(void *dest, const void *source, size_t count)
 void *memset(void *dest, int byte, size_t count)
 {
     unsigned char *to = (unsigned char *)dest;
-    unsigned char value = (unsigned char)byte;
-    unsigned long long word = (unsigned long long)value;
+    size_t i;
 
-    word |= word << 8;
-    word |= word << 16;
-    word |= word << 32;
-
-    while (count > 0u && (((size_t)to) & 7u) != 0u) {
-        *to++ = value;
-        count--;
-    }
-
-    while (count >= 8u) {
-        __builtin_memcpy(to, &word, 8u);
-        to += 8u;
-        count -= 8u;
-    }
-
-    while (count > 0u) {
-        *to++ = value;
-        count--;
+    for (i = 0; i < count; i++) {
+        to[i] = (unsigned char)byte;
     }
 
     return dest;
