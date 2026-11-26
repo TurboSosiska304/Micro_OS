@@ -1344,6 +1344,29 @@ static int cmd_mkdir(int argc, char **argv)
 
 static int rm_path(const char *path, bool recursive, int depth);
 
+/* A mount point is not a directory of the volume above it: removing it would
+ * cross into another filesystem, or take the root of the whole tree away. */
+static bool shell_is_mount_point(const char *path)
+{
+    k_size_t count = vfs_mount_count();
+    k_size_t i;
+
+    for (i = 0; i < count; i++) {
+        const char *point = vfs_mount_name(i);
+
+        if (point != NULL && strcmp(point, path) == 0) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool shell_is_root_path(const char *path)
+{
+    return path != NULL && path[0] == '/' && path[1] == '\0';
+}
+
 /* Remove every entry of a directory that is already known to be a directory. */
 static int rm_children(const char *path, int depth)
 {
@@ -1383,6 +1406,11 @@ static int rm_children(const char *path, int depth)
  * that is not empty goes away only after its entries: the filesystem refuses
  * to drop a record that still holds names, which is what the check of the
  * non-empty directory is.
+ *
+ * The root and a mount point are never removed by the shell. A mount point is
+ * a boundary between filesystems, not a directory of the volume above it: the
+ * walk does not cross it, and the hint "use -r" is never given for an object
+ * the shell will not remove.
  */
 static int rm_path(const char *path, bool recursive, int depth)
 {
@@ -1391,11 +1419,28 @@ static int rm_path(const char *path, bool recursive, int depth)
 
     rc = vfs_stat(path, &info);
     if (rc != 0) {
+        /* A mount point whose root the filesystem cannot stat is still a
+         * mount point; the walk must stop at the boundary. */
+        if (shell_is_mount_point(path)) {
+            kshell_printf("rm: %s: is a mount point\n", path);
+            return KSHELL_ERROR;
+        }
+
         kshell_printf("rm: %s: %s\n", path, path_error_text(path, rc));
         return KSHELL_ERROR;
     }
 
     if (info.type == 2) {
+        if (shell_is_root_path(path)) {
+            kshell_printf("rm: /: the root of the filesystem is not removed by the shell\n");
+            return KSHELL_ERROR;
+        }
+
+        if (shell_is_mount_point(path)) {
+            kshell_printf("rm: %s: is a mount point\n", path);
+            return KSHELL_ERROR;
+        }
+
         if (!recursive) {
             kshell_printf("rm: %s: is a directory, use -r\n", path);
             return KSHELL_ERROR;

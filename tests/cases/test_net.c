@@ -199,14 +199,57 @@ static void test_get(void)
     KT_CHECK_INT_EQ(response.status, 404);
     KT_CHECK_STR_EQ(body, "not found");
 
-    /* A body longer than the buffer is cut, not overflowed. */
+    /* A body longer than the buffer is cut, not overflowed, and the
+     * answer names the cut instead of lying about the file. */
     g_answer = "HTTP/1.0 200 OK\r\nContent-Length: 10\r\n\r\n0123456789";
     g_answer_len = strlen(g_answer);
     g_answer_chunk = 16;
 
     KT_CHECK_INT_EQ(http_get(&g_transport, "http://example.com/", body, 8, &response), HTTP_OK);
     KT_CHECK_INT_EQ(response.length, 7);
+    KT_CHECK(response.truncated);
+    KT_CHECK_INT_EQ(response.total, 10);
     KT_CHECK_STR_EQ(body, "0123456");
+
+    /* A 600-byte body fits in a buffer that is large enough, and a 256-byte
+     * buffer reports the cut with the total the server named - the console
+     * must not lie about the size of the file. */
+    {
+        char big[700];
+        char small[257];
+        char payload[601];
+        struct http_response big_r;
+        struct http_response small_r;
+        unsigned i;
+
+        for (i = 0; i < 600; i++) {
+            payload[i] = (char)('a' + (int)(i % 26));
+        }
+        payload[600] = '\0';
+
+        snprintf(big, sizeof(big), "HTTP/1.0 200 OK\r\nContent-Length: 600\r\n\r\n%s", payload);
+        g_answer = big;
+        g_answer_len = strlen(g_answer);
+        g_answer_chunk = 64;
+
+        KT_CHECK_INT_EQ(
+            http_get(&g_transport, "http://example.com/big", small, sizeof(small), &small_r),
+            HTTP_OK);
+        KT_CHECK_INT_EQ(small_r.length, 256);
+        KT_CHECK(small_r.truncated);
+        KT_CHECK_INT_EQ(small_r.total, 600);
+
+        g_answer = big;
+        g_answer_len = strlen(g_answer);
+        g_answer_chunk = 64;
+
+        KT_CHECK_INT_EQ(
+            http_get(&g_transport, "http://example.com/big", payload, sizeof(payload), &big_r),
+            HTTP_OK);
+        KT_CHECK_INT_EQ(big_r.length, 600);
+        KT_CHECK(!big_r.truncated);
+        KT_CHECK_INT_EQ(big_r.total, 600);
+    }
 }
 
 static void put_be32(k_u8_t *p, k_u32_t value)

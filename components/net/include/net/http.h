@@ -83,6 +83,8 @@ struct http_transport {
 struct http_response {
     int status;      /* 200, 404, ... */
     k_size_t length; /* the bytes of the body that are in the buffer */
+    k_size_t total;  /* Content-Length when the server sent it, else 0 */
+    bool truncated;  /* the body was longer than the buffer */
 };
 
 /*

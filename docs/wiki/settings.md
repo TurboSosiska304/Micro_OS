@@ -29,8 +29,10 @@ theme=dark
 * a line without `=` or with a key that is not one is skipped and counted;
   the boot names the number of skipped lines once in the log.
 * a value the system cannot read (a number where a word belongs, 400 where
-  100 is the ceiling) is the **default of the key** and a warning. The file is
-  not rewritten: the text stays what the person typed.
+  100 is the ceiling) does not take effect: the machine uses the **default of
+  the key** and writes a warning to the log. The file is not rewritten, so the
+  text stays what the person typed; `config get` shows that text, not the
+  default the machine is using.
 * a key the system does not know is **kept** in the file and named once in the
   log: a newer release may know it, and this one must not delete it.
 * a file holds at most 12 pairs and 127 characters, because it is one value of
@@ -139,6 +141,13 @@ A machine that cannot honour the system writes the file, logs the reason and
 answers `SETTINGS_KEPT`; the shell prints the value with the sentence that
 says it is kept. That is not an error: a card with a `/etc/display` of another
 machine is a card that boots.
+
+A value that is out of the range of its key is the other case: the file keeps
+the text, the machine uses the default of the key, and the boot log names the
+default. `config set display.rotation 400` writes `rotation=400` to the file,
+but the applier of the display reads it as an invalid rotation and uses `0`;
+`config get display.rotation` therefore answers `400` until the file is edited,
+while the screen stays at the default.
 
 ## When it is applied, and by whom
 

@@ -132,7 +132,9 @@ microos> rm /hello.txt
 `write` replaces the file and appends a newline; the text is one line of at
 most 127 bytes. The count of the answer has the word of the number (`1 byte`,
 `2 bytes`), and a text that is cut says how many bytes of it were kept. `rm`
-removes a file, not a directory, and there is no `-r` without the flag.
+removes a file; `rm -r` removes a directory and its tree. The root of the
+filesystem is not removed, and a recursive walk does not cross a mount point -
+`/proc` and `/dev` stay where the kernel put them.
 `df` prints the free blocks and inodes of the filesystem of the path, and a
 path that is not there is `df: /nope: no such file or directory` instead of the
 numbers of the root. The block is the unit of the volume and the line names it:
@@ -502,9 +504,10 @@ the honest part of the answer:
 
 ## Mounting a volume
 
-`mount` without a word lists the points of the tree, in the order the boot
-mounted them. With the three words `device point type` it mounts a volume of a
-registered type; `umount` gives the point back:
+`mount` without a word lists the mounted filesystems: the device, the point,
+the type and whether the volume is read or written. With the three words
+`device point type` it mounts a volume of a registered type; `umount` gives
+the point back:
 
 ```text
 microos> mount
