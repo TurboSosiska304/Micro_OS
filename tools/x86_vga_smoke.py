@@ -4075,7 +4075,7 @@ def run_boot_desktop(
             # The ACPI S5 of QEMU is a few seconds of a machine under load and
             # the power of the guest is the end of the process: the wait is the
             # patience of two timeouts and not the window of one.
-            deadline = time.monotonic() + 2 * timeout
+            deadline = time.monotonic() + 4 * timeout
             while machine.process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.2)
 
