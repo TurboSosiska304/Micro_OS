@@ -13,6 +13,8 @@
  * no Linux source code was copied. Register-level facts, when added, must carry
  * a provenance note naming the upstream path/revision and the fact taken, per
  * docs/plan-gpu.md section 5.
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #ifndef MICRO_OS_PORT_X86_64_GPU_H
 #define MICRO_OS_PORT_X86_64_GPU_H
@@ -24,6 +26,8 @@
 /* The MMIO window of the GPU registers in the top 2 GiB, after the e1000e
  * window. One 2 MiB page is enough for the 256 KiB register BAR of Polaris. */
 #define PORT_X86_64_GPU_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
+/* One 4 KiB page window into BAR0 for a read-only VRAM probe. */
+#define PORT_X86_64_GPU_VRAM_VIRT (PORT_X86_64_KERNEL_BASE + 0x3C000000ull)
 
 enum gpu_probe_result {
     GPU_PROBE_NONE = 0,        /* not this vendor's responsibility */
@@ -49,10 +53,24 @@ struct gpu_info {
     k_u8_t bus;
     k_u8_t slot;
     k_u8_t function;
-    k_u64_t mmio_base;  /* physical base of register MMIO BAR, 0 if unknown */
-    k_u32_t mmio_size;  /* size of register MMIO BAR, 0 if unknown */
-    k_u64_t vram_bytes; /* VRAM/aperture size in bytes, 0 when unknown */
-    char name[64];      /* human name / description, NUL-terminated */
+    k_u64_t mmio_base;         /* physical base of register MMIO BAR, 0 if unknown */
+    k_u32_t mmio_size;         /* size of register MMIO BAR, 0 if unknown */
+    k_u64_t vram_bytes;        /* VRAM/aperture size in bytes, 0 when unknown */
+    k_u64_t vram_mc_bytes;     /* VRAM size from MC registers, 0 if unknown */
+    k_u32_t mc_config_memsize; /* raw CONFIG_MEMSIZE (MiB units in low bits) */
+    k_u32_t mc_arb_ramcfg;
+    k_u32_t mc_shared_chmap;
+    k_u32_t mc_vm_mx_l1_tlb_cntl;
+    k_u32_t mc_seq_misc0;
+    k_u32_t gb_addr_config;
+    k_u8_t mc_num_channels;
+    k_u8_t mc_chansize; /* 32 or 64 */
+    k_u8_t gc_num_se;
+    k_u8_t gc_num_sh_per_se;
+    bool vram_read_ok;
+    k_u32_t vram_sample;
+    k_u64_t vram_probe_offset;
+    char name[64]; /* human name / description, NUL-terminated */
 
     /* Optional Intel display detail: formatted when display_gen != 0. */
     k_u8_t display_gen;
