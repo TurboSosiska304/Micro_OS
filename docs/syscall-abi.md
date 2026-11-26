@@ -156,6 +156,8 @@ chose.
 | 49 | `clock_gettime` | `clock, buf` | 0 and the moment in the place of the caller, or an error |
 | 50 | `getrusage` | `buf` | 0 and the use of the processor in the place of the caller, or an error |
 | 51 | `chgrp` | `path, group` | 0, or an error |
+| 52 | `getpgid` | `pid` | the process group of `pid` (0 for the caller), or an error |
+| 53 | `setpgid` | `pid, pgid` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
@@ -165,8 +167,10 @@ file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
 descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6).
 The lane of 1.8 added the directory of a task 48, the clock 49 and the use of
 the processor 50; the three are below. The group of an object took 51 beside
-the owner (ADR 0044). A call that is not in the table is `ENOSYS`, never a
-guess at what it might have meant.
+the owner (ADR 0044). The process group of a task took 52 and 53, the minimal
+slice of job control: a tty has a foreground group and Ctrl+C is delivered to
+it. A call that is not in the table is `ENOSYS`, never a guess at what it
+might have meant.
 
 ## The control commands of `ioctl`
 
@@ -180,6 +184,8 @@ numbers of a system call: a new command takes the next free one.
 | `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again; a give while another program holds the device changes nothing, so a program that starts a program keeps the picture |
 | `TCGETS` 0x5401 | `/dev/tty0`, `/dev/tty`, 0, 1 and 2 | the mode of the terminal, into a `struct termios` of 36 bytes |
 | `TCSETS` 0x5402 | the same | set the mode now; `TCSETSW` 0x5403 is the same and `TCSETSF` 0x5404 sets it and drops the input |
+| `TIOCGPGRP` 0x540F | the same | the foreground process group of the tty, into a `k_u32_t` |
+| `TIOCSPGRP` 0x5410 | the same | set the foreground process group of the tty from a `k_u32_t` |
 | `TIOCGWINSZ` 0x5413 | the same | the size of the screen in cells, into a `struct winsize` of 8 bytes |
 | `TIOCSWINSZ` 0x5414 | the same | accepted and ignored: nothing resizes a screen from a program |
 | `FIONREAD` 0x541B | the same | the bytes that wait to be read, into an `int` |

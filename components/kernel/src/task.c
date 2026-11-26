@@ -534,6 +534,129 @@ k_u32_t task_get_job(const struct task *t)
     return job;
 }
 
+void task_set_pgid(struct task *t, k_u32_t pgid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->pgid = pgid;
+    k_port_exit_critical();
+}
+
+k_u32_t task_get_pgid(const struct task *t)
+{
+    if (t == NULL) {
+        return 0;
+    }
+
+    k_port_enter_critical();
+    k_u32_t pgid = t->pgid;
+    k_port_exit_critical();
+    return pgid;
+}
+
+void task_set_sid(struct task *t, k_u32_t sid)
+{
+    if (t == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    t->sid = sid;
+    k_port_exit_critical();
+}
+
+k_u32_t task_get_sid(const struct task *t)
+{
+    if (t == NULL) {
+        return 0;
+    }
+
+    k_port_enter_critical();
+    k_u32_t sid = t->sid;
+    k_port_exit_critical();
+    return sid;
+}
+
+k_i32_t task_getpgid(k_u32_t pid)
+{
+    struct task *self = task_self();
+    struct task *t;
+
+    if (pid == 0) {
+        return self != NULL ? (k_i32_t)self->pgid : KERR_SRCH;
+    }
+
+    t = task_by_pid(pid);
+    if (t == NULL) {
+        return KERR_SRCH;
+    }
+
+    return (k_i32_t)t->pgid;
+}
+
+int task_setpgid(k_u32_t pid, k_u32_t pgid)
+{
+    struct task *self = task_self();
+    struct task *target;
+    k_u32_t want;
+    k_size_t i;
+
+    if (self == NULL) {
+        return KERR_PERM;
+    }
+
+    target = (pid == 0 || pid == self->pid) ? self : task_by_pid(pid);
+    if (target == NULL) {
+        return KERR_SRCH;
+    }
+
+    /* A task may change itself or its own child. */
+    if (target != self && target->parent != self) {
+        return KERR_PERM;
+    }
+
+    want = (pgid == 0) ? target->pid : pgid;
+
+    /* The group must stay inside the session. Moving into a group means the
+     * group leader (pgid == pid) is in the same session, or we create a new
+     * group whose leader is the target itself. */
+    if (want != target->pid) {
+        bool found = false;
+
+        k_port_enter_critical();
+        for (i = 0; i < TASK_MAX_TASKS; i++) {
+            struct task *t = &g_tasks[i];
+
+            if (!t->in_use) {
+                continue;
+            }
+            if (t->pid == want && t->sid == target->sid) {
+                found = true;
+                break;
+            }
+        }
+        k_port_exit_critical();
+
+        if (!found) {
+            return KERR_PERM;
+        }
+    }
+
+    k_port_enter_critical();
+    /* Session leader cannot change its pgid in this minimal slice. */
+    if (target->pid == target->sid && want != target->pgid) {
+        k_port_exit_critical();
+        return KERR_PERM;
+    }
+    target->pgid = want;
+    k_port_exit_critical();
+
+    return 0;
+}
+
 /*
  * The trampoline: every task starts running here. It marks the task as
  * running and calls the user entry point.
@@ -606,6 +729,8 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->arg = arg;
         t->stack_size = k_port_task_stack_size();
         t->parent = creator;
+        t->pgid = (creator != NULL) ? creator->pgid : t->pid;
+        t->sid = (creator != NULL) ? creator->sid : t->pid;
         t->uid = (creator != NULL) ? creator->uid : 0u;
         t->euid = (creator != NULL) ? creator->euid : 0u;
         t->suid = (creator != NULL) ? creator->suid : 0u;
@@ -629,6 +754,8 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
          */
         if (inherit != NULL && kind != TASK_INHERIT_NONE) {
             t->parent = inherit;
+            t->pgid = inherit->pgid;
+            t->sid = inherit->sid;
             t->job = inherit->job;
             task_set_cwd(t, task_get_cwd(inherit));
             task_creds_inherit(t, inherit);
@@ -1218,6 +1345,50 @@ int task_signal_send(k_u32_t pid, int sig)
     k_sched_unblock(t);
 
     return 0;
+}
+
+/*
+ * The signal of a process group: every living task whose pgid matches.
+ * PIDs are collected under the lock and signals sent outside it, same
+ * shape as task_signal_job. This is the delivery path for Ctrl+C on a tty
+ * with a foreground process group.
+ */
+int task_signal_pgrp(k_u32_t pgid, int sig)
+{
+    k_u32_t pids[TASK_MAX_TASKS];
+    k_size_t count = 0;
+    k_size_t i;
+    int sent = 0;
+
+    if (pgid == 0u) {
+        return KERR_INVAL;
+    }
+
+    k_port_enter_critical();
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = &g_tasks[i];
+
+        if (!t->in_use || t->pgid != pgid) {
+            continue;
+        }
+
+        if (t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+            continue;
+        }
+
+        pids[count++] = t->pid;
+    }
+
+    k_port_exit_critical();
+
+    for (i = 0; i < count; i++) {
+        if (task_signal_send(pids[i], sig) == 0) {
+            sent++;
+        }
+    }
+
+    return (sent > 0) ? 0 : KERR_SRCH;
 }
 
 /*

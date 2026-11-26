@@ -36,6 +36,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "kernel/tty.h"
+
 #include "kshell_internal.h"
 
 #include "kernel/console.h"
@@ -556,6 +558,8 @@ static int pipeline_run(struct pipeline *p)
     k_u32_t pids[KSHELL_STAGES_MAX];
     k_u32_t job;
     k_u32_t previous_job;
+    k_u32_t pgrp = 0;
+    k_u32_t self_pgid;
     int status = 0;
     int started = 0;
     int index;
@@ -594,10 +598,12 @@ static int pipeline_run(struct pipeline *p)
      * The job is the identity of the chain for as long as it runs. The task
      * of the shell owns no job of its own outside the line: the stages
      * inherit this value and the shell takes its old one back before it
-     * waits, so a later line is a different job.
+     * waits, so a later line is a different job. The foreground process
+     * group of the tty is moved to the pipeline so Ctrl+C reaches it.
      */
     job = self->pid;
     previous_job = task_get_job(self);
+    self_pgid = task_get_pgid(self);
     task_set_job(self, job);
 
     /*
@@ -650,6 +656,14 @@ static int pipeline_run(struct pipeline *p)
         pids[index] = task->pid;
         started++;
 
+        if (pgrp == 0) {
+            pgrp = task->pid;
+            (void)task_setpgid(task->pid, pgrp);
+            (void)k_tty_set_fg_pgrp(pgrp);
+        } else {
+            (void)task_setpgid(task->pid, pgrp);
+        }
+
         if (in_fd >= 0) {
             microos_close(in_fd);
         }
@@ -674,6 +688,7 @@ static int pipeline_run(struct pipeline *p)
             (void)pipeline_wait(pids[index], job);
         }
 
+        (void)k_tty_set_fg_pgrp(self_pgid);
         return KSHELL_ERROR;
     }
 
@@ -683,6 +698,7 @@ static int pipeline_run(struct pipeline *p)
         status = pipeline_wait(pids[index], job);
     }
 
+    (void)k_tty_set_fg_pgrp(self_pgid);
     return status;
 }
 

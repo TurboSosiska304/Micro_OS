@@ -352,6 +352,16 @@ int microos_getppid(void)
     return (int)ksys_getppid();
 }
 
+int microos_getpgid(unsigned pid)
+{
+    return (int)ksys_getpgid((k_u32_t)pid);
+}
+
+int microos_setpgid(unsigned pid, unsigned pgid)
+{
+    return ksys_setpgid((k_u32_t)pid, (k_u32_t)pgid);
+}
+
 /*
  * The fork. It is the number of the new task in the parent, and 0 in the
  * child - but the child of this fork is a task that re-runs the program of

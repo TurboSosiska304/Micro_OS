@@ -74,7 +74,9 @@
 #define KSYS_CLOCK_GETTIME 49 /* clock_gettime(clock, buf) */
 #define KSYS_GETRUSAGE 50     /* getrusage(buf) */
 #define KSYS_CHGRP 51         /* chgrp(path, group) */
-#define KSYS_COUNT 52         /* the number of the system calls */
+#define KSYS_GETPGID 52       /* getpgid(pid) -> pgid */
+#define KSYS_SETPGID 53       /* setpgid(pid, pgid) */
+#define KSYS_COUNT 54         /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -385,6 +387,8 @@ k_u64_t ksys_uptime(void);
 int ksys_reboot(void);
 int ksys_fork(void);
 int ksys_getppid(void);
+k_i32_t ksys_getpgid(k_u32_t pid);
+int ksys_setpgid(k_u32_t pid, k_u32_t pgid);
 int ksys_waitpid(int pid, int *status, int flags);
 void *ksys_malloc(k_size_t size);
 void ksys_free(void *ptr);

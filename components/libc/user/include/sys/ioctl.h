@@ -30,6 +30,8 @@ struct winsize {
 #define TCSETS 0x5402u     /* const struct termios *: set it */
 #define TCSETSW 0x5403u    /* the same, the output drained first */
 #define TCSETSF 0x5404u    /* the same, the input dropped */
+#define TIOCGPGRP 0x540Fu  /* pid_t *: foreground process group */
+#define TIOCSPGRP 0x5410u  /* const pid_t *: set foreground process group */
 #define TIOCGWINSZ 0x5413u /* struct winsize *: the size of the screen */
 #define TIOCSWINSZ 0x5414u /* const struct winsize *: accepted, ignored */
 #define FIONREAD 0x541Bu   /* int *: the bytes that wait to be read */
