@@ -146,14 +146,25 @@ int ui_canvas_frame(struct ui_canvas *canvas, const struct ui_rect *rect, k_u16_
 int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int cells, k_u16_t ink,
                    k_u16_t paper, const struct ui_font *font)
 {
+    enum { ATLAS_SLOTS = 32, ATLAS_MAX_W = 16, ATLAS_MAX_H = 32 };
+    struct glyph_slot {
+        char character;
+        k_u16_t ink;
+        k_u16_t paper;
+        k_u8_t scale;
+        k_u8_t cell_w;
+        k_u8_t cell_h;
+        const k_u8_t *(*glyph_fn)(char);
+        k_u16_t pixels[ATLAS_MAX_W * ATLAS_MAX_H];
+    };
+    static struct glyph_slot atlas[ATLAS_SLOTS];
     size_t length;
     bool ended = false;
     int index;
     int scale;
     int cell_w;
     int cell_h;
-    int row;
-    int column;
+    bool atlas_ok;
 
     if (!canvas_ready(canvas) || font == NULL || font->glyph == NULL || font->width <= 0 ||
         font->width > 8 || font->height <= 0 || font->scale < 0 || font->scale > 8 || cells < 0) {
@@ -163,16 +174,17 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
     scale = font->scale > 0 ? font->scale : 1;
     cell_w = ui_font_cell_width(font);
     cell_h = ui_font_cell_height(font);
+    atlas_ok = cell_w <= ATLAS_MAX_W && cell_h <= ATLAS_MAX_H;
 
-    /* The text is read up to its terminator and not up to `cells`: a buffer
-     * of a program holds a line and its NUL, and the bytes after the NUL are
-     * not the text of the line. */
     length = text != NULL ? strlen(text) : 0u;
 
     for (index = 0; index < cells; index++) {
         const k_u8_t *glyph;
         char character = ' ';
         int cell_x = x + index * cell_w;
+        int row;
+        int column;
+        bool full;
 
         if (!ended) {
             if (text == NULL || (size_t)index >= length) {
@@ -189,15 +201,53 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
             return -1;
         }
 
-        /* A cell outside the width paints nothing; a cell partly inside is
-         * clipped by the loop of the rows and the columns. */
         if (cell_x + cell_w <= 0 || cell_x >= canvas->width) {
             continue;
         }
 
-        /* One pixel of the glyph is a square of `scale` pixels of the cell, so
-         * the block of a set bit is painted in one pass of the loop and the
-         * ink of a small glyph is not a dotted line of a big cell. */
+        full = atlas_ok && cell_x >= 0 && y >= 0 && cell_x + cell_w <= canvas->width &&
+               y + cell_h <= canvas->height;
+
+        if (full) {
+            unsigned slot_index = ((unsigned char)character ^ ((unsigned)ink * 131u) ^
+                                   ((unsigned)paper * 17u) ^ ((unsigned)scale * 7u)) %
+                                  ATLAS_SLOTS;
+            struct glyph_slot *slot = &atlas[slot_index];
+
+            if (slot->character != character || slot->ink != ink || slot->paper != paper ||
+                slot->scale != (k_u8_t)scale || slot->cell_w != (k_u8_t)cell_w ||
+                slot->cell_h != (k_u8_t)cell_h || slot->glyph_fn != font->glyph) {
+                int grow;
+                int gcol;
+
+                slot->character = character;
+                slot->ink = ink;
+                slot->paper = paper;
+                slot->scale = (k_u8_t)scale;
+                slot->cell_w = (k_u8_t)cell_w;
+                slot->cell_h = (k_u8_t)cell_h;
+                slot->glyph_fn = font->glyph;
+
+                for (grow = 0; grow < cell_h; grow++) {
+                    for (gcol = 0; gcol < cell_w; gcol++) {
+                        slot->pixels[grow * ATLAS_MAX_W + gcol] =
+                            (glyph[grow / scale] & (k_u8_t)(0x80u >> (gcol / scale))) != 0u ? ink
+                                                                                              : paper;
+                    }
+                }
+            }
+
+            for (row = 0; row < cell_h; row++) {
+                k_u16_t *dst = canvas->pixels + (k_size_t)(y + row) * (k_size_t)canvas->width +
+                               (k_size_t)cell_x;
+                const k_u16_t *src = slot->pixels + row * ATLAS_MAX_W;
+
+                memcpy(dst, src, (k_size_t)cell_w * sizeof(k_u16_t));
+            }
+
+            continue;
+        }
+
         for (row = 0; row < cell_h; row++) {
             int py = y + row;
 
