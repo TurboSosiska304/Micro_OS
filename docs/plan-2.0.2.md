@@ -25,6 +25,10 @@ gate that boots that medium.
    one uncached transaction on a real machine. The console prints 5-10
    characters a second after the kernel takes the screen, and `wm` draws at the
    same speed. In QEMU the video memory is RAM, so no gate saw it.
+   **Fixed:** PAT entry 5 and the framebuffer PTE select WC, with a
+   write-through fallback without PAT; glyph rows and GOP conversion rows are
+   copied in batches. The TSC table and the PTE/PAT/MTRR read-back gate are in
+   `docs/bench.md` and ADR 0023. The real laptop number remains the owner's.
 3. **The end of a machine that does not switch off.** After the clean end and
    `power: the machine goes down: off`, the laptop keeps the machine on and the
    kernel faults on a user address:

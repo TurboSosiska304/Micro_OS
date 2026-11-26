@@ -234,7 +234,7 @@ bench` with no arguments. A row that moves by less than a tenth between a
 release and the one before it is not a signal; a row that moves by more is a
 claim that has to survive the spread of the runs.
 
-Six rows are the gate of a release, and a release does not pass while one of
+Seven rows are the gate of a release, and a release does not pass while one of
 them is missing or zero. (The tool refuses a table with any row missing; these
 are the ones the gate is read by.)
 
@@ -245,6 +245,7 @@ are the ones the gate is read by.)
 | `pipe` | the handoff of the pipe and the scheduler behind it |
 | `file_write` | the allocator and the writer of the filesystem |
 | `file_read` | the reader and the cache of the host |
+| `screen_text` | one full screen through the console and framebuffer |
 | `lat_syscall_p50` | the middle call of the door, in nanoseconds |
 
 The other rows are compared as well, and a release that loses one of them has
@@ -459,6 +460,45 @@ The other rows have the answers of the code they lean on:
 * `screen_text` is one write of 8 000 printable cells after a clear, timed by
   the TSC around the whole write. It is the console, the 8x16 glyphs and the
   framebuffer of one 160x50 screen, not the serial rate of `console`.
+
+## The framebuffer of 2.0.2
+
+The defect was measured on **26 November 2026** on an AMD Ryzen 5 5600 host
+(AuthenticAMD, 12 logical CPUs), QEMU 11.1.3 TCG, one emulated processor,
+256 MB and `-vga std`. The before tree is `03a3d869` (the TSC probes before the
+cache and drawing changes); the after tree is `8c1501ac`. The benchmark and
+compositor measurement launches waited until no other `qemu-system` process
+was running.
+
+| Work | Before | After | Change | Spread before / after |
+|---|---:|---:|---:|---:|
+| `screen_text` | **27.288787 ms** | **27.411804 ms** | +0.45 % | 1.18 % / 2.21 % |
+| `wm` first frame | **5.565531 ms** | **5.857697 ms** | +5.25 % | 54.15 % / 47.81 % |
+
+`screen_text` is the median of three `make bench` runs. Its runs were
+27 272 336, 27 288 787 and 27 595 228 ns before, and 27 744 985, 27 138 128 and
+27 411 804 ns after. The write is exactly 8 000 cells after a clear, with the
+TSC pair around the write; the calibration and the final newline are outside
+the interval.
+
+The `wm` row is the median of seven boots of the shell-started desktop on each
+side. The first full frame (wallpaper, panel and pointer, before the windows)
+is timed by TSC. Before: 5 512 635, 5 555 827, 5 558 533, 5 565 531, 5 828 795,
+5 891 803 and 8 526 266 ns. After: 5 613 390, 5 628 112, 5 652 283, 5 857 697,
+8 058 639, 8 186 520 and 8 413 897 ns. Both sides are bimodal: most frames are
+5.5-5.9 ms and a few are 8.1-8.5 ms. The spread is wider than the 5.25 %
+difference, so the table does **not** claim a compositor speedup or regression.
+
+That is the expected QEMU result: its video memory is ordinary RAM and TCG
+does not turn PAT write-combining into a faster store path. The text row also
+includes 8 000 COM1 byte stores, which dominate the short framebuffer work.
+The cache policy is therefore gated separately: `make x86-vga-smoke` reads
+back `PAT=0x0007040600070401` (entry 5 = WC), the framebuffer PTE
+`0x800000000000108b` (PAT, PWT, RW, P, PS and NX), an unchanged
+`MTRR_DEF_TYPE=0x0000000000000c06`, a clean W^X audit and the same picture. A
+second boot with `qemu64,-pat` requires the write-through PTE
+`0x800000000000008b` and the same pixels.
+The owner's laptop is the machine that can measure the real WC gain.
 
 ## Comparing two releases
 
