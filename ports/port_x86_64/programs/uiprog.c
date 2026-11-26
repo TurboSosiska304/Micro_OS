@@ -110,6 +110,9 @@ static int fill_strips(struct uiprog *program, int x, int y, int w, int h, k_u16
     return 0;
 }
 
+static int program_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color);
+static int program_blit(struct uiprog *program, int x, int y, int w, int h, const k_u16_t *pixels);
+
 /* The two calls of the target of `ui/draw.h` on the screen of the machine. */
 static int target_fill(void *context, const struct ui_rect *rect, k_u16_t color)
 {
