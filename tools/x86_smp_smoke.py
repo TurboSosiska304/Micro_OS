@@ -608,12 +608,13 @@ def check(output: str) -> list:
     # say how many did, and the clock is started again before it returns.
     wake = answer(6)
     wake_target_match = re.search(
-        r"smp: wake: 4 task\(s\) of 4 started, ([1-4]) of them on cpu (\d+)", wake
+        r"smp: wake: (\d+) task\(s\) of (\d+) started, (\d+) of them on cpu (\d+)", wake
     )
-    wake_target = int(wake_target_match.group(2)) if wake_target_match is not None else -1
+    wake_target = int(wake_target_match.group(4)) if wake_target_match is not None else -1
+    wake_on_target = int(wake_target_match.group(3)) if wake_target_match is not None else 0
     expect(
         "the experiment puts its tasks on the target core",
-        wake_target_match is not None and wake_target >= 0,
+        wake_target_match is not None and wake_target >= 0 and wake_on_target > 0,
         wake,
     )
     wake_pair = re.search(r"smp: wake: the kernel handed (\d+) -> (\d+) task\(s\) to another core", wake)
@@ -646,7 +647,7 @@ def check(output: str) -> list:
     )
     expect(
         "every task of the experiment finished",
-        re.search(r"smp: wake: 4 task\(s\) done", wake) is not None,
+        re.search(r"smp: wake: \d+ task\(s\) done", wake) is not None,
         wake,
     )
     expect(

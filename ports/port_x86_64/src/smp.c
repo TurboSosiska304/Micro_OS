@@ -844,7 +844,7 @@ static int smp_irq(int argc, char **argv)
  * The clock is started again before the command returns, whatever the tasks
  * did: a core left without a clock is a machine that stops taking work.
  */
-#define SMP_WAKE_TASKS 4u
+#define SMP_WAKE_TASKS 32u
 #define SMP_WAKE_SLEEP_MS 120u
 #define SMP_WAKE_WAIT_MS 20u
 #define SMP_WAKE_TIMEOUT_MS 5000u
