@@ -534,6 +534,16 @@ void port_x86_64_yield_to_idle(void)
     port_restore_flags(flags);
 }
 
+void port_x86_64_resume_boot(k_u32_t cpu)
+{
+    if (cpu == k_port_cpu_id() || cpu >= port_x86_64_smp_checked_in()) {
+        return;
+    }
+
+    (void)__atomic_fetch_or(&g_request[cpu], PORT_X86_64_REQUEST_BOOT_MUTEX, __ATOMIC_ACQ_REL);
+    port_x86_64_apic_send_ipi(port_x86_64_cpu_apic_id(cpu), PORT_X86_64_VECTOR_APIC_IPI);
+}
+
 /*
  * Wait for the next interrupt, or spin when there is no interrupt to wait
  * for. The state of the flag is the whole difference: before the table of
@@ -1305,6 +1315,20 @@ void port_x86_64_task_ipi(void)
      */
     if (self->current != NULL && self->current->task != NULL &&
         k_cpu_current() != self->current->task) {
+        return;
+    }
+
+    /*
+     * A task on another core can wait for a mutex held by this core's boot
+     * context. Yielding to the waiter's own idle context cannot release it;
+     * resume the owner's saved boot context instead. It finishes the section,
+     * returns to its idle loop, and the interrupted task is claimed again.
+     */
+    if ((request & PORT_X86_64_REQUEST_BOOT_MUTEX) != 0u && self->current != NULL &&
+        self->current != &self->boot && self->boot.rsp != 0u) {
+        commit_switch(self->current, &self->boot);
+        /* Resumed inside the handler: the interrupts stay off until iretq. */
+        release_pending();
         return;
     }
 

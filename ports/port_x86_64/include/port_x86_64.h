@@ -746,6 +746,7 @@ k_u32_t port_x86_64_tick_start(k_u32_t cpu);
  */
 #define PORT_X86_64_REQUEST_TIMER_OFF 0x1u
 #define PORT_X86_64_REQUEST_TIMER_ON 0x2u
+#define PORT_X86_64_REQUEST_BOOT_MUTEX 0x4u
 
 void port_x86_64_timer_off_request(k_u32_t cpu);
 void port_x86_64_timer_on_request(k_u32_t cpu);

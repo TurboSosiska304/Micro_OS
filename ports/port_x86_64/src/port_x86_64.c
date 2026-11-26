@@ -2119,7 +2119,8 @@ struct k_port_mutex {
      * exists, and MicroFS takes its lock for that too).
      */
     k_u64_t owner;
-    k_u32_t depth; /* the recursive takes of the owner */
+    k_u32_t depth;    /* the recursive takes of the owner */
+    k_u32_t boot_cpu; /* the idle context that owns a boot token */
 };
 
 #define PORT_MUTEX_BOOT ((k_u64_t)1)
@@ -2170,6 +2171,7 @@ k_port_mutex_t *k_port_mutex_create(void)
 
     mutex->owner = 0;
     mutex->depth = 0;
+    mutex->boot_cpu = KERNEL_CPUS_MAX;
 
     return mutex;
 }
@@ -2208,13 +2210,16 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
 
     for (;;) {
         k_u64_t owner;
+        k_u32_t boot_cpu;
 
         k_port_enter_critical();
         owner = mutex->owner;
+        boot_cpu = mutex->boot_cpu;
 
         if (owner == 0) {
             mutex->owner = self;
             mutex->depth = 1;
+            mutex->boot_cpu = self == PORT_MUTEX_BOOT ? k_port_cpu_id() : KERNEL_CPUS_MAX;
             k_port_exit_critical();
             return 0;
         }
@@ -2230,22 +2235,31 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
         k_port_exit_critical();
 
         if (owner == PORT_MUTEX_BOOT && self != PORT_MUTEX_BOOT) {
-            /* The owner is the context the core booted on: it is resumed
-             * only when no task is ready, so a task that yields and retries
-             * is a task that never gets the lock. Hand it the CPU. */
-            static k_u32_t idle_waits;
+            if (boot_cpu == k_port_cpu_id()) {
+                /* The owner is the context the core booted on: it is resumed
+                 * only when no task is ready, so a task that yields and retries
+                 * is a task that never gets the lock. Hand it the CPU. */
+                static k_u32_t idle_waits;
 
-            /*
-             * The first time is a line of the debug log: the path is rare
-             * (a section long enough for a tick to split it while the idle
-             * context of the core holds it), and a person looking at a
-             * machine that seems slow wants to know it happened.
-             */
-            if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
-                klog(K_LOG_LEVEL_DEBUG,
-                     "port: a task waited for a mutex of the boot context; the CPU was given");
+                /*
+                 * The first time is a line of the debug log: the path is rare
+                 * (a section long enough for a tick to split it while the idle
+                 * context of the core holds it), and a person looking at a
+                 * machine that seems slow wants to know it happened.
+                 */
+                if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
+                    klog(K_LOG_LEVEL_DEBUG,
+                         "port: a task waited for a mutex of the boot context; the CPU was given");
+                }
+                port_x86_64_yield_to_idle();
+                continue;
             }
-            port_x86_64_yield_to_idle();
+
+            /* The boot context belongs to another core. Its saved stack has to
+             * be resumed there; switching this core to its own idle context
+             * would leave the owner suspended for ever. */
+            port_x86_64_resume_boot(boot_cpu);
+            mutex_wait();
             continue;
         }
 
@@ -2277,6 +2291,7 @@ int k_port_mutex_unlock(k_port_mutex_t *mutex)
 
     mutex->depth = 0;
     mutex->owner = 0;
+    mutex->boot_cpu = KERNEL_CPUS_MAX;
 
     k_port_exit_critical();
 
