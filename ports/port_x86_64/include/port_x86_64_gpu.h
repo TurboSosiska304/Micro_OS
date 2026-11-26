@@ -13,6 +13,8 @@
  * no Linux source code was copied. Register-level facts, when added, must carry
  * a provenance note naming the upstream path/revision and the fact taken, per
  * docs/plan-gpu.md section 5.
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #ifndef MICRO_OS_PORT_X86_64_GPU_H
 #define MICRO_OS_PORT_X86_64_GPU_H

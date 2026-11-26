@@ -24,6 +24,7 @@ commercially; the note here is what the tree does.
 | SQLite | 3.54.1 | public domain | `third_party/sqlite`, the amalgamation, `/bin/sqlite3` | `/bin/sqlite3` of the x86-64 MicroFS image; `/etc/licenses/sqlite` in the image and `LICENSE.sqlite` in the x86-64 tar |
 | awk (the One True Awk) | 20240728 | Lucent permissive | `third_party/awk`, `ports/port_x86_64/programs` (the `main` is the release's `main.c`) | `/bin/awk` of the x86-64 MicroFS image; `/etc/licenses/awk` in the image and `LICENSE.awk` in the x86-64 tar |
 | kilo | 323d93b (tip) | BSD-2-Clause | `tests/ports/kilo`, the editor of the gate of the terminal (ADR 0051) | `/bin/ports/kilo` of the volume of `make ports-smoke` and `make tty-smoke`; `/etc/licenses/kilo` in that volume |
+| Linux amdgpu register facts (Polaris/gmc_v8, gfx8) | v6.12 | MIT | register indices/masks and decode facts in `ports/port_x86_64/src/gpu_amd.c`, `ports/port_x86_64/include/port_x86_64_gpu_amd.h` (code written here; no Linux source copied) | x86-64 kernel image; provenance in file headers and commit messages |
 
 Spleen is a font by Frederic Cambus; the license and the note are in
 [`third_party/spleen`](../third_party/spleen/README.md). The 8x16 table is

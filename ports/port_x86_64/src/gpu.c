@@ -10,6 +10,8 @@
  * observed on a live Sapphire Nitro+ RX 570 (1002:67df rev ef) on 26 Nov 2026
  * using lspci/sysfs/journalctl; no Linux source code was copied. See
  * docs/ports/x86/gpu-amd-recon.md and docs/plan-gpu.md section 5.
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #include "port_x86_64_gpu.h"
 

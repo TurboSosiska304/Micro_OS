@@ -4,6 +4,9 @@
  * The lookup is pure data: no PCI, no MMIO, no port dependencies. It guards
  * the "hello GPU" probe so a known card is identified and an unknown one is
  * not claimed. The vendor table is the stable surface Intel work will attach to.
+ *
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #include "ktest.h"
 #include "tests/tests.h"
