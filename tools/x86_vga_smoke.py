@@ -11,9 +11,9 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine seven times and checks the
-two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
-0030, ADR 0054):
+presses keys (sendkey). The test boots the machine eight times and checks the
+two screens of ADR 0023, the PAT and no-PAT framebuffer policies, and the
+programs of the interface (ADR 0028, ADR 0030, ADR 0054):
 
   1. the framebuffer (-vga std, the default): the boot says the screen is the
      framebuffer of 1280x800 by 128x57 cells, the screenshot is a PPM of
@@ -1582,6 +1582,60 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 machine.run_line("config set console.paper theme", timeout),
                 "the console did not go back to the pair of the theme",
             )
+        finally:
+            machine.close()
+
+    return checks
+
+
+def run_framebuffer_no_pat(loader: str, kernel: str, timeout: float, verbose: bool,
+                           display: str) -> list:
+    """A CPU without PAT still has a correct, write-through framebuffer."""
+    checks = []
+
+    with tempfile.TemporaryDirectory(prefix="microos-vga-no-pat-") as workdir:
+        machine = Machine(loader, kernel, workdir, "std", display, cpu="qemu64,-pat")
+
+        def expect(name: str, condition: bool, detail: str = "") -> None:
+            checks.append((f"framebuffer without PAT: {name}", bool(condition), detail))
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell reaches its prompt", booted, "the boot never reached the prompt")
+
+            serial = machine.read_serial()
+            expect(
+                "the framebuffer stays mapped",
+                "x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 160x50 cells" in serial,
+                "the fallback did not keep the framebuffer",
+            )
+            expect(
+                "the PTE reads back as write-through and NX",
+                "screen: framebuffer cache is write-through (no verified PAT), "
+                "PTE flags=0x800000000000008b" in serial
+                and "screen: framebuffer cache is write-combining" not in serial,
+                "the no-PAT PTE is not the expected write-through map",
+            )
+            expect(
+                "MTRRs are unchanged and the map is W^X",
+                re.search(r"screen: MTRR_DEF_TYPE=0x[0-9a-f]{16} \(unchanged\)", serial)
+                is not None
+                and "x86-64: the map is W^X, the text is read-only and the data is NX" in serial,
+                "the no-PAT boot did not read back MTRRs or audit W^X",
+            )
+
+            picture = machine.picture(workdir)
+            expect(
+                "the write-through picture is the same grid",
+                picture is not None
+                and (picture.width, picture.height) == (VBE_WIDTH, VBE_HEIGHT)
+                and picture.only_colors(GREY, BLACK)
+                and not picture.foreign_cells(GREY),
+                "the no-PAT picture has a foreign pixel or cell",
+            )
+
+            if verbose:
+                print(serial)
         finally:
             machine.close()
 
@@ -4125,6 +4179,7 @@ def main(argv: list) -> int:
 
     try:
         checks = run_framebuffer(loader, kernel, args.timeout, args.verbose, args.display)
+        checks += run_framebuffer_no_pat(loader, kernel, args.timeout, args.verbose, args.display)
         checks += run_ui(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)
