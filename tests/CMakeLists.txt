@@ -122,10 +122,8 @@ if(NOT ESP_PLATFORM)
         ${MICRO_OS_TEST_CASES}
     )
 
-    # The host case checks the identity table without an x86 PCI bus. The
-    # hardware probe itself is compiled by the x86-64 image, not by libc tests.
-    set_source_files_properties("${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
-        PROPERTIES COMPILE_DEFINITIONS GPU_INTEL_HOST_TEST=1)
+    # The Intel case links the real probe against an empty-bus PCI stub, so
+    # both the identity table and the no-card KMOD_SKIP path are exercised.
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")

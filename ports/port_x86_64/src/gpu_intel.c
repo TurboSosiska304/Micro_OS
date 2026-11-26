@@ -11,11 +11,9 @@
  */
 #include "gpu_intel.h"
 
-#ifndef GPU_INTEL_HOST_TEST
 #include "kernel/log.h"
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
-#endif
 
 /* The laptop first, then nearby Kaby Lake-R/Whiskey Lake identities. */
 static const struct gpu_intel_id g_gpu_intel_ids[] = {
@@ -38,8 +36,6 @@ const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
 
     return NULL;
 }
-
-#ifndef GPU_INTEL_HOST_TEST
 
 #define PCI_INTEL_VENDOR 0x8086u
 #define PCI_STATUS 0x06u
@@ -312,5 +308,3 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     gpu_intel_panel(info);
     return KMOD_OK;
 }
-
-#endif /* GPU_INTEL_HOST_TEST */
