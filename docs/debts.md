@@ -620,6 +620,19 @@ person. The list is the first entry of the procedure of 2.1
 | `help` on the simulator lists `http`, `wget`, `ota`, `ntp`, `httpd` and `mqtt`, and `docs/wiki/shell.md` says they are not registered there | L3 | the registration of the commands, `docs/wiki/shell.md` | The list of the commands is the machine's, and the page is generated from it or says why it differs. |
 | `sidebar` of the pages: `files.md` and `troubleshooting.md` say `rm` has no `-r` (it has), `files.md` shows `mount` printing only mount points (the machine prints `none on / type ...`), `shell.md` gives `cat > /tmp/f` and `ls /bin \| wc -l` as examples for a machine that has neither `/tmp` (on the simulator) nor `wc`, and `settings.md` promises a fallback to the default for a bad value (`config set display.rotation 400` keeps 400) | L3/L4 | `docs/wiki/*.md`, `components/config` | The pages are checked against the machine by the `log-smoke`/`help` list that 2.1 builds, and a value that does not apply says so instead of keeping the number. |
 
+## K30 - A full-screen program repaints the glass a line at a time
+
+`kilo` (and every full-screen program of `/bin/ports`) draws its screen with the
+escape sequences of a terminal, and a single keystroke makes it repaint the
+whole window. On a machine of a real laptop that repaint runs at the speed of
+plain output: the console writes the changed cells, but it decides what changed
+per escape sequence and flushes the whole row, so a one-character edit costs a
+screen of writes into the framebuffer.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The console has no notion of a dirty cell: an escape sequence that moves the cursor and writes one character redraws the row, and a program that repaints its window (the editor, the file manager of the desk) pays for the whole glass | `ports/port_x86_64/src/console.c`, the ANSI interpreter, `components/graphics` | open (found by the owner in 2.1, on `kilo`) | A dirty rectangle per row of cells, flushed once per read of the program's output and once per repaint, and a glyph atlas on the text path as well - the same damage model phase A of [`docs/plan-gpu.md`](plan-gpu.md) gives the desk. A test: one keystroke in a full-screen program touches at most two rows. |
+
 ## K25 - Five ports of the laptop that do not enumerate
 
 The xHCI of the test laptop reports five ports with a device and refuses all
