@@ -130,6 +130,8 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
             }
             return true;
         }
+    }
+
     /* The prompt is ordinary output and belongs in the log. From here until
      * the line ends, even an echo made by the port is hidden from run.log. */
     if (secret) {
