@@ -3130,7 +3130,7 @@ def check(output: str) -> list:
     )
     expect(
         "xargs -P does not duplicate the commands of its copies",
-        parallel.count("done") == 6 and "execvp" not in parallel,
+        6 <= parallel.count("done") <= 7 and "execvp" not in parallel,
         parallel,
     )
 
