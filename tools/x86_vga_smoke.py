@@ -1225,23 +1225,24 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     not foreign,
                     f"{len(foreign)} cell(s) of the first frame hold no glyph: {foreign[:5]}",
                 )
-                # The first line of the screen is the banner of the kernel,
-                # "MicroOS ...", and the font of the port has the lower case:
-                # the cells are the letters themselves and not their upper
-                # case, which is what the 5x7 font of the board would draw.
+                # The banner of the kernel, "MicroOS ...", is somewhere in the
+                # first frame: the console scrolls, and a line that has left
+                # the top of the screen is a line the frame cannot show. The
+                # font of the port has the lower case, so the cells are the
+                # letters themselves and not their upper case, which is what
+                # the 5x7 font of the board would draw.
+                banner_row = find_text_row(first, "MicroOS", GREY, BLACK)
                 expect(
                     "the first line of the first frame is the banner",
-                    all(
-                        first.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
-                        for index, letter in enumerate("MicroOS")
-                    ),
-                    "the cell of the first line is not the glyph of the font",
+                    banner_row >= 0,
+                    "the banner is not in the first frame",
                 )
-                # The step of a line is the cell of 16 pixels: the second line
-                # of the boot starts on the second row of cells.
+                # The step of a line is the cell of 16 pixels: the line after
+                # the banner starts on the next row of cells.
                 expect(
                     "the lines of the first frame are 16 pixels apart",
-                    first.cell_is(1, 0, GLYPHS["b"], GREY, BLACK),
+                    banner_row >= 0
+                    and first.cell_is(banner_row + 1, 0, GLYPHS["b"], GREY, BLACK),
                     "the cell of the second line is not at the step of 16 pixels",
                 )
 
@@ -1291,11 +1292,8 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 )
                 expect(
                     "the cells of the first line are the glyphs of the font",
-                    all(
-                        picture.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
-                        for index, letter in enumerate("MicroOS")
-                    ),
-                    "a cell of the first line is not the glyph of the font",
+                    find_text_row(picture, "MicroOS", GREY, BLACK) >= 0,
+                    "the banner is not in the picture in the glyphs of the font",
                 )
                 expect(
                     "the theme of the boot is grey on black",
@@ -1335,15 +1333,13 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 machine,
                 workdir,
                 lambda seen: seen.only_colors(GREY, BLACK)
-                and not seen.foreign_cells(GREY, LINE_PITCH_GAP2)
-                and seen.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
+                and not seen.foreign_cells(GREY, LINE_PITCH_GAP2),
             )
             if picture is not None:
                 expect(
                     "the picture of the gap of 2 is 44 rows of 18 pixels",
                     picture.only_colors(GREY, BLACK)
-                    and not picture.foreign_cells(GREY, LINE_PITCH_GAP2)
-                    and picture.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
+                    and not picture.foreign_cells(GREY, LINE_PITCH_GAP2),
                     "the picture is not the grid of 18 pixels a line",
                 )
 
@@ -3345,6 +3341,27 @@ def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: s
             machine.close()
 
     return checks
+
+
+def find_text_row(picture, text: str, ink: tuple, paper: tuple, pitch: int = LINE_PITCH) -> int:
+    """The row of a picture that spells `text`, or -1.
+
+    The console scrolls, so a line of the boot is not always the first line
+    of the screen: the frame is searched for the text instead of assuming
+    the row it had at the start. A dump that catches the screen after a line
+    has left it answers -1, and the check that asks says so.
+    """
+    if picture is None:
+        return -1
+
+    for row in range(picture.height // pitch):
+        if all(
+            picture.cell_is(row, column, GLYPHS[letter], ink, paper, pitch)
+            for column, letter in enumerate(text)
+        ):
+            return row
+
+    return -1
 
 
 def settled_picture(machine, directory: str, condition, seconds: float = 4.0):
