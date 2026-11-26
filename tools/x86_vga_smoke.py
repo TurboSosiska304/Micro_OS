@@ -1242,24 +1242,25 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     not foreign,
                     f"{len(foreign)} cell(s) of the first frame hold no glyph: {foreign[:5]}",
                 )
-                # The first line of the screen is the banner of the kernel,
-                # "MicroOS ...", and the font of the port has the lower case:
-                # the cells are the letters themselves and not their upper
-                # case, which is what the 5x7 font of the board would draw.
+                # Device probes log before the banner once the screen exists.
+                # Find the banner instead of assuming it is the first row, then
+                # verify the board line exactly one cell below it. The cells are
+                # the letters themselves, not the upper case of the 5x7 font.
+                banner = first.find_run("MicroOS", GREY, BLACK)
                 expect(
                     "the first line of the first frame is the banner",
-                    all(
-                        first.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
+                    banner is not None
+                    and all(
+                        first.cell_is(banner[0], index, GLYPHS[letter], GREY, BLACK)
                         for index, letter in enumerate("MicroOS")
                     ),
-                    "the cell of the first line is not the glyph of the font",
+                    "the banner is not a run of the glyphs of the font",
                 )
-                # The step of a line is the cell of 16 pixels: the second line
-                # of the boot starts on the second row of cells.
                 expect(
                     "the lines of the first frame are 16 pixels apart",
-                    first.cell_is(1, 0, GLYPHS["b"], GREY, BLACK),
-                    "the cell of the second line is not at the step of 16 pixels",
+                    banner is not None
+                    and first.cell_is(banner[0] + 1, 0, GLYPHS["b"], GREY, BLACK),
+                    "the board line is not one 16-pixel row below the banner",
                 )
 
             # --- the screen after the boot
@@ -1324,13 +1325,15 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     {"g", "p", "y"} <= seen,
                     f"the picture holds no glyph of {sorted({'g', 'p', 'y'} - seen)}",
                 )
+                banner = picture.find_run("MicroOS", GREY, BLACK)
                 expect(
-                    "the cells of the first line are the glyphs of the font",
-                    all(
-                        picture.cell_is(0, index, GLYPHS[letter], GREY, BLACK)
+                    "the cells of the banner line are the glyphs of the font",
+                    banner is not None
+                    and all(
+                        picture.cell_is(banner[0], index, GLYPHS[letter], GREY, BLACK)
                         for index, letter in enumerate("MicroOS")
                     ),
-                    "a cell of the first line is not the glyph of the font",
+                    "a cell of the banner line is not the glyph of the font",
                 )
                 expect(
                     "the theme of the boot is grey on black",
@@ -1366,19 +1369,22 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
             # picture is taken again until the grid it asks for is there. A
             # single dump after the line can catch the screen in the middle
             # of its own repaint.
-            picture = settled_picture(
-                machine,
-                workdir,
-                lambda seen: seen.only_colors(GREY, BLACK)
-                and not seen.foreign_cells(GREY, LINE_PITCH_GAP2)
-                and seen.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
-            )
+            def gap_ready(seen):
+                banner = seen.find_run("MicroOS", GREY, BLACK, LINE_PITCH_GAP2)
+                return (
+                    seen.only_colors(GREY, BLACK)
+                    and not seen.foreign_cells(GREY, LINE_PITCH_GAP2)
+                    and banner is not None
+                    and seen.cell_is(
+                        banner[0] + 1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2
+                    )
+                )
+
+            picture = settled_picture(machine, workdir, gap_ready)
             if picture is not None:
                 expect(
                     "the picture of the gap of 2 is 44 rows of 18 pixels",
-                    picture.only_colors(GREY, BLACK)
-                    and not picture.foreign_cells(GREY, LINE_PITCH_GAP2)
-                    and picture.cell_is(1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2),
+                    gap_ready(picture),
                     "the picture is not the grid of 18 pixels a line",
                 )
 
