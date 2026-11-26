@@ -923,4 +923,6 @@ const struct port_x86_64_info *port_x86_64_info(void);
 /* Write a line to COM1 without the kernel: for the failures of the boot. */
 void port_x86_64_panic(const char *text);
 
+
+
 #endif /* MICRO_OS_PORT_X86_64_H */

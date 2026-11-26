@@ -25,6 +25,7 @@
  * frame is built by hand (see stack_build()) and the arguments travel in the
  * callee-saved registers that the switch restores anyway.
  */
+#include "port_x86_64.h"
 #include "port_x86_64_task.h"
 
 #include <string.h>

@@ -16,6 +16,7 @@
 #include "port_x86_64.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/clock.h"
@@ -27,6 +28,7 @@
 #include "kernel/port/cpu.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
+#include "kernel/task.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
@@ -1815,33 +1817,68 @@ k_size_t k_port_psram_free(void)
  * publishes the writes of the section to the core that takes it next.
  */
 static k_u32_t g_critical_lock;
+static k_u32_t g_critical_owner = KERNEL_CPUS_MAX;
 
 static k_u64_t g_critical_flags[KERNEL_CPUS_MAX][CRITICAL_DEPTH_MAX];
 static k_u32_t g_critical_depth[KERNEL_CPUS_MAX];
 
+static void critical_debug_dump(k_u32_t self)
+{
+    static k_u32_t dumped;
+    k_u32_t owner = __atomic_load_n(&g_critical_owner, __ATOMIC_RELAXED);
+    k_u32_t cpu;
+    char buf[96];
+    int n;
+
+    if (__atomic_exchange_n(&dumped, 1u, __ATOMIC_ACQUIRE) != 0u) {
+        return;
+    }
+
+    n = snprintf(buf, sizeof(buf), "\r\n[BKL] spin timeout: cpu %u waiting, owner cpu %u\r\n",
+                 (unsigned)self, (unsigned)owner);
+    for (int i = 0; i < n; i++) {
+        com1_byte(buf[i]);
+    }
+
+    for (cpu = 0; cpu < KERNEL_CPUS_MAX; cpu++) {
+        struct task *t = k_cpu_by_id(cpu) ? k_cpu_by_id(cpu)->current : NULL;
+        n = snprintf(buf, sizeof(buf), "[BKL] cpu %u depth %u task %s\r\n", (unsigned)cpu,
+                     (unsigned)g_critical_depth[cpu], t != NULL ? t->name : "<none>");
+        for (int i = 0; i < n; i++) {
+            com1_byte(buf[i]);
+        }
+    }
+}
+
+
+
 static void critical_lock_acquire(void)
 {
-    /*
-     * The polite half of a test-and-set lock: an exchange on every turn would
-     * keep the cache line of the lock in the other core's cache, and the core
-     * that holds it is trying to finish a short section. The first exchange is
-     * the only one that must be atomic; after it fails the word is only read
-     * until it reads zero, and then one exchange again settles the race
-     * between two waiters.
-     */
+    k_u32_t spins = 0;
+
     for (;;) {
         if (__atomic_exchange_n(&g_critical_lock, 1u, __ATOMIC_ACQUIRE) == 0u) {
+            g_critical_owner = k_port_cpu_id();
             return;
         }
 
         while (__atomic_load_n(&g_critical_lock, __ATOMIC_RELAXED) != 0u) {
             __asm__ volatile("pause");
+            if (++spins == 0u) {
+                /* Wrapped: about many seconds; dump once. */
+                critical_debug_dump(k_port_cpu_id());
+            }
+        }
+
+        if ((spins & 0x3FFFFFFFu) == 0x3FFFFFFFu) {
+            critical_debug_dump(k_port_cpu_id());
         }
     }
 }
 
 static void critical_lock_release(void)
 {
+    g_critical_owner = KERNEL_CPUS_MAX;
     __atomic_store_n(&g_critical_lock, 0u, __ATOMIC_RELEASE);
 }
 
@@ -1864,6 +1901,14 @@ void k_port_enter_critical(void)
      */
     if (g_critical_depth[cpu] == 0u) {
         critical_lock_acquire();
+    } else if (g_critical_owner != cpu) {
+        char buf[80];
+        int n = snprintf(buf, sizeof(buf), "\r\n[BKL] owner mismatch cpu=%u owner=%u depth=%u\r\n",
+                         (unsigned)cpu, (unsigned)g_critical_owner,
+                         (unsigned)g_critical_depth[cpu]);
+        for (int i = 0; i < n; i++) {
+            com1_byte(buf[i]);
+        }
     }
 
     if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
