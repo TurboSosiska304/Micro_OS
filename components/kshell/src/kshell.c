@@ -698,7 +698,22 @@ static int cmd_sleep(int argc, char **argv)
         return KSHELL_USAGE;
     }
 
-    /* The text has to be a whole number, not the beginning of one. */
+    /* The text has to be a whole number, not the beginning of one. A
+     * negative number is not a small wait: it is a refusal before any sleep,
+     * and the message names the argument the person wrote. */
+    {
+        const char *p = argv[1];
+
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+
+        if (*p == '-') {
+            kshell_printf("sleep: %s: not a number of milliseconds\n", argv[1]);
+            return KSHELL_USAGE;
+        }
+    }
+
     ms = microos_strtoul(argv[1], &end, 10);
 
     if (end == argv[1] || (end != NULL && *end != '\0') || microos_errno() == MICROOS_ERANGE) {

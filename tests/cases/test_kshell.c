@@ -1421,6 +1421,32 @@ static void test_mount(void)
     ls_teardown();
 }
 
+static void test_sleep(void)
+{
+    char buf[512];
+    FILE *sink = tmpfile();
+    size_t used;
+    int rc;
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+    rc = kshell_execute("sleep -1");
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    port_host_set_sink(NULL);
+
+    KT_CHECK(rc != KSHELL_OK);
+    KT_CHECK(strstr(buf, "sleep: -1: not a number of milliseconds") != NULL);
+    KT_CHECK(strstr(buf, "18446744073709551615") == NULL);
+    KT_CHECK(strstr(buf, "slept 60000 ms") == NULL);
+}
+
 static void test_rm_guards(void)
 {
     struct vfs_stat info;
@@ -1502,6 +1528,7 @@ void test_kshell(void)
     test_kill();
     test_free();
     test_uptime();
+    test_sleep();
     test_date();
     test_memtest();
     test_mfetch();
