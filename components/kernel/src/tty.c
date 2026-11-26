@@ -79,6 +79,13 @@ struct k_tty {
      * key for Ctrl+C (ADR 0051 §8).
      */
     k_u32_t owner;
+
+    /* The session that owns this tty and the foreground process group that
+     * receives terminal signals (Ctrl+C). refs counts open descriptors so the
+     * session can be released when the last one closes. */
+    k_u32_t sid;
+    k_u32_t fg_pgrp;
+    k_u32_t refs;
 };
 
 /*
@@ -115,9 +122,16 @@ static struct k_tty g_console = {
 
 static void tty_init(struct k_tty *tty)
 {
+    k_u32_t sid = tty->sid;
+    k_u32_t fg_pgrp = tty->fg_pgrp;
+    k_u32_t refs = tty->refs;
+
     memset(tty, 0, sizeof(*tty));
     k_tty_defaults(&tty->mode);
     tty->pushback = -1;
+    tty->sid = sid;
+    tty->fg_pgrp = fg_pgrp;
+    tty->refs = refs;
 }
 
 /* The terminal of the calling task: the console, or the one of a task that
@@ -137,6 +151,7 @@ static struct k_tty *tty_current(void)
             return NULL;
         }
 
+        memset(tty, 0, sizeof(*tty));
         tty_init(tty);
         self->tty_state = tty;
     }
@@ -308,12 +323,19 @@ static void tty_echo(const char *data, k_size_t len)
     k_console_terminal_put(data, len);
 }
 
-/* The interrupt of the terminal: the job of the reader when it belongs to
- * one (a stage of a pipeline), the reader itself otherwise. */
-static void tty_interrupt(void)
+/* The interrupt of the terminal: the foreground process group of the tty
+ * when one is set, otherwise the job of the reader, otherwise the reader
+ * itself. Ctrl+C is a terminal signal - it goes to the group that owns the
+ * foreground, not to an arbitrary reader. */
+static void tty_interrupt(struct k_tty *tty)
 {
     struct task *self = task_self();
     k_u32_t job;
+
+    if (tty != NULL && tty->fg_pgrp != 0) {
+        (void)task_signal_pgrp(tty->fg_pgrp, K_SIGINT);
+        return;
+    }
 
     if (self == NULL) {
         return;
@@ -366,7 +388,7 @@ static int canon_one(struct k_tty *tty, int c)
         tty->length = 0;
         tty->position = 0;
         tty->cut = false;
-        tty_interrupt();
+        tty_interrupt(tty);
         return KERR_INTR;
     }
 
@@ -749,6 +771,26 @@ int k_tty_ioctl(k_u32_t request, k_u64_t arg)
         /* A program may set a size and the machine answers its own: nothing
          * resizes a screen from a program (ADR 0051 §6). */
         return 0;
+    case K_TTY_TIOCGPGRP: {
+        k_u32_t pgid = tty->fg_pgrp;
+
+        if (!user_range(arg, sizeof(pgid))) {
+            return KERR_FAULT;
+        }
+
+        tty_copy_to_user(arg, &pgid, sizeof(pgid));
+        return 0;
+    }
+    case K_TTY_TIOCSPGRP: {
+        k_u32_t pgid = 0;
+
+        if (!user_range(arg, sizeof(pgid))) {
+            return KERR_FAULT;
+        }
+
+        tty_copy_from_user(&pgid, arg, sizeof(pgid));
+        return k_tty_set_fg_pgrp(pgid);
+    }
     case K_TTY_FIONREAD: {
         k_i32_t count = 0;
 
@@ -817,6 +859,113 @@ bool k_tty_input_ready(void)
 bool k_tty_console_raw(void)
 {
     return tty_is_raw(&g_console);
+}
+
+void k_tty_set_canonical(void)
+{
+    struct k_tty *tty = tty_current();
+
+    if (tty == NULL) {
+        return;
+    }
+
+    tty->mode.c_lflag |= K_TTY_ICANON | K_TTY_ECHO | K_TTY_ISIG;
+    tty->mode.c_iflag |= K_TTY_ICRNL;
+    tty->mode.c_oflag |= K_TTY_OPOST | K_TTY_ONLCR;
+    tty->length = 0;
+    tty->position = 0;
+    tty->ready = false;
+    tty->cut = false;
+    tty->eof = false;
+}
+
+void k_tty_open(void)
+{
+    struct task *self = task_self();
+    struct k_tty *tty = tty_current();
+
+    if (tty == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    tty->refs++;
+    if (tty->sid == 0 && self != NULL) {
+        tty->sid = (self->sid != 0) ? self->sid : self->pid;
+        if (tty->fg_pgrp == 0) {
+            tty->fg_pgrp = (self->pgid != 0) ? self->pgid : self->pid;
+        }
+    }
+    k_port_exit_critical();
+}
+
+void k_tty_close(void)
+{
+    struct k_tty *tty = tty_current();
+
+    if (tty == NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    if (tty->refs > 0) {
+        tty->refs--;
+    }
+    if (tty->refs == 0) {
+        tty->sid = 0;
+        tty->fg_pgrp = 0;
+    }
+    k_port_exit_critical();
+}
+
+k_u32_t k_tty_fg_pgrp(void)
+{
+    struct k_tty *tty = tty_current();
+
+    return tty != NULL ? tty->fg_pgrp : 0;
+}
+
+int k_tty_set_fg_pgrp(k_u32_t pgid)
+{
+    struct task *self = task_self();
+    struct k_tty *tty = tty_current();
+    k_size_t i;
+    bool found = false;
+
+    if (tty == NULL || self == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (pgid == 0) {
+        return KERR_INVAL;
+    }
+
+    /* The caller must be in the tty's session, and the target pgrp must
+     * exist in that same session. */
+    k_port_enter_critical();
+    {
+        k_u32_t self_sid = (self->sid != 0) ? self->sid : self->pid;
+
+        for (i = 0; i < TASK_MAX_TASKS; i++) {
+            struct task *t = task_get_by_index_unlocked(i);
+            if (t == NULL || !t->in_use) {
+                continue;
+            }
+            if (t->pgid == pgid) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
+            tty->fg_pgrp = pgid;
+            if (tty->sid == 0) {
+                tty->sid = self_sid;
+            }
+        }
+    }
+    k_port_exit_critical();
+
+    return found ? 0 : KERR_PERM;
 }
 
 void k_tty_task_exit(struct task *t)

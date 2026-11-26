@@ -36,6 +36,8 @@ struct task;
 #define K_TTY_TCSETS 0x5402u
 #define K_TTY_TCSETSW 0x5403u /* the same as TCSETS: the output is never queued */
 #define K_TTY_TCSETSF 0x5404u /* set the mode, then drop the input */
+#define K_TTY_TIOCGPGRP 0x540Fu  /* foreground process group of the tty */
+#define K_TTY_TIOCSPGRP 0x5410u  /* set foreground process group of the tty */
 #define K_TTY_TIOCGWINSZ 0x5413u
 #define K_TTY_TIOCSWINSZ 0x5414u /* accepted and ignored: nothing resizes a machine */
 #define K_TTY_FIONREAD 0x541Bu
@@ -186,6 +188,19 @@ void k_tty_init(void);
 
 /* True when the mode of the console is raw: /proc and the tests read it. */
 bool k_tty_console_raw(void);
+
+/* Ensure the calling task's tty is in canonical mode for line reading. */
+void k_tty_set_canonical(void);
+
+/* Open/close of the console tty device: tracks session owner and open count.
+ * Opening makes the calling task a member of the tty session; closing the
+ * last descriptor releases the session. */
+void k_tty_open(void);
+void k_tty_close(void);
+
+/* Foreground process group of the console tty (0 when none). */
+k_u32_t k_tty_fg_pgrp(void);
+int k_tty_set_fg_pgrp(k_u32_t pgid);
 
 /* The mode the tty of the machine starts in, and the one `cfmakeraw` makes.
  * They are here and not in the library because the kernel gives a fresh task

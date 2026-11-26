@@ -54,6 +54,16 @@ static int tty_ioctl(k_u32_t request, k_u64_t arg)
     return k_tty_ioctl(request, arg);
 }
 
+static void tty_open(void)
+{
+    k_tty_open();
+}
+
+static void tty_close(void)
+{
+    k_tty_close();
+}
+
 /* The sink: everything that is written disappears. */
 static int null_read(char *buf, k_size_t size)
 {
@@ -69,8 +79,10 @@ static int null_write(const char *buf, k_size_t size)
 }
 
 static const struct dev_file s_devices[] = {
-    {"tty0", {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl}},
-    {"tty", {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl}},
+    {"tty0",
+     {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl, .open = tty_open, .close = tty_close}},
+    {"tty",
+     {.read = tty_read, .write = tty_write, .ioctl = tty_ioctl, .open = tty_open, .close = tty_close}},
     {"null", {.read = null_read, .write = null_write}},
 };
 
