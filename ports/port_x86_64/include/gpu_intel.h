@@ -31,6 +31,9 @@
  */
 #define PORT_X86_64_GPU_INTEL_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
 
+/* BAR2 is mapped write-combining only while a GGTT aperture test needs it. */
+#define PORT_X86_64_GPU_INTEL_APERTURE_VIRT (PORT_X86_64_KERNEL_BASE + 0x3C000000ull)
+
 /* The common prefix expected by the future gpu.c dispatcher. */
 struct gpu_info {
     k_u16_t vendor;

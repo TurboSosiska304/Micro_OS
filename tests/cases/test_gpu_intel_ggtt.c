@@ -1,7 +1,8 @@
 /*
  * Micro OS — synthetic global page tables of the Intel display driver.
  *
- * Facts from drivers/gpu/drm/i915/gt/intel_gtt.h and
+ * Facts from drivers/gpu/drm/i915/gt/intel_gtt.h,
+ * drivers/gpu/drm/i915/gt/intel_ggtt.c and
  * drivers/gpu/drm/i915/display/skl_universal_plane.c (GPL-2.0, Linux v6.12);
  * code written here for Micro OS (MIT).
  */
@@ -100,6 +101,81 @@ static void test_yf_padding_and_fragmentation(void)
     KT_CHECK(!fb.contiguous);
 }
 
+static void test_free_run_and_exclusions(void)
+{
+    struct gpu_intel_gtt_run run;
+    struct gpu_intel_gtt_range excluded[1];
+    k_u32_t i;
+    enum gpu_intel_ggtt_result rc;
+
+    ktest_begin("gpu-intel: a free GGTT run has scratch guards and avoids live surfaces");
+
+    for (i = 0u; i < TEST_GGTT_ENTRIES; i++) {
+        g_entries[i] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+    }
+    excluded[0] = (struct gpu_intel_gtt_range){1u, 2u};
+    rc = gpu_intel_ggtt_find_free(g_entries, TEST_GGTT_ENTRIES, 2u, excluded, 1u, &run);
+
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    KT_CHECK_INT_EQ(run.start, 3);
+    KT_CHECK_INT_EQ(run.count, 2);
+    KT_CHECK(run.original == (0x000000008000ULL | GPU_INTEL_GTT_PRESENT));
+}
+
+static void test_free_run_requires_guards(void)
+{
+    struct gpu_intel_gtt_run run;
+    enum gpu_intel_ggtt_result rc;
+
+    ktest_begin("gpu-intel: an unguarded scratch run is not a free GGTT run");
+
+    g_entries[0] = 0x000000009000ULL | GPU_INTEL_GTT_PRESENT;
+    g_entries[1] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+    g_entries[2] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+    g_entries[3] = 0x000000009000ULL | GPU_INTEL_GTT_PRESENT;
+    rc = gpu_intel_ggtt_find_free(g_entries, 4u, 1u, NULL, 0u, &run);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_NO_FREE);
+
+    g_entries[1] = 0u;
+    g_entries[2] = 0u;
+    rc = gpu_intel_ggtt_find_free(g_entries, 4u, 1u, NULL, 0u, &run);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_NO_FREE);
+}
+
+static void test_borrow_and_restore(void)
+{
+    struct gpu_intel_gtt_run run;
+    k_u64_t snapshot[32];
+    k_u32_t i;
+    enum gpu_intel_ggtt_result rc;
+    k_u64_t saved = 0u;
+
+    ktest_begin("gpu-intel: borrowing GGTT pages changes only the chosen run");
+
+    for (i = 0u; i < 32u; i++) {
+        g_entries[i] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+        snapshot[i] = g_entries[i];
+    }
+    rc = gpu_intel_ggtt_find_free(g_entries, 32u, 2u, NULL, 0u, &run);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        return;
+    }
+
+    rc = gpu_intel_ggtt_borrow(g_entries, 32u, &run, 0x000000100000ULL, &saved);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    KT_CHECK(g_entries[run.start] == (0x000000100000ULL | GPU_INTEL_GTT_PRESENT));
+    KT_CHECK(g_entries[run.start + 1u] == (0x000000101000ULL | GPU_INTEL_GTT_PRESENT));
+    KT_CHECK(g_entries[run.start - 1u] == snapshot[run.start - 1u]);
+    KT_CHECK(g_entries[run.start + 2u] == snapshot[run.start + 2u]);
+
+    rc = gpu_intel_ggtt_restore(g_entries, 32u, &run, saved);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    for (i = 0u; i < 32u; i++) {
+        KT_CHECK(g_entries[i] == snapshot[i]);
+    }
+}
+
 static void test_rejections(void)
 {
     struct gpu_intel_fb fb;
@@ -127,5 +203,8 @@ void test_gpu_intel_ggtt(void)
     test_x_tiled_laptop_frame();
     test_linear_rgb565_frame();
     test_yf_padding_and_fragmentation();
+    test_free_run_and_exclusions();
+    test_free_run_requires_guards();
+    test_borrow_and_restore();
     test_rejections();
 }

@@ -23,6 +23,10 @@ static enum test_bus s_bus;
 static k_u32_t s_find_calls;
 static k_u32_t s_class_calls;
 static k_u32_t s_map_calls;
+static k_u32_t s_fb_map_calls;
+
+/* The host case links the Intel source but not the x86-64 paging port. */
+k_u64_t g_port_x86_64_kernel_phys;
 
 bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device, struct port_x86_64_pci_device *found)
 {
@@ -84,6 +88,15 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
     K_UNUSED(paddr);
     K_UNUSED(len);
     s_map_calls++;
+    return 0u;
+}
+
+k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+{
+    K_UNUSED(vaddr);
+    K_UNUSED(paddr);
+    K_UNUSED(len);
+    s_fb_map_calls++;
     return 0u;
 }
 

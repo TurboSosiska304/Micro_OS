@@ -348,6 +348,18 @@ The live physical address and pitch remain unmeasured until the owner boots
 this image on the ThinkPad; QEMU has no Intel card and must keep returning
 `KMOD_SKIP`.
 
+### 3.7 Stage 2: one RAM page through the aperture
+
+`gpu ggtt-test` first excludes the active framebuffer, every enabled universal
+plane and every enabled cursor. It then requires a run of identical valid PTEs
+with the same scratch value on both guard entries; a zero or unguarded range is
+not accepted. One page from the kernel heap is aligned and its bus physical
+address is installed in the chosen slot. The command writes a deterministic
+word pattern through BAR2, reads it back through BAR2 and through the CPU page,
+checks both neighboring PTEs, and restores the original PTE on every exit path.
+No display register is written and no firmware, forcewake or power-well request
+is made.
+
 ## 4. EDID through AUX/DDC: the next, separate step
 
 Reading EDID is useful, but it is not part of this read-only probe. Both AUX

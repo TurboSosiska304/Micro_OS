@@ -45,11 +45,23 @@ struct gpu_intel_fb {
     bool contiguous;
 };
 
+struct gpu_intel_gtt_range {
+    k_u32_t start;
+    k_u32_t count;
+};
+
+struct gpu_intel_gtt_run {
+    k_u32_t start;
+    k_u32_t count;
+    k_u64_t original;
+};
+
 enum gpu_intel_ggtt_result {
     GPU_INTEL_GGTT_OK = 0,
     GPU_INTEL_GGTT_INVALID = -1,
     GPU_INTEL_GGTT_UNMAPPED = -2,
     GPU_INTEL_GGTT_TOO_LARGE = -3,
+    GPU_INTEL_GGTT_NO_FREE = -4,
 };
 
 /*
@@ -62,5 +74,25 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_decode_fb(const volatile k_u64_t *entr
                                                     k_u32_t plane_stride, k_u32_t plane_control,
                                                     k_u32_t width, k_u32_t height,
                                                     struct gpu_intel_fb *out);
+
+/*
+ * Find a run which still has the same valid scratch PTE on both guard entries.
+ * The caller excludes every live display surface. This is deliberately more
+ * conservative than a zero test: unused gen8 GGTT slots normally point at the
+ * driver's scratch page, and a guard catches the edge of an allocation.
+ */
+enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entries,
+                                                    k_size_t entry_count, k_u32_t needed,
+                                                    const struct gpu_intel_gtt_range *excluded,
+                                                    k_size_t excluded_count,
+                                                    struct gpu_intel_gtt_run *out);
+
+/* Borrow one run and restore it byte-for-byte; both verify the PTE readback. */
+enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_size_t entry_count,
+                                                 const struct gpu_intel_gtt_run *run,
+                                                 k_u64_t physical, k_u64_t *saved);
+enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_size_t entry_count,
+                                                  const struct gpu_intel_gtt_run *run,
+                                                  k_u64_t saved);
 
 #endif /* MICRO_OS_PORT_X86_64_GPU_INTEL_GGTT_H */

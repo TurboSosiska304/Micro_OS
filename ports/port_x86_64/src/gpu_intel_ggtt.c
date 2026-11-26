@@ -127,3 +127,129 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_decode_fb(const volatile k_u64_t *entr
     *out = fb;
     return GPU_INTEL_GGTT_OK;
 }
+
+static bool gpu_intel_range_overlaps(k_u32_t start, k_u32_t count,
+                                     const struct gpu_intel_gtt_range *excluded,
+                                     k_size_t excluded_count)
+{
+    k_u64_t end = (k_u64_t)start + (k_u64_t)count;
+    k_size_t i;
+
+    for (i = 0u; i < excluded_count; i++) {
+        k_u64_t other_end = (k_u64_t)excluded[i].start + (k_u64_t)excluded[i].count;
+
+        if ((k_u64_t)start < other_end && end > (k_u64_t)excluded[i].start) {
+            return true;
+        }
+    }
+    return false;
+}
+
+enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entries,
+                                                    k_size_t entry_count, k_u32_t needed,
+                                                    const struct gpu_intel_gtt_range *excluded,
+                                                    k_size_t excluded_count,
+                                                    struct gpu_intel_gtt_run *out)
+{
+    k_size_t at;
+
+    if (entries == NULL || out == NULL || needed == 0u ||
+        (k_u64_t)entry_count < (k_u64_t)needed + 2u || (excluded_count != 0u && excluded == NULL)) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+
+    at = 0u;
+    while (at < entry_count) {
+        k_u64_t value = entries[at];
+        k_size_t end;
+
+        if ((value & GPU_INTEL_GTT_PRESENT) == 0u || (value & GPU_INTEL_GTT_ADDRESS_MASK) == 0u) {
+            at++;
+            continue;
+        }
+
+        end = at + 1u;
+        while (end < entry_count && entries[end] == value) {
+            end++;
+        }
+        if ((k_u64_t)(end - at) >= (k_u64_t)needed + 2u) {
+            k_size_t candidate = at + 1u;
+            k_size_t last = end - needed - 1u;
+
+            while (candidate <= last) {
+                if (!gpu_intel_range_overlaps((k_u32_t)candidate, needed, excluded,
+                                              excluded_count)) {
+                    out->start = (k_u32_t)candidate;
+                    out->count = needed;
+                    out->original = value;
+                    return GPU_INTEL_GGTT_OK;
+                }
+                candidate++;
+            }
+        }
+        at = end;
+    }
+
+    return GPU_INTEL_GGTT_NO_FREE;
+}
+
+enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_size_t entry_count,
+                                                 const struct gpu_intel_gtt_run *run,
+                                                 k_u64_t physical, k_u64_t *saved)
+{
+    k_u64_t target;
+    k_u32_t i;
+
+    if (entries == NULL || run == NULL || saved == NULL || run->count == 0u ||
+        (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u || physical == 0u ||
+        (physical & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u ||
+        (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count ||
+        (run->original & GPU_INTEL_GTT_PRESENT) == 0u) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+
+    target = physical + (k_u64_t)(run->count - 1u) * GPU_INTEL_GTT_PAGE_SIZE;
+    if ((target & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+    for (i = 0u; i < run->count; i++) {
+        if (entries[run->start + i] != run->original) {
+            return GPU_INTEL_GGTT_INVALID;
+        }
+    }
+
+    *saved = run->original;
+    for (i = 0u; i < run->count; i++) {
+        entries[run->start + i] =
+            (physical + (k_u64_t)i * GPU_INTEL_GTT_PAGE_SIZE) | GPU_INTEL_GTT_PRESENT;
+    }
+    for (i = 0u; i < run->count; i++) {
+        k_u64_t expected =
+            (physical + (k_u64_t)i * GPU_INTEL_GTT_PAGE_SIZE) | GPU_INTEL_GTT_PRESENT;
+
+        if (entries[run->start + i] != expected) {
+            (void)gpu_intel_ggtt_restore(entries, entry_count, run, *saved);
+            return GPU_INTEL_GGTT_INVALID;
+        }
+    }
+    return GPU_INTEL_GGTT_OK;
+}
+
+enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_size_t entry_count,
+                                                  const struct gpu_intel_gtt_run *run,
+                                                  k_u64_t saved)
+{
+    k_u32_t i;
+
+    if (entries == NULL || run == NULL || run->count == 0u ||
+        (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+    for (i = 0u; i < run->count; i++) {
+        entries[run->start + i] = saved;
+        if (entries[run->start + i] != saved) {
+            return GPU_INTEL_GGTT_INVALID;
+        }
+    }
+    return GPU_INTEL_GGTT_OK;
+}
