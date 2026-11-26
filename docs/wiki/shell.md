@@ -52,14 +52,20 @@ may stand before or after the arguments of a stage:
 ```text
 microos> ls /etc | cat
 microos> echo one | cat | cat
-microos> cat /etc/setting > /tmp/f
-microos> cat /etc/setting >> /tmp/f
+microos> cat /etc/setting > /out
+microos> cat /etc/setting >> /out
 microos> cat < /etc/setting
-microos> cat /etc/setting 2> /tmp/errors
+microos> cat /etc/setting 2> /errors
+microos> echo 'a | b' > /q
+microos> grep 'a b' /q
+```
+
+On x86-64, where `/bin` holds the sbase programs, a pipeline can end in one
+of them:
+
+```text
 microos> /bin/cat /etc/setting | wc -l
-microos> echo 'a | b' > /tmp/q
-microos> grep 'a b' /tmp/q
-microos> sed 's/a b/c d/' /tmp/q
+microos> ls /bin | wc -l
 ```
 
 A stage that is a command of the shell (`echo`, `df`, `tree`, ...) runs in a

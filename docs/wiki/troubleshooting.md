@@ -63,7 +63,7 @@ the tools. A row names the sentence you see, the cause and the move.
 | `stat` prints `mode: (not set)` | `/proc`, `/dev`, or an old volume | expected: those records keep no modes |
 | `chmod 000` is refused | zero means "the modes predate the record" | choose another mode; a real zero needs a format change |
 | "not permitted" for a file you own | the task runs as a uid that is not the owner and the others bits deny it | `chmod` the triad you need, for example `0644`, or `chown` it back as root |
-| `rm` of a directory fails | `rm` removes files, there is no `-r` | remove the children first |
+| `rm` of a directory fails | a directory needs `rm -r` | `rm -r <dir>`; the root and a mount point are refused |
 | a file of `/etc` returns after `mkfs -y` | the store restored it | expected; change it, then `config sync` |
 | writes vanish after an x86-64 reset | the boot ran on the image of the build (`make x86-run`), or no disk was attached (`ram0`) | `make x86-run-disk` keeps `build-x86/disk.img` between runs |
 
