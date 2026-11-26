@@ -249,13 +249,15 @@ Open items from `docs/roadmap.md`:
 
 ## Subagents
 
-**Every** subagent runs on a **free model of the tariff** (`opencode-go/*-free`;
-the list is `tools.opencode.models(type: "chat")` filtered by a zero price),
+**Every** subagent runs on a **free model of the tariff** (`opencode-go/*-free`,
 the named agents of `.opencode/agents/` included - their `model:` field says
-it. The only exception is an instruction from the owner for that run: "use
-this model" or "the same model as yours". The brief names the files, the
-constraints and the command that decides "done"; the answer is a report, not a
-transcript.
+it). The names change often; the fresh list is the console of the organisation,
+`https://opencode.ai/console/org_01M5DMN4878N24E7VNZT19HA36/models?filter=free`
+(every entry marked `Free` with a zero price), and `tools.opencode.models(type:
+"chat")` filtered by a zero price is the same list as the harness sees it. The
+only exception is an instruction from the owner for that run: "use this model"
+or "the same model as yours". The brief names the files, the constraints and
+the command that decides "done"; the answer is a report, not a transcript.
 
 ## Tool economy (measured, 24 November 2026)
 
