@@ -51,13 +51,17 @@ another measurement is not one. Two rules, both learned from a red line that
 was not a defect:
 
 * **one QEMU at a time.** A lane that wants to boot waits for the machine:
-  `while pgrep -x qemu-system-x86_64 >/dev/null; do sleep 20; done`, and the
-  same for `qemu-system-aarch64`. `release_gate.sh` waits for a load average
-  of 2 for the whole run; a lane waits for the emulator.
+  `while pgrep -x qemu-system-x86 >/dev/null; do sleep 20; done`, and
+  `pgrep -x qemu-system-aar` for the AArch64 machine. `release_gate.sh` waits
+  for a load average of 2 for the whole run; a lane waits for the emulator.
 * **`pgrep -f qemu-system` is not that check.** The pattern matches the command
   line of the shell that runs it, so the loop answers "busy" forever and a lane
   waits twenty minutes for a machine that is empty. `pgrep -x` matches the name
   of the process and nothing else.
+* **`pgrep -x` takes fifteen characters, the length of `comm`.** The name of the
+  emulator is longer, and `pgrep -x qemu-system-x86_64` says so and matches
+  nothing: the name to ask for is `qemu-system-x86` (and `qemu-system-aar`).
+  A check that cannot match is worse than no check, because it passes.
 
 The measurements that suffered from this are the frame checks of
 `x86-vga-smoke`: they read the screen a second after the boot and a busy host
