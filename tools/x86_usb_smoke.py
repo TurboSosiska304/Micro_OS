@@ -62,7 +62,7 @@ it raised.
 
     tools/x86_usb_smoke.py [--image PATH] [--ext2-image PATH]
                            [--net-build PATH] [--stick DEVICE]
-                           [--timeout SECONDS] [--verbose]
+                           [--timeout SECONDS] [--overall-timeout SECONDS] [--verbose]
 
 The exit status is 0 when every check of the modes asked held, 1 when one did
 not, and 2 when the image or QEMU is missing.
@@ -118,6 +118,49 @@ VALUE_PRESS = 1
 # the file the test reads through the USB.
 SETTING = ["hello", "hostname=x86_64", "console=vga"]
 
+# One deadline for the whole smoke, independent of the per-wait timeout. A
+# regression that prevents the first prompt must not consume 180 seconds in
+# each later mode and leave QEMU children behind.
+OVERALL_DEADLINE = float("inf")
+OVERALL_CHECK = "the USB smoke stays within its overall timeout"
+
+
+def smoke_remaining() -> float:
+    return max(0.0, OVERALL_DEADLINE - time.monotonic())
+
+
+def smoke_window(timeout: float) -> float:
+    return max(0.0, min(timeout, smoke_remaining()))
+
+# The INFO line of a root port that finished its reset. Keep both values: the
+# before state diagnoses a bad PLS/PP sequence, and the after state is the gate.
+PORTSC_LINE = re.compile(
+    r"xhci: port (\d+): a device at speed (\d+) \((\w+)\), "
+    r"PORTSC ([0-9a-f]{8}) -> ([0-9a-f]{8})"
+)
+
+
+def portsc_devices(text: str) -> list:
+    return [
+        (int(match.group(1)), int(match.group(2)), match.group(3),
+         int(match.group(4), 16), int(match.group(5), 16))
+        for match in PORTSC_LINE.finditer(text)
+    ]
+
+
+def portsc_enabled(value: int, usb3: bool = False) -> bool:
+    speed = (value >> 10) & 0xF
+    pls = (value >> 5) & 0xF
+    return ((value & 0x3) == 0x3 and pls == 0 and
+            (speed >= 4 if usb3 else 1 <= speed <= 3))
+
+
+def portsc_detail(devices: list) -> str:
+    return ", ".join(
+        f"port {port}: {before:08x}->{after:08x} speed {speed} ({name})"
+        for port, speed, name, before, after in devices
+    )
+
 
 def sha256_file(path: str, limit: int = 0) -> str:
     digest = hashlib.sha256()
@@ -125,6 +168,8 @@ def sha256_file(path: str, limit: int = 0) -> str:
 
     with open(path, "rb") as handle:
         while True:
+            if smoke_remaining() <= 0.0:
+                raise RuntimeError("USB smoke overall timeout while reading an image")
             want = 1024 * 1024 if left <= 0 else min(1024 * 1024, left)
             chunk = handle.read(want)
             if not chunk:
@@ -203,9 +248,29 @@ class Machine:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
         )
-        self.serial = self._connect(self.serial_path)
-        self.monitor = self._connect(self.monitor_path)
-        self._drain_monitor()
+        self.serial = None
+        self.monitor = None
+
+        try:
+            self.serial = self._connect(self.serial_path, smoke_window(30.0))
+            self.monitor = self._connect(self.monitor_path, smoke_window(30.0))
+            self._drain_monitor(smoke_window(1.0))
+        except (OSError, RuntimeError):
+            for sock in (self.serial, self.monitor):
+                if sock is not None:
+                    sock.close()
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    print("usb-smoke: QEMU did not reap after SIGKILL", file=sys.stderr)
+            if self.process.stdout is not None:
+                self.process.stdout.close()
+            raise
 
     @staticmethod
     def _connect(path: str, timeout: float = 30.0) -> socket.socket:
@@ -214,12 +279,12 @@ class Machine:
         while time.monotonic() < deadline:
             if os.path.exists(path):
                 sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(0.2)
                 try:
                     sock.connect(path)
                 except OSError:
                     sock.close()
                 else:
-                    sock.settimeout(0.2)
                     return sock
             time.sleep(0.05)
 
@@ -250,11 +315,11 @@ class Machine:
         return text.decode("utf-8", errors="replace")
 
     def read_serial(self) -> str:
-        self.transcript += self._read(self.serial, 0.01)
+        self.transcript += self._read(self.serial, smoke_window(0.01))
         return self.transcript.decode("utf-8", errors="replace")
 
     def wait_serial(self, needle: str, timeout: float) -> bool:
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + smoke_window(timeout)
         while time.monotonic() < deadline:
             if needle in self.read_serial():
                 return True
@@ -262,6 +327,7 @@ class Machine:
         return False
 
     def monitor_command(self, command: str, window: float = 2.0) -> str:
+        window = smoke_window(window)
         self.monitor.sendall((command + "\n").encode("ascii"))
         text = b""
         deadline = time.monotonic() + window
@@ -280,14 +346,16 @@ class Machine:
         monitor does with one `sendkey` a time.
         """
         for name in names:
+            if smoke_remaining() <= 0.0:
+                return
             self.monitor_command(f"sendkey {name}")
-            time.sleep(delay)
+            time.sleep(min(delay, smoke_window(delay)))
 
     def prompts(self) -> int:
         return self.read_serial().count(PROMPT)
 
     def _block(self, start: int, count: int, timeout: float) -> str:
-        deadline = time.monotonic() + timeout
+        deadline = time.monotonic() + smoke_window(timeout)
 
         while time.monotonic() < deadline:
             text = self.read_serial()
@@ -329,7 +397,10 @@ class Machine:
             self.process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.process.kill()
-            self.process.wait()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                print("usb-smoke: QEMU did not reap after SIGKILL", file=sys.stderr)
 
         if self.process.stdout is not None:
             self.process.stdout.close()
@@ -386,10 +457,12 @@ def run_usb(loader: str, kernel: str, image: str, ext2_image: str, workdir: str,
             "no interrupt of the controller arrived in the five seconds of the boot",
         )
         match = re.search(r"xhci: controller at [0-9a-f]+, version \d+\.\d+, (\d+) port", text)
+        portsc = portsc_devices(text)
+        enabled = [item for item in portsc if portsc_enabled(item[4], item[1] >= 4)]
         expect(
-            "the controller reports its ports",
-            match is not None and int(match.group(1)) >= 1,
-            "no line of the controller in the boot",
+            "the controller reports its ports and enables the devices",
+            match is not None and int(match.group(1)) >= 1 and len(enabled) >= 2,
+            portsc_detail(portsc) or "no PORTSC before -> after lines in the boot",
         )
         expect(
             "the boot names the keyboard of the boot protocol",
@@ -835,24 +908,25 @@ def run_usb3(loader: str, kernel: str, image: str, workdir: str, timeout: float)
             "the controller of the run did not name its port",
         )
 
-        found = re.search(r"xhci: port 1: a device at speed (\d+) \((\w+)\), PORTSC ([0-9a-f]{8})",
-                          text)
+        found = PORTSC_LINE.search(text)
         expect(
             "the port of the third generation is enabled after its reset",
             found is not None and "not enabled after its reset" not in text,
-            "the reset of the port did not end in PED",
+            portsc_detail(portsc_devices(text)) or "the reset of the port did not end in PED",
         )
         expect(
             "the speed of the port is the one of a SuperSpeed device",
-            found is not None and found.group(1) == "4" and found.group(2) == "super",
+            found is not None and found.group(1) == "1" and found.group(2) == "4"
+            and found.group(3) == "super",
             found.group(0) if found is not None else text[-400:],
         )
         if found is not None:
-            portsc = int(found.group(3), 16)
+            before = int(found.group(4), 16)
+            after = int(found.group(5), 16)
             expect(
                 "PORTSC of the port says connected and enabled at speed 4",
-                (portsc & 0x3) == 0x3 and ((portsc >> 10) & 0xF) == 4,
-                f"PORTSC {found.group(3)}",
+                portsc_enabled(after, usb3=True),
+                f"PORTSC {before:08x} -> {after:08x}",
             )
         else:
             expect("PORTSC of the port says connected and enabled at speed 4", False,
@@ -1086,8 +1160,16 @@ def main(argv: list) -> int:
     parser.add_argument("--stick", default=None,
                         help="a block device of the host, attached read-only")
     parser.add_argument("--timeout", type=float, default=120.0, help="seconds for one wait")
+    parser.add_argument("--overall-timeout", type=float, default=300.0,
+                        help="seconds for the whole smoke, including every machine")
     parser.add_argument("--verbose", action="store_true", help="print the boot of the machine")
     args = parser.parse_args(argv)
+
+    if args.overall_timeout <= 0.0:
+        parser.error("--overall-timeout must be positive")
+
+    global OVERALL_DEADLINE
+    OVERALL_DEADLINE = time.monotonic() + args.overall_timeout
 
     loader = os.path.join(BUILD, "loader32.elf")
     kernel = os.path.join(BUILD, "microos64.bin")
@@ -1101,40 +1183,56 @@ def main(argv: list) -> int:
     checks = []
 
     try:
-        checks += run_usb(loader, kernel, args.image, args.ext2_image,
-                          os.path.join(workdir, "usb"), args.timeout)
-        checks += run_hub(loader, kernel, args.image,
-                          os.path.join(workdir, "hub"), args.timeout)
-        checks += run_hotplug(loader, kernel, args.image,
-                              os.path.join(workdir, "hotplug"), args.timeout)
-        checks += run_usb3(loader, kernel, args.image,
-                           os.path.join(workdir, "usb3"), args.timeout)
-        checks += run_mouse(loader, kernel, args.image,
-                            os.path.join(workdir, "mouse"), args.timeout)
+        modes = [
+            (run_usb, (loader, kernel, args.image, args.ext2_image,
+                       os.path.join(workdir, "usb"), args.timeout)),
+            (run_hub, (loader, kernel, args.image,
+                       os.path.join(workdir, "hub"), args.timeout)),
+            (run_hotplug, (loader, kernel, args.image,
+                           os.path.join(workdir, "hotplug"), args.timeout)),
+            (run_usb3, (loader, kernel, args.image,
+                        os.path.join(workdir, "usb3"), args.timeout)),
+            (run_mouse, (loader, kernel, args.image,
+                         os.path.join(workdir, "mouse"), args.timeout)),
+        ]
+        for function, arguments in modes:
+            checks += function(*arguments)
+            if time.monotonic() >= OVERALL_DEADLINE:
+                checks.append((OVERALL_CHECK, False,
+                               f"more than {args.overall_timeout:g} seconds"))
+                break
     except FileNotFoundError as error:
         print(f"usb-smoke: {error}", file=sys.stderr)
         return 2
+    except RuntimeError as error:
+        checks.append((OVERALL_CHECK, False, str(error)))
 
     # The wire needs the image of the network build; a tree without it keeps
     # the checks of the keyboard and the stick and says so.
     net_loader = os.path.join(args.net_build, "loader32.elf")
     net_kernel = os.path.join(args.net_build, "microos64.bin")
 
-    if os.path.isfile(net_loader) and os.path.isfile(net_kernel):
-        try:
-            checks += run_net(net_loader, net_kernel, net_image(args.net_build),
-                              os.path.join(workdir, "net"), args.timeout)
-        except (OSError, RuntimeError) as error:
-            checks.append(("the image of the wire is built", False, str(error)))
-    else:
-        checks.append(
-            ("the image of the wire is built", False,
-             f"{args.net_build} is missing (make x86-net-build)")
-        )
+    if time.monotonic() < OVERALL_DEADLINE:
+        if os.path.isfile(net_loader) and os.path.isfile(net_kernel):
+            try:
+                checks += run_net(net_loader, net_kernel, net_image(args.net_build),
+                                  os.path.join(workdir, "net"), args.timeout)
+            except (OSError, RuntimeError) as error:
+                checks.append(("the image of the wire is built", False, str(error)))
+        else:
+            checks.append(
+                ("the image of the wire is built", False,
+                 f"{args.net_build} is missing (make x86-net-build)")
+            )
 
-    if args.stick is not None:
+    if args.stick is not None and time.monotonic() < OVERALL_DEADLINE:
         checks += run_stick(loader, kernel, args.image, os.path.join(workdir, "stick"),
                             args.stick, args.timeout)
+
+    if (time.monotonic() >= OVERALL_DEADLINE and
+            not any(item[0] == OVERALL_CHECK for item in checks)):
+        checks.append((OVERALL_CHECK, False,
+                       f"more than {args.overall_timeout:g} seconds"))
 
     failed = [item for item in checks if not item[1]]
     if args.verbose or failed:

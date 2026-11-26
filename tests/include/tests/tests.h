@@ -52,6 +52,7 @@ void test_fb_ops(void);
 void test_input_debounce(void);
 void test_input_hid(void);
 void test_ps2(void);
+void test_xhci_portsc(void);
 void test_battery_soc(void);
 void test_fb_draw(void);
 void test_rtc(void);
