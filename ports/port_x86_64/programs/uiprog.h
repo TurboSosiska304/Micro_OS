@@ -66,6 +66,12 @@ struct uiprog {
     int pointer_x;
     int pointer_y;
     bool pointer_button;
+
+    /* A backbuffer in ordinary RAM: the program composes into it and presents
+     * the rectangles that changed to the device. A program that draws straight
+     * to the device leaves it NULL. */
+    k_u16_t *backbuffer;
+    k_size_t backbuffer_size;
 };
 
 /*
@@ -167,5 +173,17 @@ bool uiprog_close_requested(const struct uiprog *program);
  * own). The programs of 1.7 do not draw a pointer; a client of the next
  * version does. */
 bool uiprog_pointer(const struct uiprog *program, int *x, int *y, bool *pressed);
+
+/*
+ * A backbuffer in ordinary RAM for a program of the whole screen: the picture
+ * is composed here and `uiprog_present` copies the rectangles that changed to
+ * the device. A window of the desktop draws into its shared buffer already and
+ * answers 0. 0 on success.
+ */
+int uiprog_enable_backbuffer(struct uiprog *program);
+
+/* Copy the rectangles of the backbuffer that changed to the device. NULL/0
+ * means nothing to present. 0 on success. */
+int uiprog_present(const struct uiprog *program, const struct ui_rect *rects, int count);
 
 #endif /* MICRO_OS_PORT_X86_64_PROGRAMS_UIPROG_H */
