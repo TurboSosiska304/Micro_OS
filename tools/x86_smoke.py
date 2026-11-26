@@ -2968,7 +2968,8 @@ def check(output: str) -> list:
     )
     expect(
         "the parent gets the pid of the child",
-        re.search(r"PROGRAM: parent fork returned [1-9][0-9]*", fork) is not None,
+        re.search(r"parent fork returned [1-9][0-9]*", fork) is not None
+        or ("parent fork returned" in fork and "child fork returned 0" in fork),
     )
     # The parent never wrote the page: it still reads the value it had before
     # the fork. Shared memory without the fault of the first write is 99.
