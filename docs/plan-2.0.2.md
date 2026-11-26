@@ -121,3 +121,41 @@ the test.
 `-std=c23` and no GNU extensions with zero errors, so the move is one flag - but
 it is a move of 2.1, not of a release whose job is the desk and the shutdown of
 a laptop that hangs today (`docs/roadmap-to-3.0.md`, 10b).
+
+## The checklist of the owner's laptop
+
+The image is handed over with a hash and a numbered list, and one boot answers
+every question of the release. The order matters: the first two steps are the
+medium, the rest is the machine.
+
+1. **Write the image.** `sudo dd if=<image> of=/dev/sdX bs=4M conv=fsync
+   status=progress && sync`, then `sudo head -c <bytes> /dev/sdX |
+   sha256sum` - the number must be the one in the release notes. Secure Boot
+   off, the stick chosen in the boot menu.
+2. **Read the first ten lines of the boot.** Three lines decide three defects:
+
+   ```
+   e1000e: the card is at 00:1f.6        <- the wire does not hang the boot
+   x86-64: 8 cpu(s) reported by the firmware, 8 in use   <- every core runs
+   MicroOS shell ready                   <- the shell is up
+   ```
+
+   A boot that stops before the third line is the defect of 2.0.1 again, and
+   the last line on the screen is the thing to send.
+3. **Time the text.** Count the lines that appear in five seconds. The number
+   of 2.0.1 was five to ten characters a second; the number of this release is
+   the one the plan asks for.
+4. **The desk.** `exec /bin/wm` - the desk appears with a clock. `Alt+T` - a
+   terminal window. Type `help` - the window answers. `Alt+F4` - the window
+   closes and the prompt returns. A window that stays empty, or a terminal
+   that dies, is the read-only root of 2.0.1 (it must be gone).
+5. **`mfetch`.** Paste the report: it carries the version, the cores in use,
+   the memory and the disk. It is the shortest answer to "what machine is
+   this", and it is what the notes of the release quote.
+6. **`poweroff`.** The machine goes off - the fan stops and the light of the
+   power button goes out. A machine that stays on, or a fault on the screen
+   after `power: the machine goes down`, is the defect of 2.0.1.
+
+What comes back: the hash mismatch if any, a photo of the screen when a step
+fails (the last three lines are enough), the count of step 3, and the text of
+step 5. One boot, one message.
