@@ -1256,6 +1256,24 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 "the boot did not name the framebuffer of ADR 0023 and its grid",
             )
             expect(
+                "the framebuffer PTE reads back as PAT write-combining and NX",
+                re.search(
+                    r"screen: framebuffer cache is write-combining, "
+                    r"PAT=0x[0-9a-f]{16} \(entry 5=0x01\), "
+                    r"PTE flags=0x800000000000108b",
+                    serial,
+                )
+                is not None,
+                "the boot did not read back PAT entry 5 and the expected large-page PTE",
+            )
+            expect(
+                "the framebuffer leaves MTRRs unchanged and the map W^X",
+                re.search(r"screen: MTRR_DEF_TYPE=0x[0-9a-f]{16} \(unchanged\)", serial)
+                is not None
+                and "x86-64: the map is W^X, the text is read-only and the data is NX" in serial,
+                "the MTRR read-back or the W^X audit is missing",
+            )
+            expect(
                 "the boot applies the font of the PC",
                 f"font: line_gap 0, the cell is 8x16 at 16 px, {ROWS_GAP0} rows of {COLUMNS} "
                 "columns" in serial,

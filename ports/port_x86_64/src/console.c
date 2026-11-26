@@ -239,8 +239,8 @@ void port_x86_64_console_init(void)
         k_u64_t offset = mode.phys & CONSOLE_PAGE_MASK;
         k_u64_t window = mode.phys - offset;
 
-        if (port_x86_64_paging_map_device(PORT_X86_64_SCREEN_VIRT, window,
-                                          (k_size_t)mode.bytes + (k_size_t)offset) > 0) {
+        if (port_x86_64_paging_map_framebuffer(PORT_X86_64_SCREEN_VIRT, window,
+                                               (k_size_t)mode.bytes + (k_size_t)offset) > 0) {
             s_screen =
                 port_x86_64_fb_screen(&mode, (void *)(uintptr_t)(PORT_X86_64_SCREEN_VIRT + offset));
         } else {

@@ -387,17 +387,25 @@ k_u64_t port_x86_64_kernel_cr3(void);
  * over the physical range that starts in the page of `paddr`. The pages are
  * writable and NX, and every address space of the machine shares them. The
  * answer is the number of 2 MiB pages mapped, zero when the range is not one
- * the table of the higher half covers. The screen of the port is the user of
- * the call: it maps the framebuffer of the VGA (ADR 0023).
+ * the table of the higher half covers. Cacheable device windows use this
+ * call; the framebuffer and MMIO have their own cache policy below.
  */
 k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 
 /*
+ * The same window for a linear framebuffer. PAT entry 5 is write-combining and
+ * the large pages select it with PAT=1, PCD=0 and PWT=1; without PAT the pages
+ * are write-through (PCD=0, PWT=1). The identity map, the cacheable device
+ * windows and the uncached MMIO windows are not changed. The answer is the
+ * number of 2 MiB pages mapped, or zero when the range cannot be mapped or its
+ * PTE did not read back as written.
+ */
+k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
+
+/*
  * The same window for a device that is not the memory of the machine: the
- * pages are uncached (PCD and PWT). The screen of the framebuffer of a
- * firmware (src/gop.c) is the user of this one, because the frame of a
- * graphics card is behind a bus and a line of the cache of the processor in
- * front of it holds a picture the card never shows.
+ * pages are uncached (PCD and PWT). Control registers and MMIO windows use
+ * this one; a framebuffer uses the write-combining map above.
  */
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 

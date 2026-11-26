@@ -55,7 +55,8 @@
 #define PTE_PRESENT 0x001u
 #define PTE_WRITABLE 0x002u
 #define PTE_USER 0x004u
-#define PTE_PAGE_SIZE 0x080u /* in a PD entry: a 2 MiB page */
+#define PTE_PAGE_SIZE 0x080u  /* in a PD entry: a 2 MiB page */
+#define PTE_PAT_LARGE 0x1000u /* PAT selects the memory type of a large page */
 
 /*
  * A page that both the parent and the child of a fork may still read and
@@ -67,12 +68,24 @@
 
 /*
  * The two bits of the cache of a page: a window of a device whose bytes the
- * processor may not keep - the frame of a graphics card, a control register
- * of a controller - is mapped with them and the store reaches the device
- * instead of a line of a cache (port_x86_64_paging_map_mmio).
+ * processor may not keep - a control register of a controller - is mapped
+ * with them and the store reaches the device instead of a line of a cache
+ * (port_x86_64_paging_map_mmio). A framebuffer is memory rather than a register
+ * and uses PAT write-combining below.
  */
 #define PTE_PCD 0x010u
 #define PTE_PWT 0x008u
+#define PTE_CACHE_MASK (PTE_PCD | PTE_PWT | PTE_PAT_LARGE)
+
+/* IA32_PAT has eight three-bit memory types in eight bytes. Entry 5 is the
+ * write-combining entry selected by PAT=1, PCD=0 and PWT=1; the firmware's
+ * default value already puts WC there, but the port writes and reads it back
+ * instead of assuming that a laptop left the register alone. */
+#define IA32_PAT_MSR 0x277u
+#define IA32_MTRR_DEF_TYPE_MSR 0x2FFu
+#define PAT_WC_ENTRY 5u
+#define PAT_TYPE_MASK 0xFFu
+#define PAT_TYPE_WC 0x01u
 
 /*
  * The no-execute bit, the highest of the entry. It only means anything when
@@ -109,6 +122,15 @@
  * processor, not a state of one core. */
 static bool g_smep_on;
 static bool g_smap_on;
+
+/* The memory-type registers are per core, like CR4. Every core writes the same
+ * reserved PAT entry and verifies it before it enters the scheduler. A CPU
+ * without PAT keeps the framebuffer write-through (PCD=0, PWT=1), which is
+ * ordinary cacheable memory and still reaches the device on every write. */
+static bool g_pat_on;
+static bool g_pat_wc_ready;
+static k_u64_t g_pat_value;
+static bool g_mtrr_on;
 
 /* The 2 MiB a single PD entry covers, and the pages under a PTE table. */
 #define LARGE_PAGE_SIZE 0x200000u
@@ -444,14 +466,25 @@ static void invlpg(k_u64_t vaddr)
     __asm__ volatile("invlpg (%0)" : : "r"(vaddr) : "memory");
 }
 
+static k_u8_t pat_entry(k_u64_t value, k_u32_t index)
+{
+    return (k_u8_t)((value >> (index * 8u)) & PAT_TYPE_MASK);
+}
+
+static k_u64_t pat_set_entry(k_u64_t value, k_u32_t index, k_u8_t type)
+{
+    k_u64_t shift = (k_u64_t)index * 8u;
+
+    return (value & ~((k_u64_t)PAT_TYPE_MASK << shift)) | ((k_u64_t)type << shift);
+}
+
 /*
  * A window of a device in the map of the kernel: 2 MiB pages of the top 2 GiB
- * that name the physical range of the device, writable and NX. The screen of
- * ADR 0023 is the first user - the framebuffer of the VGA sits at 0xFD000000,
- * above the identity map of the first gigabyte - and the window is the
- * kernel's own: every address space shares the PDPT of the top 2 GiB, so a
- * store of a system call reaches the picture whichever space the processor is
- * on.
+ * that name the physical range of the device, writable and NX. The windows of
+ * the APIC, the IOAPIC and ACPI use this cacheable map; the framebuffer has its
+ * own memory type below. Every address space shares the PDPT of the top 2 GiB,
+ * so a store of a system call reaches the device whichever space the processor
+ * is on.
  *
  * Both addresses are taken to whole 2 MiB pages, and the answer is the number
  * of pages that were mapped (zero when the range is not in the window of the
@@ -491,18 +524,12 @@ k_u32_t port_x86_64_paging_map_device(k_u64_t vaddr, k_u64_t paddr, k_size_t len
 }
 
 /*
- * The same window, for a device whose bytes are the device itself: the frame
- * of the graphics output of a firmware, a register of a controller. The page
- * is uncached in both directions (PCD and PWT), because a line of the cache
- * of the processor in front of a display holds a picture the display never
- * sees, and a read of a register may be the read of the state of the device
- * rather than of the memory.
- *
- * The framebuffer of the Bochs VBE interface is mapped by the call above
- * instead: it is the memory of a card of QEMU, a store of it is a store of the
- * emulator, and the cache of the processor is not a wrong answer to that - it
- * is a cache of the same bytes. A machine of a person is not an emulator, and
- * the frame of its firmware is behind this call.
+ * The same window, for a device whose bytes are the device itself: a register
+ * of a controller. The page is uncached in both directions (PCD and PWT),
+ * because a read of a register may be the read of the state of the device
+ * rather than of the memory. A framebuffer is not mapped here: its stores may
+ * be combined, and port_x86_64_paging_map_framebuffer() gives it WC through
+ * PAT without changing the policy of any other window.
  */
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
@@ -531,6 +558,82 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
                                   PTE_PAGE_SIZE | PTE_NX | PTE_PCD | PTE_PWT;
         index++;
         pages++;
+    }
+
+    return pages;
+}
+
+/*
+ * The linear framebuffer, with a memory type of its own. PAT entry 5 is WC;
+ * the large-page PTE selects it with PAT=1, PCD=0 and PWT=1. Only the named
+ * entries of the shared high page directory change, so the identity map and
+ * the uncached register windows keep the flags they already had. No variable
+ * MTRR is consumed or reprogrammed.
+ *
+ * A processor without PAT, or one whose PAT read-back does not match, takes
+ * the same PTE without bit 12: PCD=0 and PWT=1 is write-through memory there.
+ * It is slower than WC but correct, and a missing feature is not a reason to
+ * stop the machine. The PTE and the PAT/MTRR registers are read back and named
+ * on COM1 so the smoke can check the policy it actually booted with.
+ */
+k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+{
+    const k_u64_t high_end = PORT_X86_64_KERNEL_BASE + 0x40000000ull;
+    const k_u64_t flag_mask = PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX | PTE_CACHE_MASK;
+    k_u64_t flags = PTE_PRESENT | PTE_WRITABLE | PTE_PAGE_SIZE | PTE_NX | PTE_PWT;
+    k_u64_t first = paddr & ~(k_u64_t)(LARGE_PAGE_SIZE - 1u);
+    k_u64_t last = paddr + (k_u64_t)len;
+    k_u64_t chunk;
+    k_u32_t index = (k_u32_t)((vaddr >> 21) & (TABLE_ENTRIES - 1u));
+    k_u32_t pages = 0;
+
+    if (len == 0 || (vaddr & (k_u64_t)(LARGE_PAGE_SIZE - 1u)) != 0 ||
+        vaddr < PORT_X86_64_KERNEL_BASE) {
+        return 0;
+    }
+
+    if (vaddr + (last - first) > high_end) {
+        return 0;
+    }
+
+    if (g_pat_wc_ready) {
+        flags |= PTE_PAT_LARGE;
+    }
+
+    for (chunk = first; chunk < last; chunk += LARGE_PAGE_SIZE) {
+        if (index >= TABLE_ENTRIES) {
+            return 0;
+        }
+
+        g_kernel_pd_high[index] = (chunk & PTE_ADDRESS) | flags;
+
+        if ((g_kernel_pd_high[index] & flag_mask) != (flags & flag_mask)) {
+            kerror("screen: the framebuffer PTE did not read back as 0x%llx",
+                   (unsigned long long)(flags & flag_mask));
+            return 0;
+        }
+
+        index++;
+        pages++;
+    }
+
+    if (g_pat_wc_ready) {
+        kinfo("screen: framebuffer cache is write-combining, "
+              "PAT=0x%016llx (entry %u=0x%02x), PTE flags=0x%016llx",
+              (unsigned long long)g_pat_value, (unsigned)PAT_WC_ENTRY,
+              (unsigned)pat_entry(g_pat_value, PAT_WC_ENTRY),
+              (unsigned long long)(flags & flag_mask));
+    } else {
+        kinfo("screen: framebuffer cache is write-through (no verified PAT), "
+              "PTE flags=0x%016llx",
+              (unsigned long long)(flags & flag_mask));
+    }
+
+    if (g_mtrr_on) {
+        kinfo("screen: MTRR_DEF_TYPE=0x%016llx (unchanged)",
+              (unsigned long long)port_rdmsr(IA32_MTRR_DEF_TYPE_MSR));
+    } else {
+        kinfo("screen: no MTRR, the framebuffer type comes from PAT and the PTE");
     }
 
     return pages;
@@ -706,6 +809,8 @@ void port_x86_64_paging_init_cpu(void)
     k_u64_t cr4;
     bool smep;
     bool smap;
+    bool pat;
+    bool mtrr;
 
     __asm__ volatile("movq %%cr0, %0" : "=r"(cr0));
     cr0 |= (k_u64_t)1u << 16; /* CR0.WP */
@@ -719,16 +824,29 @@ void port_x86_64_paging_init_cpu(void)
      */
     smep = false;
     smap = false;
+    pat = false;
+    mtrr = false;
 
     {
         k_u32_t eax;
         k_u32_t ebx;
         k_u32_t ecx;
         k_u32_t edx;
+        k_u32_t max_leaf;
 
         __asm__ volatile("cpuid" : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx) : "a"(0u), "c"(0u));
+        max_leaf = eax;
 
-        if (eax >= 7u) {
+        if (max_leaf >= 1u) {
+            __asm__ volatile("cpuid"
+                             : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+                             : "a"(1u), "c"(0u));
+
+            mtrr = ((edx >> 12) & 1u) != 0u;
+            pat = ((edx >> 16) & 1u) != 0u;
+        }
+
+        if (max_leaf >= 7u) {
             __asm__ volatile("cpuid"
                              : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
                              : "a"(7u), "c"(0u));
@@ -752,6 +870,25 @@ void port_x86_64_paging_init_cpu(void)
 
     g_smep_on = smep;
     g_smap_on = smap;
+
+    /*
+     * PAT is per core too. Entry 5 is reserved for the framebuffer and the
+     * other seven entries are preserved byte for byte. Writing the value even
+     * when it already names WC makes the read-back a check of the register the
+     * port relies on, not an assumption about the firmware's default.
+     */
+    g_pat_on = pat;
+    g_mtrr_on = mtrr;
+    g_pat_value = 0u;
+    g_pat_wc_ready = false;
+
+    if (pat) {
+        k_u64_t next = pat_set_entry(port_rdmsr(IA32_PAT_MSR), PAT_WC_ENTRY, PAT_TYPE_WC);
+
+        port_wrmsr(IA32_PAT_MSR, next);
+        g_pat_value = port_rdmsr(IA32_PAT_MSR);
+        g_pat_wc_ready = g_pat_value == next && pat_entry(g_pat_value, PAT_WC_ENTRY) == PAT_TYPE_WC;
+    }
 }
 
 bool port_x86_64_smep_on(void)
