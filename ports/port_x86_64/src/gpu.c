@@ -20,8 +20,8 @@
 #include "kernel/log.h"
 #include "kshell/kshell.h"
 
-static struct port_x86_64_gpu_info g_gpu;
-static char g_gpu_line[160];
+static struct gpu_info g_gpu;
+static char g_gpu_line[192];
 static bool g_gpu_registered;
 
 static void format_size(char *buf, k_size_t size, k_u64_t bytes)
@@ -40,41 +40,91 @@ static void format_size(char *buf, k_size_t size, k_u64_t bytes)
     }
 }
 
+static void format_mmio(char *buf, k_size_t size, k_u64_t base, k_u32_t bytes)
+{
+    if (base == 0u || bytes == 0u) {
+        snprintf(buf, size, "unknown");
+        return;
+    }
+
+    if (bytes % 1024u == 0u) {
+        snprintf(buf, size, "0x%x+%uK", (unsigned)(k_u32_t)base, (unsigned)(bytes / 1024u));
+    } else {
+        snprintf(buf, size, "0x%x+%u", (unsigned)(k_u32_t)base, (unsigned)bytes);
+    }
+}
+
 const char *port_x86_64_gpu_format(char *buf, k_size_t size)
 {
     char vram[32];
+    char mmio[32];
 
     if (buf == NULL || size == 0u) {
         return "";
     }
 
-    if (!g_gpu.found) {
+    if (!g_gpu.present) {
         snprintf(buf, size,
                  "gpu: no display controller of a known vendor, the framebuffer is the firmware's");
         return buf;
     }
 
+    format_mmio(mmio, sizeof(mmio), g_gpu.mmio_base, g_gpu.mmio_size);
     format_size(vram, sizeof(vram), g_gpu.vram_bytes);
-    snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio 0x%x, vram %s",
+
+    if (!g_gpu.known) {
+        const char *vendor_name = "display controller";
+
+        if (g_gpu.vendor == 0x1002u) {
+            vendor_name = "AMD display controller";
+        } else if (g_gpu.vendor == 0x8086u) {
+            vendor_name = "Intel display controller";
+        }
+
+        snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio %s, vram %s",
+                 vendor_name, (unsigned)g_gpu.vendor, (unsigned)g_gpu.device,
+                 (unsigned)g_gpu.revision, (unsigned)g_gpu.bus, (unsigned)g_gpu.slot,
+                 (unsigned)g_gpu.function, mmio, vram);
+        return buf;
+    }
+
+    snprintf(buf, size, "gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%u, mmio %s, vram %s",
              g_gpu.name[0] != '\0' ? g_gpu.name : "display controller", (unsigned)g_gpu.vendor,
              (unsigned)g_gpu.device, (unsigned)g_gpu.revision, (unsigned)g_gpu.bus,
-             (unsigned)g_gpu.slot, (unsigned)g_gpu.function, (unsigned)(k_u32_t)g_gpu.mmio_base,
-             vram);
+             (unsigned)g_gpu.slot, (unsigned)g_gpu.function, mmio, vram);
     return buf;
 }
 
-const struct port_x86_64_gpu_info *port_x86_64_gpu_info(void)
+const struct gpu_info *port_x86_64_gpu_info(void)
 {
     return &g_gpu;
 }
 
-static bool probe_device(const struct port_x86_64_pci_device *pci)
+static enum gpu_probe_result probe_vendor(const struct port_x86_64_pci_device *pci, k_u16_t vendor,
+                                          struct gpu_info *out)
 {
-    if (port_x86_64_gpu_amd_probe(pci, &g_gpu)) {
-        return true;
+    k_size_t i;
+
+    for (i = 0; i < PORT_X86_64_GPU_PROBE_COUNT; i++) {
+        if (PORT_X86_64_GPU_PROBES[i].vendor != vendor) {
+            continue;
+        }
+
+        if (PORT_X86_64_GPU_PROBES[i].probe == NULL) {
+            return GPU_PROBE_UNKNOWN_DEV;
+        }
+
+        return PORT_X86_64_GPU_PROBES[i].probe(pci, out);
     }
 
-    return false;
+    return GPU_PROBE_NONE;
+}
+
+static bool is_display_controller(const struct port_x86_64_pci_device *pci)
+{
+    k_u16_t class_rev = port_x86_64_pci_read16(pci, PCI_CLASS);
+
+    return (k_u8_t)(class_rev >> 8) == 0x03u;
 }
 
 static int gpu_mod_init(void)
@@ -88,21 +138,45 @@ static int gpu_mod_init(void)
         pci.bus = (k_u8_t)bus;
         for (pci.slot = 0; pci.slot < 32u; pci.slot++) {
             for (pci.function = 0; pci.function < 8u; pci.function++) {
-                k_u16_t vendor = port_x86_64_pci_read16(&pci, PCI_VENDOR);
-                k_u16_t class_rev;
-                k_u8_t base;
+                k_u16_t vendor;
+                enum gpu_probe_result res;
+                struct gpu_info candidate;
 
+                vendor = port_x86_64_pci_read16(&pci, PCI_VENDOR);
                 if (vendor == 0xFFFFu) {
                     continue;
                 }
 
-                class_rev = port_x86_64_pci_read16(&pci, PCI_CLASS);
-                base = (k_u8_t)(class_rev >> 8);
-                if (base != 0x03u) {
+                if (!is_display_controller(&pci)) {
                     continue;
                 }
 
-                if (probe_device(&pci)) {
+                memset(&candidate, 0, sizeof(candidate));
+                candidate.present = true;
+                candidate.vendor = vendor;
+                candidate.device = port_x86_64_pci_read16(&pci, PCI_DEVICE);
+                candidate.revision = (k_u8_t)(port_x86_64_pci_read16(&pci, PCI_REVISION) & 0xFFu);
+                candidate.bus = pci.bus;
+                candidate.slot = pci.slot;
+                candidate.function = pci.function;
+
+                res = probe_vendor(&pci, vendor, &candidate);
+                if (res == GPU_PROBE_OK) {
+                    candidate.present = true;
+                    candidate.known = true;
+                    g_gpu = candidate;
+                    port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
+                    kinfo("%s", g_gpu_line);
+                    return 0;
+                }
+
+                if (res == GPU_PROBE_UNKNOWN_DEV) {
+                    candidate.present = true;
+                    candidate.known = false;
+                    if (candidate.name[0] == '\0') {
+                        snprintf(candidate.name, sizeof(candidate.name), "display controller");
+                    }
+                    g_gpu = candidate;
                     port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
                     kinfo("%s", g_gpu_line);
                     return 0;
@@ -136,7 +210,7 @@ static int cmd_gpu(int argc, char **argv)
 
     port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
     kshell_printf("%s\n", g_gpu_line);
-    return g_gpu.found ? 0 : 1;
+    return g_gpu.present ? 0 : 1;
 }
 
 int port_x86_64_gpu_register(void)
@@ -153,6 +227,7 @@ int port_x86_64_gpu_register(void)
 void port_x86_64_gpu_init(void)
 {
     int rc;
+    k_size_t i;
 
     if (g_gpu_registered) {
         return;
@@ -165,23 +240,22 @@ void port_x86_64_gpu_init(void)
         return;
     }
 
-    /* kmod_register sets state from init return: 0 OK, !=0 FAIL. We want SKIP
-     * when no known GPU was found. Adjust after registration. */
-    {
-        k_size_t i;
+    for (i = 0; i < kmod_count(); i++) {
+        const struct kmod *m = kmod_get(i);
+        if (m != NULL && strcmp(m->name, "gpu") == 0) {
+            struct kmod *mw = (struct kmod *)m;
 
-        for (i = 0; i < kmod_count(); i++) {
-            const struct kmod *m = kmod_get(i);
-            if (m != NULL && strcmp(m->name, "gpu") == 0) {
-                struct kmod *mw = (struct kmod *)m;
-                if (!g_gpu.found) {
-                    mw->state = KMOD_SKIP;
-                    kinfo("kmod: gpu skip");
-                } else {
-                    kinfo("kmod: gpu ok");
-                }
-                break;
+            if (g_gpu.present && g_gpu.known) {
+                mw->state = KMOD_OK;
+                kinfo("kmod: gpu ok");
+            } else if (g_gpu.present && !g_gpu.known) {
+                mw->state = KMOD_UNKNOWN;
+                kinfo("kmod: gpu unknown");
+            } else {
+                mw->state = KMOD_SKIP;
+                kinfo("kmod: gpu skip");
             }
+            break;
         }
     }
 }

@@ -160,7 +160,7 @@ const char *kmod_state_name(kmod_state_t state)
         return "skip";
     case KMOD_UNKNOWN:
     default:
-        return "?";
+        return "unknown";
     }
 }
 

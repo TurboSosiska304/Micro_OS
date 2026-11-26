@@ -77,38 +77,18 @@ static k_u64_t bar_size64(const struct port_x86_64_pci_device *pci, k_u8_t offse
     return (~mask) + 1u;
 }
 
-bool port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_device *pci,
-                               struct port_x86_64_gpu_info *out)
+static void fill_identity(struct gpu_info *out, const struct port_x86_64_pci_device *pci,
+                          k_u16_t vendor, k_u16_t device, k_u8_t revision, const char *name)
 {
-    k_u16_t vendor;
-    k_u16_t device;
-    k_u16_t command;
-    k_u8_t revision;
-    k_u32_t bar5_low;
     k_u64_t bar0_base;
     k_u64_t bar5_base;
-    k_u32_t bar0_size;
     k_u32_t bar5_size;
     k_u64_t out_vram = 0;
-    const char *name;
-
-    if (pci == NULL || out == NULL) {
-        return false;
-    }
-
-    vendor = port_x86_64_pci_read16(pci, PCI_VENDOR);
-    device = port_x86_64_pci_read16(pci, PCI_DEVICE);
-    revision = (k_u8_t)(port_x86_64_pci_read16(pci, PCI_REVISION) & 0xFFu);
-
-    name = port_x86_64_gpu_amd_lookup(vendor, device);
-    if (name == NULL) {
-        return false;
-    }
 
     /* Enable memory decode so BAR MMIO can be read/mapped. This is PCI config,
      * not a display engine register write. Bus mastering is not needed for
      * read-only identification. */
-    command = port_x86_64_pci_read16(pci, PCI_COMMAND);
+    k_u16_t command = port_x86_64_pci_read16(pci, PCI_COMMAND);
     if ((command & PCI_COMMAND_MEMORY) == 0u) {
         port_x86_64_pci_enable(pci, PCI_COMMAND_MEMORY);
     }
@@ -116,19 +96,14 @@ bool port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_device *pci,
     bar0_base = bar_base(pci, PCI_BAR0);
     if (bar_is_mem64(pci, PCI_BAR0)) {
         out_vram = bar_size64(pci, PCI_BAR0);
-        bar0_size = 0;
     } else {
-        bar0_size = port_x86_64_pci_bar_size(pci, PCI_BAR0);
-        out_vram = (k_u64_t)bar0_size;
+        out_vram = (k_u64_t)port_x86_64_pci_bar_size(pci, PCI_BAR0);
     }
 
-    bar5_low = port_x86_64_pci_read32(pci, 0x24u); /* BAR5 */
-    (void)bar5_low;
-    bar5_base = bar_base(pci, 0x24u);
+    bar5_base = bar_base(pci, 0x24u); /* BAR5 */
     bar5_size = port_x86_64_pci_bar_size(pci, 0x24u);
 
-    memset(out, 0, sizeof(*out));
-    out->found = true;
+    out->present = true;
     out->vendor = vendor;
     out->device = device;
     out->revision = revision;
@@ -137,17 +112,12 @@ bool port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_device *pci,
     out->function = pci->function;
     out->mmio_base = bar5_base;
     out->mmio_size = bar5_size;
-
-    /* BAR0 is the VRAM aperture on Polaris10 discrete cards. Use its size as
-     * the reported VRAM/aperture size; the value is a hardware fact from the
-     * PCI BAR size probe, not a firmware query. */
     if (bar0_base != 0u) {
         out->vram_bytes = out_vram;
     }
 
-    {
+    if (name != NULL) {
         k_size_t n = 0;
-
         while (name[n] != '\0' && n + 1u < sizeof(out->name)) {
             out->name[n] = name[n];
             n++;
@@ -170,6 +140,36 @@ bool port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_device *pci,
                   (unsigned)(out->mmio_size / 1024u));
         }
     }
+}
 
-    return true;
+enum gpu_probe_result port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_device *pci,
+                                                struct gpu_info *out)
+{
+    k_u16_t vendor;
+    k_u16_t device;
+    k_u8_t revision;
+    const char *name;
+
+    if (pci == NULL || out == NULL) {
+        return GPU_PROBE_NONE;
+    }
+
+    vendor = port_x86_64_pci_read16(pci, PCI_VENDOR);
+    device = port_x86_64_pci_read16(pci, PCI_DEVICE);
+    revision = (k_u8_t)(port_x86_64_pci_read16(pci, PCI_REVISION) & 0xFFu);
+
+    if (vendor != 0x1002u) {
+        return GPU_PROBE_NONE;
+    }
+
+    name = port_x86_64_gpu_amd_lookup(vendor, device);
+    if (name == NULL) {
+        fill_identity(out, pci, vendor, device, revision, "AMD display controller");
+        out->known = false;
+        return GPU_PROBE_UNKNOWN_DEV;
+    }
+
+    fill_identity(out, pci, vendor, device, revision, name);
+    out->known = true;
+    return GPU_PROBE_OK;
 }
