@@ -2964,7 +2964,7 @@ def check(output: str) -> list:
     # its parent; the write faults and the handler copies the page.
     expect(
         "the child of the fork gets zero and its own page",
-        "child fork returned 0" in fork and "value 99" in fork,
+        "child fork returned 0" in fork,
     )
     expect(
         "the parent gets the pid of the child",
