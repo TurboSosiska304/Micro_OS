@@ -6,6 +6,7 @@
 if(NOT ESP_PLATFORM)
     set(MICRO_OS_TEST_CASES
         cases/test_version.c
+        cases/test_gpu_intel.c
         cases/test_board.c
         cases/test_log.c
         cases/test_ansi.c
@@ -46,6 +47,7 @@ if(NOT ESP_PLATFORM)
         cases/test_input_hid.c
         cases/test_ps2.c
         cases/test_xhci_portsc.c
+        cases/test_gpu_amd.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c
@@ -118,8 +120,12 @@ if(NOT ESP_PLATFORM)
     add_executable(microos_tests
         src/main.c
         framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
         ${MICRO_OS_TEST_CASES}
     )
+
+    # The Intel case links the real probe against an empty-bus PCI stub, so
+    # both the identity table and the no-card KMOD_SKIP path are exercised.
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")
@@ -158,6 +164,7 @@ if(NOT ESP_PLATFORM)
         # the tool compile the same files, and the test is the third caller.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
         # PORTSC decoding has no MMIO and is shared by the driver and its test.
+        # Pure GPU ID tables and probe headers for host unit tests.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/include"
         # The directory of the `progs` partition (ADR 0022): read by the port
         # of the board and by the test, written by tools/progs_image.py.

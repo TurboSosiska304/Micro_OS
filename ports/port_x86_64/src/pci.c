@@ -66,13 +66,19 @@ void port_x86_64_pci_write16(const struct port_x86_64_pci_device *device, k_u8_t
  * of the address, and `match` decides which one is the one asked for. An
  * absent function answers with all ones, which is neither a vendor nor a
  * class, and is skipped before the test.
+ *
+ * The scan covers all 256 buses: the GPU of a laptop or a desktop sits behind
+ * a PCIe root port, not on bus 0, and the configuration space of mechanism 1
+ * addresses 256 buses. Absent slots answer 0xFFFF and cost one config read.
  */
 static bool pci_walk(bool (*match)(const struct port_x86_64_pci_device *device, const void *wanted),
                      const void *wanted, struct port_x86_64_pci_device *found)
 {
     struct port_x86_64_pci_device device = {0, 0, 0};
+    k_u16_t bus;
 
-    for (device.bus = 0; device.bus < 1u; device.bus++) {
+    for (bus = 0; bus < 256u; bus++) {
+        device.bus = (k_u8_t)bus;
         for (device.slot = 0; device.slot < 32u; device.slot++) {
             for (device.function = 0; device.function < 8u; device.function++) {
                 if (port_x86_64_pci_read16(&device, PCI_VENDOR) == 0xFFFFu) {

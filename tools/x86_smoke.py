@@ -578,6 +578,8 @@ EXPECTED = [
     # The port reads the tables back at the boot: the text of the kernel is
     # read-only, every data page is NX, and no page is both (ADR 0007).
     "x86-64: the map is W^X",
+    "gpu: no display controller of a known vendor, the framebuffer is the firmware's",
+    "kmod: gpu skip",
 ]
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

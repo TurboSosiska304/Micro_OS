@@ -40,6 +40,7 @@
 #include "config/session.h"
 #include "kshell/kshell.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_gpu.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
@@ -489,6 +490,13 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
      * has no interface to program one. The serial port carries the line
      * either way, which is how a machine without a window is read. */
     kinfo("x86-64: the screen is %s", port_x86_64_console_name());
+
+    /* Display controller probe (hello GPU): read-only PCI identification, no
+     * display engine writes, no firmware, no mode change. */
+    port_x86_64_gpu_init();
+    if (port_x86_64_gpu_register() != 0) {
+        kwarn("x86-64: the gpu command is not registered");
+    }
 
     /*
      * The processors of the machine (ADR 0012). The count on the left is what

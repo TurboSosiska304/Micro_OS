@@ -24,6 +24,7 @@ static void run_tests(void *arg)
     K_UNUSED(arg);
 
     test_version();
+    test_gpu_intel();
     test_board();
     test_log();
     test_ansi();
@@ -71,6 +72,7 @@ static void run_tests(void *arg)
     test_input_hid();
     test_ps2();
     test_xhci_portsc();
+    test_gpu_amd();
     test_battery_soc();
     test_fb_draw();
     test_rtc();
