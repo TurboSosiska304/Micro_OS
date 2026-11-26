@@ -58,9 +58,8 @@ int k_logfile_flush(void);
  */
 int k_logfile_stop_for_poweroff(void);
 
-/* The service task of the ports: wake once a second and flush a batch. */
-void k_logfile_service_task(void *arg);
-int k_logfile_service_start(void);
+/* Called by the existing init loop; flush at most once a second. */
+void k_logfile_tick(void);
 
 /* Flush and forget the active log. A later start may install a new boot. */
 void k_logfile_stop(void);

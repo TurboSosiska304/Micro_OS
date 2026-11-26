@@ -8,8 +8,6 @@
 #include "kernel/kmm.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
-#include "kernel/signal.h"
-#include "kernel/task.h"
 #include "kernel/vfs.h"
 
 /* The producer never waits for the volume: one bounded ring feeds one batch. */
@@ -37,7 +35,7 @@ static k_size_t g_dropped;
 static bool g_active;
 static bool g_ram;
 static bool g_flushing;
-static bool g_service_started;
+static k_u64_t g_last_flush_ms;
 
 static int image_alloc(struct log_image *image)
 {
@@ -382,6 +380,7 @@ int k_logfile_start(const char *boot, k_size_t boot_size, bool storage)
     }
 
     pending_clear();
+    g_last_flush_ms = k_sched_uptime_ms();
     g_ram = false;
 
     if (boot == NULL) {
@@ -546,7 +545,7 @@ int k_logfile_stop_for_poweroff(void)
 
     rc = flush_pending();
     if (rc != 0) {
-        /* The clean end is refused before any unmount; let a living service
+        /* The clean end is refused before any unmount; the init loop can
          * keep collecting if the machine stays on. */
         k_port_enter_critical();
         g_active = was_active;
@@ -560,50 +559,16 @@ int k_logfile_stop_for_poweroff(void)
     return 0;
 }
 
-void k_logfile_service_task(void *arg)
+void k_logfile_tick(void)
 {
-    K_UNUSED(arg);
+    k_u64_t now = k_sched_uptime_ms();
 
-    for (;;) {
-        bool active;
-
-        k_sched_sleep_ms(K_LOGFILE_FLUSH_MS);
-
-        /* A plain kernel sleep is not a syscall wait and therefore does not
-         * answer SIGTERM by itself. The writer must consume the shutdown mark
-         * before the power task waits for it, or every clean end wastes the
-         * whole task timeout on a task that was only sleeping. */
-        task_signal_check(task_self(), 0, false);
-
-        if (k_logfile_pending() == 0) {
-            continue;
-        }
-
-        k_port_enter_critical();
-        active = g_active;
-        k_port_exit_critical();
-        if (active) {
-            (void)flush_pending();
-        }
-    }
-}
-
-int k_logfile_service_start(void)
-{
-    if (!g_active) {
-        return KERR_INVAL;
+    if (k_logfile_pending() == 0 || now - g_last_flush_ms < K_LOGFILE_FLUSH_MS) {
+        return;
     }
 
-    if (g_service_started) {
-        return 0;
-    }
-
-    if (task_create("logfile", k_logfile_service_task, NULL, TASK_PRIO_DEFAULT) == NULL) {
-        return KERR_NOMEM;
-    }
-
-    g_service_started = true;
-    return 0;
+    g_last_flush_ms = now;
+    (void)flush_pending();
 }
 
 void k_logfile_stop(void)

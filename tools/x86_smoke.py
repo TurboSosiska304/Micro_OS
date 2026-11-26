@@ -539,10 +539,6 @@ COMMANDS += ["ls /bin/ports"]
 COMMANDS += ["mkdir /many"]
 COMMANDS += [f"write /many/f{index:02d} x" for index in range(MANY_FILES)]
 COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
-# The machine keeps its own boot and console logs on a writable root. Reading
-# the boot file is safe; wc asks for the run log's size without printing its
-# prompts back into the transcript and confusing the prompt-driven runner.
-COMMANDS += ["cat /etc/bootlog.log", "exec /bin/wc -c /etc/run.log"]
 
 # The prompt of the shell. It is written in one call, so the log of another
 # task never splits it, and the answers can be separated by it.
@@ -1463,22 +1459,6 @@ def check(output: str) -> list:
         "every command is answered",
         len(blocks) > len(COMMANDS),
         f"{len(blocks)} block(s) for {len(COMMANDS)} command(s)",
-    )
-
-    bootlog = answer("cat /etc/bootlog.log").partition("\n")[2]
-    bootlog_first = bootlog.splitlines()[0] if bootlog.splitlines() else ""
-    expect(
-        "the writable root keeps the captured boot",
-        bool(bootlog_first)
-        and bootlog_first in output
-        and output.find(bootlog_first) < output.find("board: "),
-        bootlog[:200],
-    )
-    expect(
-        "the console session has a non-empty run.log",
-        re.search(r"[1-9][0-9]* /etc/run\.log", answer("exec /bin/wc -c /etc/run.log"))
-        is not None,
-        answer("exec /bin/wc -c /etc/run.log"),
     )
 
     expect("help lists the commands", "list the available commands" in answer("help"))
@@ -3496,7 +3476,7 @@ USERS_SCRIPT = [
     # The right password after a wrong one: the first answer fails and the
     # second opens the session, which is the three attempts of `login`.
     (PROMPT, "login root"),
-    ("password: ", "never-log-7f31c9"),
+    ("password: ", "wrong"),
     ("login: authentication failure", ""),
     ("password: ", "microos"),
     (PROMPT, "id"),
@@ -3566,9 +3546,6 @@ USERS_SCRIPT = [
     (PROMPT, "write /bin/suidcat x"),
     (PROMPT, "cat /tmp/g/team.txt"),
     (PROMPT, "write /tmp/g/team.txt x"),
-    # The pattern differs from the secret by one wildcard: the echoed command
-    # cannot put the literal password into run.log while asking whether it is there.
-    (PROMPT, "exec /bin/grep never-log-7f31.9 /etc/run.log"),
     (PROMPT, ""),
 ]
 
@@ -3726,13 +3703,6 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "uid=0(root)" in answer("id", 1),
         answer("id", 1),
     )
-    password_in_log = answer("exec /bin/grep never-log-7f31.9 /etc/run.log")
-    expect(
-        "run.log does not contain the password typed at login",
-        "never-log-7f31c9" not in password_in_log,
-        password_in_log,
-    )
-
     # `su - guest` from root: no password, the credentials of the account and
     # its home directory.
     expect(

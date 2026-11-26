@@ -198,11 +198,7 @@ static void init_task(void *arg)
 
     K_UNUSED(arg);
 
-    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) == 0) {
-        if (k_logfile_service_start() != 0) {
-            kwarn("sim: the task of the log cannot start");
-        }
-    } else {
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) != 0) {
         kerror("sim: the logs cannot be installed");
     }
     klog_capture_stop();
@@ -324,6 +320,7 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        k_logfile_tick();
         k_sched_sleep_ms(100);
     }
 }

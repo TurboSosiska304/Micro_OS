@@ -250,11 +250,7 @@ static void init_task(void *arg)
     /* The board keeps /etc in NVS and has no volume it may append to. The
      * captured boot and the console therefore stay in the same bounded RAM
      * log as a read-only root, and the line on the console says so. */
-    if (k_logfile_start(klog_captured_text(), klog_captured_size(), false) == 0) {
-        if (k_logfile_service_start() != 0) {
-            kwarn("init: the task of the log cannot start");
-        }
-    } else {
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), false) != 0) {
         kerror("init: the logs cannot be installed");
     }
     klog_capture_stop();
@@ -380,6 +376,7 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        k_logfile_tick();
         k_sched_sleep_ms(100);
     }
 }

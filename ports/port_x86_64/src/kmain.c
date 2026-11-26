@@ -411,12 +411,6 @@ static void init_task(void *arg)
     }
 #endif
 
-    /* Start the writer after the console and the listener: their pids are part
-     * of the contract of this port's smoke tests (the console is pid 3). */
-    if (k_logfile_service_start() != 0) {
-        kwarn("x86-64: the task of the log cannot start");
-    }
-
     /*
      * The init of the machine is also the parent of the last resort: a child
      * whose parent died is reparented to pid 1 by the kernel, and this loop
@@ -435,6 +429,9 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        /* The existing init loop owns the log batches: no extra task slot and
+         * no writer left running when this task is signalled at shutdown. */
+        k_logfile_tick();
         k_sched_sleep_ms(100u);
     }
 }
