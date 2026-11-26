@@ -183,9 +183,11 @@ written when the project was an operating system for one board; the numbers
       about half a millisecond; the gate is `make fork-smoke` and the counts
       are the port's lines. What is left is the 2 MiB page of the window (a
       32-entry walk) and the shared open file description of POSIX.
-* [ ] A port for a real ARM with an MMU: the same contract, a second `arch/`
-      (`docs/plan-arm64.md`; a **later release**, no date - the plan is written
-      and the work is not started)
+* [ ] A port for ARM with an MMU: the same contract, a second `arch/`
+      (`docs/plan-arm64.md`). **Taken into work**: the contract and a machine
+      that boots in QEMU `virt` (stages 0 and 1). A real board is **not
+      promised** - there is no ARM machine of the owner's to test on, so every
+      gate of this port is an emulator, and stages 3 and 4 stay a road.
 * [ ] `KERNEL_NOMMU` becomes 0 and the concessions become features
 
 ## K6 - The filesystem and the network (in progress)

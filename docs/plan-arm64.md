@@ -4,10 +4,12 @@
 > a driver of a phone is the last mile, not the first, and a machine that
 > cannot boot has no mile at all.
 >
-> **Status: a later release, no date.** The plan is written down so that the
-> work is not started from the wrong end (a driver of a phone before a machine
-> boots); it is not a promise of 1.7 or of any version named in
-> `docs/roadmap.md`. The release that takes it names it in its own plan.
+> **Status: the first stage is in work; a real board is not promised.** The
+> owner has no ARM machine to test on, so every gate of this port is a machine
+> of QEMU (`-M virt`): stage 0 and stage 1 are the work taken up now, and
+> stages 3 and 4 (a board, a phone) are written down as the road and are not a
+> promise of any release. The plan is written down so that the work is not
+> started from the wrong end (a driver of a phone before a machine boots).
 
 ## Why this is a port and not a rewrite
 
@@ -34,6 +36,9 @@ x86-64 (`PORT_KERNEL_BASE`, the identity map, the arena of a program).
 Exit: `docs/ports/arm64/contract.md`, and a list of the gaps in `port.h`.
 
 ## Stage 1 - a machine that boots (one to two weeks of one agent)
+
+Every gate of this stage is `qemu-system-aarch64 -M virt`: no hardware is
+involved, and none is promised.
 
 QEMU `virt`, `-M virt -cpu cortex-a57 -m 256M`, ARMv8-A, 4 KiB pages:
 
@@ -64,11 +69,20 @@ Exit: `/bin/sh`-shaped shell, `cat`, `ls`, `pkg` against a local volume.
 
 ## Stage 3 - a real board (after stage 2, not before)
 
+**Not promised, and the reason is not caution: there is no ARM machine to test
+on.** The owner has a laptop of x86-64 and a board of ESP32; a port whose only
+gate is an emulator must not claim a board. The day a board arrives, this stage
+starts with the cheapest question - which model boots a bootloader this tree can
+replace - and the gate of the stage is that machine, not QEMU.
+
 A board whose documentation is public and whose boot can be replaced: a
 Raspberry Pi, a Rockchip board, or a device of the postmarketOS list. The
 first target is the one where the bootloader is replaceable without a fight.
 
 ## Stage 4 - a phone, and what "driver" means there
+
+**Not promised**, for the same reason as stage 3 and one more: a phone is the
+last mile of a port that has a board.
 
 A phone is not one device: a DSI panel with its init sequence, a touch
 controller, a PMIC with its regulators, a GPU, a modem, a camera, sensors -
