@@ -1880,6 +1880,17 @@ static void critical_lock_release(void)
     __atomic_store_n(&g_critical_lock, 0u, __ATOMIC_RELEASE);
 }
 
+k_u32_t k_port_critical_depth(void)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        cpu = 0u;
+    }
+
+    return g_critical_depth[cpu];
+}
+
 void k_port_enter_critical(void)
 {
     k_u32_t cpu = k_port_cpu_id();
