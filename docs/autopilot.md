@@ -33,7 +33,12 @@ own, and the reports stay in the tree and in the chat, **not in Telegram**.
 
 ## The rules that keep the machine honest
 
-* **no Telegram**: the report is a file and a message in the chat;
+* **the reports**: an interim report goes to Telegram through the MCP bot
+  (`tg.send_message`), and the autopilot keeps a cadence in the chat of one
+  nudge every 20-40 minutes; the autopilot itself sends nothing;
+* **the tokens of the pilot are the scarce resource**: a task that can be
+  written by a lane is a lane, on a free model of the tariff; the pilot reads
+  reports and merges, it does not write the code it can delegate;
 * one emulator per machine; a lane starts it and takes it down in the same
   command; nothing waits in a background wrapper (`docs/agents.md`);
 * a check that fails under load is a check to fix, not to retry until green;
@@ -51,6 +56,7 @@ own, and the reports stay in the tree and in the chat, **not in Telegram**.
 | the shell that stops answering on eight cores | `feature/smp-hang` | in work (K27, UART-spin hypothesis) |
 | phase A of the GPU | `feature/fb-raster` | 284/284 on its branch; merge after the two above |
 | 2.2: page cache, journal, `fsync` | not started | after 2.1 is green |
+| basic AMD GPU driver | `feature/gpu-amd-basic` | in work (MIT code, attributed) |
 | 2.3: fault injection, fuzzing | not started | the plan first |
 
 ## The GPU: from the handshake to the first operation
