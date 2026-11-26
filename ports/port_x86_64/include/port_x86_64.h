@@ -882,6 +882,25 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
 #define PORT_X86_64_USER_RESTORER_OFFSET (PORT_X86_64_USER_GUARD_OFFSET - 4096u)
 #define PORT_X86_64_USER_TOP (PORT_X86_64_USER_BASE + PORT_X86_64_USER_RESTORER_OFFSET)
 
+/* --- the console ---------------------------------------------------------- */
+
+/* The live state of the last COM1 transmit wait that reached its deadline. */
+#define PORT_X86_64_COM1_STACK_WORDS 8u
+
+struct port_x86_64_com1_stats {
+    k_u64_t thr_waits;
+    k_u64_t thr_timeouts;
+    k_u64_t dropped;
+    k_u32_t last_cpu;
+    k_u32_t last_pid;
+    k_u64_t last_rip;
+    k_u64_t last_rsp;
+    k_u64_t last_stack[PORT_X86_64_COM1_STACK_WORDS];
+};
+
+/* Copy the counters and the last timeout without waiting for the console lock. */
+void port_x86_64_com1_get_stats(struct port_x86_64_com1_stats *stats);
+
 /* --- what the boot of the platform learned -------------------------------- */
 
 struct port_x86_64_info {

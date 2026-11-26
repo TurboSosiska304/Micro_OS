@@ -92,6 +92,9 @@ static void tls_init(void)
  */
 static bool g_com1_present;
 
+/* The calibrated TSC is shared by the clock and the bounded console waits. */
+static k_u64_t g_tsc_per_second;
+
 static void com1_probe(void)
 {
     port_outb(COM1 + 7, 0xAEu);
@@ -139,19 +142,170 @@ static k_u8_t g_com1_state;
 static char g_com1_escape[COM1_ESCAPE_MAX];
 static k_size_t g_com1_len;
 
+/*
+ * A console is not allowed to hold the machine. The host may stop reading a
+ * serial pipe and the 16550 will keep THR empty forever; waiting without a
+ * deadline then holds the BKL and stops every other core with it. One bounded
+ * wait is allowed, and an outage drops the remaining bytes until the port is
+ * ready again instead of making every byte pay the timeout.
+ */
+#define COM1_THR_TIMEOUT_US 100u
+#define COM1_THR_FALLBACK_SPINS 1000000u
+
+static k_u64_t g_com1_thr_waits;
+static k_u64_t g_com1_thr_timeouts;
+static k_u64_t g_com1_dropped;
+static k_u32_t g_com1_last_cpu;
+static k_u32_t g_com1_last_pid;
+static k_u64_t g_com1_last_rip;
+static k_u64_t g_com1_last_rsp;
+static k_u64_t g_com1_last_stack[PORT_X86_64_COM1_STACK_WORDS];
+static bool g_com1_thr_down;
+
+/* Wait for THR, and name the exact instruction and stack if the wait expires. */
+static bool com1_wait_thr(k_u64_t *rip, k_u64_t *rsp, k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS])
+{
+    k_u64_t ticks = 0;
+    k_u64_t start = 0;
+    k_u32_t spins = 0;
+
+    if (g_tsc_per_second != 0u) {
+        ticks = (g_tsc_per_second / 1000000u) * (k_u64_t)COM1_THR_TIMEOUT_US;
+        start = port_rdtsc();
+    }
+
+    for (;;) {
+        if ((port_inb(COM1_LSR) & 0x20u) != 0u) {
+            return true;
+        }
+
+        /* The local label is sampled on failure, so the report names the
+         * instruction that was spinning rather than a stale switch frame. */
+        __asm__ volatile("1:\n\tpause" ::: "memory");
+
+        if (ticks != 0u) {
+            if (port_rdtsc() - start >= ticks) {
+                break;
+            }
+        } else if (++spins >= COM1_THR_FALLBACK_SPINS) {
+            break;
+        }
+    }
+
+    __asm__ volatile("lea 1b(%%rip), %0" : "=r"(*rip));
+    __asm__ volatile("mov %%rsp, %0" : "=r"(*rsp));
+
+    {
+        const k_u64_t *words = (const k_u64_t *)(uintptr_t)*rsp;
+
+        for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+            stack[i] = words[i];
+        }
+    }
+
+    return false;
+}
+
+/* A timeout must not recurse into the wait it is reporting. These bytes are
+ * offered once, without waiting: a full FIFO loses the report, not the core. */
+static void com1_report_timeout(k_u32_t cpu, k_u32_t pid, const char *name, k_u64_t rip,
+                                k_u64_t rsp)
+{
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf),
+                     "[UART] THR timeout cpu=%u pid=%u task=%s\r\n"
+                     "[UART] rip=0x%08x%08x rsp=0x%08x%08x\r\n",
+                     (unsigned)cpu, (unsigned)pid, name != NULL ? name : "?", (unsigned)(rip >> 32),
+                     (unsigned)(rip & 0xFFFFFFFFu), (unsigned)(rsp >> 32),
+                     (unsigned)(rsp & 0xFFFFFFFFu));
+
+    for (int i = 0; i < n; i++) {
+        port_outb(COM1, (k_u8_t)buf[i]);
+    }
+}
+
+static void com1_timeout(k_u64_t rip, k_u64_t rsp,
+                         const k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS])
+{
+    struct task *self = k_port_task_current();
+    k_u32_t cpu = k_port_cpu_id();
+    k_u32_t pid = self != NULL ? self->pid : 0u;
+
+    __atomic_store_n(&g_com1_thr_down, true, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&g_com1_thr_timeouts, 1u, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_cpu, cpu, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_pid, pid, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_rip, rip, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_rsp, rsp, __ATOMIC_RELAXED);
+
+    for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+        __atomic_store_n(&g_com1_last_stack[i], stack[i], __ATOMIC_RELAXED);
+    }
+
+    com1_report_timeout(cpu, pid, self != NULL ? self->name : NULL, rip, rsp);
+}
+
+static bool com1_put(char c)
+{
+    if ((port_inb(COM1_LSR) & 0x20u) != 0u) {
+        __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
+        port_outb(COM1, (k_u8_t)c);
+        return true;
+    }
+
+    if (__atomic_load_n(&g_com1_thr_down, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
+        return false;
+    }
+
+    __atomic_fetch_add(&g_com1_thr_waits, 1u, __ATOMIC_RELAXED);
+
+    {
+        k_u64_t rip = 0;
+        k_u64_t rsp = 0;
+        k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS];
+
+        if (!com1_wait_thr(&rip, &rsp, stack)) {
+            com1_timeout(rip, rsp, stack);
+            return false;
+        }
+    }
+
+    __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
+    port_outb(COM1, (k_u8_t)c);
+    return true;
+}
+
+void port_x86_64_com1_get_stats(struct port_x86_64_com1_stats *stats)
+{
+    if (stats == NULL) {
+        return;
+    }
+
+    stats->thr_waits = __atomic_load_n(&g_com1_thr_waits, __ATOMIC_RELAXED);
+    stats->thr_timeouts = __atomic_load_n(&g_com1_thr_timeouts, __ATOMIC_RELAXED);
+    stats->dropped = __atomic_load_n(&g_com1_dropped, __ATOMIC_RELAXED);
+    stats->last_cpu = __atomic_load_n(&g_com1_last_cpu, __ATOMIC_RELAXED);
+    stats->last_pid = __atomic_load_n(&g_com1_last_pid, __ATOMIC_RELAXED);
+    stats->last_rip = __atomic_load_n(&g_com1_last_rip, __ATOMIC_RELAXED);
+    stats->last_rsp = __atomic_load_n(&g_com1_last_rsp, __ATOMIC_RELAXED);
+
+    for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+        stats->last_stack[i] = __atomic_load_n(&g_com1_last_stack[i], __ATOMIC_RELAXED);
+    }
+}
+
 /* One byte of the dialogue on the wire, with the line ending a terminal of
  * the user wants and the kernel writes as one. */
 static void com1_byte(char c)
 {
-    if (c == '\n') {
-        while ((port_inb(COM1_LSR) & 0x20) == 0) {
-        }
-        port_outb(COM1, '\r');
+    if (c == '\n' && !com1_put('\r')) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
     }
 
-    while ((port_inb(COM1_LSR) & 0x20) == 0) {
+    if (!com1_put(c)) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
     }
-    port_outb(COM1, (k_u8_t)c);
 }
 
 static void com1_flush(void)
@@ -387,8 +541,6 @@ void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
  * ticks of the timer, see "the time" below — but it says how fast this
  * machine is, which is the first number a human asks about a port.
  */
-static k_u64_t g_tsc_per_second;
-
 static void clock_measure(void)
 {
     const k_u32_t counts = 59659; /* 50 ms of the 1193182 Hz crystal */
