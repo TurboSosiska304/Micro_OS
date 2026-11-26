@@ -434,16 +434,24 @@ static void test_mfetch(void)
 
     port_host_set_sink(NULL);
 
-    /* The system and the board are named in the plain report ... */
+    /* The system and the machine are named in the plain report ... */
     KT_CHECK(strstr(buf, kernel_name()) != NULL);
-    KT_CHECK(strstr(buf, "Board") != NULL);
-    KT_CHECK(strstr(buf, "command(s)") != NULL);
+    KT_CHECK(strstr(buf, "OS") != NULL);
+    KT_CHECK(strstr(buf, "Machine") != NULL);
 
-    /* ... the rows a person looks for ... */
-    KT_CHECK(strstr(buf, "Build") != NULL);
-    KT_CHECK(strstr(buf, "Volume") != NULL);
+    /* ... the rows a person looks for, and the two numbers of the cores ... */
+    KT_CHECK(strstr(buf, "CPU") != NULL);
+    KT_CHECK(strstr(buf, "core(s)") != NULL);
+    KT_CHECK(strstr(buf, "Memory") != NULL);
+    KT_CHECK(strstr(buf, "MiB") != NULL);
+    KT_CHECK(strstr(buf, "Disk") != NULL);
+    KT_CHECK(strstr(buf, "Uptime") != NULL);
+    KT_CHECK(strstr(buf, "task(s)") != NULL);
     KT_CHECK(strstr(buf, "Modules") != NULL);
-    KT_CHECK(strstr(buf, "Heap") != NULL);
+
+    /* ... the noise of a debugger is gone from it ... */
+    KT_CHECK(strstr(buf, "Allocs") == NULL);
+    KT_CHECK(strstr(buf, "command(s)") == NULL);
 
     /* ... and the colored logo brings the escapes of the terminal. */
     KT_CHECK(strstr(buf, "MM MM") != NULL);

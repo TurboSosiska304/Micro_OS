@@ -308,8 +308,9 @@ def check(output: str, commands: list) -> list:
 
     fetch = answer("mfetch")
     expect("mfetch prints the operating system", "OS" in fetch)
-    expect("mfetch prints the board", "Board" in fetch)
-    expect("mfetch prints the heap", "Heap" in fetch)
+    expect("mfetch prints the machine", "Machine" in fetch)
+    expect("mfetch prints the memory with a bar", "Memory" in fetch and "[" in fetch)
+    expect("mfetch prints the cores the kernel runs", "core(s)" in fetch)
     expect("mfetch has no color codes without `color`", "\x1b[" not in fetch)
 
     expect("battery says the host has none", "no battery" in answer("battery"))

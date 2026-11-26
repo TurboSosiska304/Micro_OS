@@ -2,10 +2,14 @@
  * Micro OS — `mfetch`, the logo and the report of the system.
  *
  * The analog of fastfetch: the logo of the system on the left and a
- * short list of what the board is on the right — the version and the
- * build, the hardware, the memory with the blocks that live in it, the
- * volume of the flash, the uptime with the tasks, the modules of the
- * doctor and the shell.
+ * short list of what the machine is on the right — the version, the
+ * machine, the cores that the kernel runs, the memory and the disk with
+ * a bar, the uptime with the tasks and the modules of the doctor.
+ *
+ * The report is chosen for a person at the keyboard, not for a debugger:
+ * a build id, a count of allocations and the number of commands of the
+ * shell say nothing about the machine, and they are gone. What is left is
+ * what changes between two boots and between two machines.
  *
  * One drawing has to serve two places: the serial console and the
  * screen of the board. The size "L" of logos.md (the file in the root
@@ -22,7 +26,7 @@
 
 #include "kernel/board.h"
 #include "kernel/config.h"
-#include "kernel/kmm.h"
+#include "kernel/cpu.h"
 #include "kernel/kmod.h"
 #include "kernel/sched.h"
 #include "kernel/sysinfo.h"
@@ -145,10 +149,92 @@ static void print_row(k_size_t row, bool color, const char *key, const char *val
     kshell_printf("%s", line);
 }
 
+/* The cells of the bar of the memory and of the disk. */
+#define MFETCH_BAR_COLS 10
+
+/* The unit of a whole: a machine of the board has kilobytes and a machine of
+ * x86-64 has mebibytes, and two numbers of one row must share the unit. */
+static bool size_in_mib(k_u64_t bytes)
+{
+    return bytes >= (1024u * 1024u);
+}
+
+/* A size in bytes as a person reads it: mebibytes with one decimal, or the
+ * whole kilobytes when the unit of the row is the kilobyte. */
+static void format_size(char *out, k_size_t out_size, k_u64_t bytes, bool mib)
+{
+    if (mib) {
+        k_u64_t whole = bytes / (1024u * 1024u);
+        k_u64_t tenth = ((bytes % (1024u * 1024u)) * 10u) / (1024u * 1024u);
+
+        (void)snprintf(out, out_size, "%llu.%llu MiB", (unsigned long long)whole,
+                       (unsigned long long)tenth);
+    } else {
+        (void)snprintf(out, out_size, "%llu KiB", (unsigned long long)(bytes / 1024u));
+    }
+}
+
+/*
+ * The bar of a whole and the part of it in use, with the percentage. A whole
+ * of zero is a machine that has not told us its memory yet: the bar is empty
+ * and the number says zero, which is honest, instead of dividing by it.
+ */
+static void format_bar(char *out, k_size_t out_size, k_u64_t used, k_u64_t total)
+{
+    char bar[MFETCH_BAR_COLS + 1];
+    unsigned filled = 0;
+    unsigned percent = 0;
+    k_size_t i;
+
+    if (total != 0u) {
+        filled = (unsigned)((used * MFETCH_BAR_COLS) / total);
+        percent = (unsigned)((used * 100u) / total);
+    }
+    if (filled > MFETCH_BAR_COLS) {
+        filled = MFETCH_BAR_COLS;
+    }
+    for (i = 0; i < MFETCH_BAR_COLS; i++) {
+        bar[i] = (i < filled) ? '#' : '-';
+    }
+    bar[MFETCH_BAR_COLS] = '\0';
+
+    (void)snprintf(out, out_size, "[%s] %u%%", bar, percent);
+}
+
+/*
+ * The time since the boot in the two or three units that matter: a machine
+ * that has run for a day says the day, one that has just started says the
+ * seconds. The report is read at a glance, so it carries no zero in front.
+ */
+static void format_uptime(char *out, k_size_t out_size, k_u64_t ms)
+{
+    k_u64_t total = ms / 1000u;
+    k_u64_t days = total / 86400u;
+    k_u64_t hours = (total % 86400u) / 3600u;
+    k_u64_t minutes = (total % 3600u) / 60u;
+    k_u64_t seconds = total % 60u;
+
+    if (days != 0u) {
+        (void)snprintf(out, out_size, "%llud %lluh %llum", (unsigned long long)days,
+                       (unsigned long long)hours, (unsigned long long)minutes);
+    } else if (hours != 0u) {
+        (void)snprintf(out, out_size, "%lluh %llum %llus", (unsigned long long)hours,
+                       (unsigned long long)minutes, (unsigned long long)seconds);
+    } else if (minutes != 0u) {
+        (void)snprintf(out, out_size, "%llum %llus", (unsigned long long)minutes,
+                       (unsigned long long)seconds);
+    } else {
+        (void)snprintf(out, out_size, "%llus", (unsigned long long)seconds);
+    }
+}
+
 static int cmd_mfetch(int argc, char **argv)
 {
     const struct kernel_board *info = k_board_get();
-    char value[48];
+    char value[128];
+    char used_text[24];
+    char total_text[24];
+    char bar[24];
     bool color = false;
     k_size_t row = 0;
 
@@ -163,62 +249,91 @@ static int cmd_mfetch(int argc, char **argv)
 
     (void)snprintf(value, sizeof(value), "%s %s", kernel_name(), kernel_version());
     print_row(row++, color, "OS", value);
-    print_row(row++, color, "Build", kernel_build_id());
 
     /*
-     * The description is missing when the platform registered none: the
-     * report is still useful, and a row of dashes says that the answer is
-     * unknown instead of guessing it.
+     * The machine in one line. A board names itself, and the port that is not
+     * a board names its architecture and its platform: "x86_64, x86-64" would
+     * be a stutter, so the description of the board wins when there is one.
      */
-    print_row(row++, color, "Board", info != NULL ? info->desc : "-");
-    print_row(row++, color, "SoC", info != NULL ? info->soc : "-");
-    print_row(row++, color, "Arch", kernel_arch());
-    print_row(row++, color, "Display", info != NULL ? info->lcd : "-");
+    if (info != NULL && info->desc != NULL) {
+        (void)snprintf(value, sizeof(value), "%s", info->desc);
+    } else {
+        (void)snprintf(value, sizeof(value), "%s, %s", kernel_arch(), k_sysinfo_platform_name());
+    }
+    print_row(row++, color, "Machine", value);
 
-    (void)snprintf(value, sizeof(value), "%u/%u KB free", (unsigned)(k_sysinfo_heap_free() / 1024),
-                   (unsigned)(k_sysinfo_heap_total() / 1024));
-    print_row(row++, color, "Heap", value);
-
-    /* A machine without external memory has no row to show for it. */
-#if KERNEL_PSRAM
-    (void)snprintf(value, sizeof(value), "%u KB free", (unsigned)(k_sysinfo_psram_free() / 1024));
-    print_row(row++, color, "Psram", value);
-#endif
+    /*
+     * The cores: what the machine has and what the kernel runs. The two
+     * numbers differ on a build without KERNEL_SMP, and a person who asks
+     * the machine what it is wants to see exactly that.
+     */
+    (void)snprintf(value, sizeof(value), "%u core(s), %u in use", (unsigned)k_cpu_count(),
+                   (unsigned)k_sched_cpu_count());
+    print_row(row++, color, "CPU", value);
 
     {
-        struct kmm_stats stats;
+        k_u64_t total = (k_u64_t)k_sysinfo_heap_total();
+        k_u64_t used =
+            (total > (k_u64_t)k_sysinfo_heap_free()) ? total - (k_u64_t)k_sysinfo_heap_free() : 0u;
 
-        kmm_get_stats(&stats);
-        (void)snprintf(value, sizeof(value), "%u block(s), %u KB", (unsigned)stats.allocations,
-                       (unsigned)(stats.total_bytes / 1024));
-        print_row(row++, color, "Allocs", value);
+        bool mib = size_in_mib(total);
+
+        format_bar(bar, sizeof(bar), used, total);
+        format_size(used_text, sizeof(used_text), used, mib);
+        format_size(total_text, sizeof(total_text), total, mib);
+
+#if KERNEL_PSRAM
+        {
+            k_u64_t psram_total = (k_u64_t)k_sysinfo_psram_total();
+            k_u64_t psram_free = (k_u64_t)k_sysinfo_psram_free();
+            char psram_used_text[24];
+            char psram_total_text[24];
+
+            format_size(psram_used_text, sizeof(psram_used_text),
+                        (psram_total > psram_free) ? psram_total - psram_free : 0u,
+                        size_in_mib(psram_total));
+            format_size(psram_total_text, sizeof(psram_total_text), psram_total,
+                        size_in_mib(psram_total));
+            (void)snprintf(value, sizeof(value), "%s %s/%s, psram %s/%s", bar, used_text,
+                           total_text, psram_used_text, psram_total_text);
+        }
+#else
+        (void)snprintf(value, sizeof(value), "%s %s/%s", bar, used_text, total_text);
+#endif
+        print_row(row++, color, "Memory", value);
     }
 
     {
         struct vfs_statfs stat;
 
-        if (vfs_statfs("/", &stat) == 0) {
-            k_u64_t free_kb = ((k_u64_t)stat.free_blocks * (k_u64_t)stat.block_size) / 1024u;
-            k_u64_t total_kb = ((k_u64_t)stat.total_blocks * (k_u64_t)stat.block_size) / 1024u;
+        if (vfs_statfs("/", &stat) == 0 && stat.total_blocks != 0u) {
+            k_u64_t block = (k_u64_t)stat.block_size;
+            k_u64_t total = (k_u64_t)stat.total_blocks * block;
+            k_u64_t used = total - (k_u64_t)stat.free_blocks * block;
 
-            (void)snprintf(value, sizeof(value), "%u of %u KB", (unsigned)free_kb,
-                           (unsigned)total_kb);
+            bool mib = size_in_mib(total);
+
+            format_bar(bar, sizeof(bar), used, total);
+            format_size(used_text, sizeof(used_text), used, mib);
+            format_size(total_text, sizeof(total_text), total, mib);
+            (void)snprintf(value, sizeof(value), "%s %s/%s", bar, used_text, total_text);
         } else {
             (void)snprintf(value, sizeof(value), "not mounted");
         }
-        print_row(row++, color, "Volume", value);
+        print_row(row++, color, "Disk", value);
     }
 
-    (void)snprintf(value, sizeof(value), "%llu s, %u task(s)",
-                   (unsigned long long)(k_sched_uptime_ms() / 1000), (unsigned)task_count());
-    print_row(row++, color, "Uptime", value);
+    {
+        char up[32];
+
+        format_uptime(up, sizeof(up), k_sched_uptime_ms());
+        (void)snprintf(value, sizeof(value), "%s, %u task(s)", up, (unsigned)task_count());
+        print_row(row++, color, "Uptime", value);
+    }
 
     (void)snprintf(value, sizeof(value), "%u, %d problem(s)", (unsigned)kmod_count(),
                    kmod_problems());
     print_row(row++, color, "Modules", value);
-
-    (void)snprintf(value, sizeof(value), "%u command(s)", (unsigned)kshell_command_count());
-    print_row(row++, color, "Shell", value);
 
     return KSHELL_OK;
 }
@@ -228,8 +343,9 @@ int kshell_register_mfetch(void)
     static const struct kshell_help help = {
         .summary = "the system report with the logo",
         .usage = "mfetch [color]",
-        .detail = "The logo beside a short report: the name and the build, the board, the\n"
-                  "memory, the volume, the uptime, the modules and the shell.\n"
+        .detail = "The logo beside a short report: the version, the machine, the cores the\n"
+                  "kernel runs, the memory and the disk with a bar, the uptime with the\n"
+                  "tasks and the modules of the doctor.\n"
                   "`color` brings the escape sequences of the terminal; the plain report\n"
                   "stays printable on the screen of the board.\n",
     };

@@ -193,7 +193,7 @@ class Load:
             Command("free", ["heap:"]),
             Command("df", ["blocks:", "free"]),
             Command("modules", ["0 problem(s)"]),
-            Command("mfetch", ["OS", "Board"]),
+            Command("mfetch", ["OS", "Machine", "core(s)"]),
             Command("display rotate 90", ["display rotation: 90"]),
             Command("display rotate 0", ["display rotation: 0"]),
             Command("exec /bin/hello", ["PROGRAM: hello from /bin"]),
