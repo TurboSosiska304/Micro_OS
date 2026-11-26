@@ -297,18 +297,23 @@ int setpgid(pid_t pid, pid_t pgid)
 
 pid_t tcgetpgrp(int fd)
 {
-    pid_t pgrp = 0;
+    unsigned int pgrp = 0;
+    int rc = posix(
+        (int)__ulibc_syscall6(KSYS_IOCTL, fd, (long)TIOCGPGRP, (long)(uintptr_t)&pgrp, 0, 0, 0));
 
-    if (ioctl(fd, TIOCGPGRP, &pgrp) < 0) {
+    if (rc < 0) {
         return (pid_t)-1;
     }
 
-    return pgrp;
+    return (pid_t)pgrp;
 }
 
 int tcsetpgrp(int fd, pid_t pgrp)
 {
-    return ioctl(fd, TIOCSPGRP, &pgrp);
+    unsigned int value = (unsigned int)pgrp;
+
+    return posix(
+        (int)__ulibc_syscall6(KSYS_IOCTL, fd, (long)TIOCSPGRP, (long)(uintptr_t)&value, 0, 0, 0));
 }
 
 pid_t waitpid(pid_t pid, int *status, int options)
