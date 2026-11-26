@@ -32,6 +32,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs_big.c
         cases/test_mkfs_image.c
         cases/test_vfs.c
+        cases/test_ramfs.c
         cases/test_fs_fat.c
         cases/test_fs_ext2.c
         cases/test_sysfs.c
@@ -151,6 +152,7 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/components/graphics/include"
         "${CMAKE_SOURCE_DIR}/components/fs_fat32/include"
         "${CMAKE_SOURCE_DIR}/components/fs_ext2/include"
+        "${CMAKE_SOURCE_DIR}/components/ramfs/include"
         # The verifier of ADR 0020 and its two primitives: the boot loader and
         # the tool compile the same files, and the test is the third caller.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
@@ -570,6 +572,14 @@ if(NOT ESP_PLATFORM)
         )
     endif()
 
+    # The ramfs is the /tmp of a read-only root; the test compiles it in
+    # when the image leaves it out, the same way the other filesystems do.
+    if(NOT MICRO_OS_FS_RAMFS)
+        target_sources(microos_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/components/ramfs/src/ramfs_vfs.c"
+        )
+    endif()
+
     set(MICRO_OS_TEST_LIBS
         mkfs_mfs_image
         microos_kernel
@@ -601,6 +611,9 @@ if(NOT ESP_PLATFORM)
     endif()
     if(MICRO_OS_FS_EXT2)
         list(APPEND MICRO_OS_TEST_LIBS microos_fs_ext2)
+    endif()
+    if(MICRO_OS_FS_RAMFS)
+        list(APPEND MICRO_OS_TEST_LIBS microos_ramfs)
     endif()
 
     # The math of the host: the core of Lua calls the functions of the C

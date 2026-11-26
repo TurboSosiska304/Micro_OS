@@ -30,6 +30,7 @@ set(LIBC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc")
 set(MFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/mfs")
 set(FAT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_fat32")
 set(EXT2_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/fs_ext2")
+set(RAMFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/ramfs")
 set(PROCFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/procfs")
 set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
@@ -47,6 +48,10 @@ option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written" ON)
 # release carries the same tree twice, once in MicroFS and once in ext2, and
 # one kernel boots both (ADR 0027 §3).
 option(MICRO_OS_FS_EXT2 "ext2, read and written" ON)
+
+# The ramfs of the machine: /tmp on a read-only root is a filesystem in the
+# memory, not a file on the stick (2.0.2). The board does not build it.
+option(MICRO_OS_FS_RAMFS "ramfs, the writable /tmp of a read-only root" ON)
 
 # The optional features of the image (ADR 0010): the PSRAM pool of the
 # allocator is off, the MOX1 runtime is on (the port can enter a program), and
@@ -176,6 +181,13 @@ if(MICRO_OS_FS_EXT2)
         "${EXT2_DIR}/src/ext2_write.c"
         "${EXT2_DIR}/src/ext2_check.c"
         "${EXT2_DIR}/src/ext2_vfs.c"
+    )
+endif()
+
+set(RAMFS_SOURCES)
+if(MICRO_OS_FS_RAMFS)
+    set(RAMFS_SOURCES
+        "${RAMFS_DIR}/src/ramfs_vfs.c"
     )
 endif()
 
@@ -1535,6 +1547,7 @@ add_executable(microos64
     ${MFS_SOURCES}
     ${FAT_SOURCES}
     ${EXT2_SOURCES}
+    ${RAMFS_SOURCES}
     ${VIRTUAL_SOURCES}
     ${SETTINGS_SOURCES}
     ${HASH_SOURCES}
@@ -1594,6 +1607,7 @@ target_include_directories(microos64 PRIVATE
     "${MFS_DIR}/include"
     "${FAT_DIR}/include"
     "${EXT2_DIR}/include"
+    "${RAMFS_DIR}/include"
     "${PROCFS_DIR}/include"
     "${DEVFS_DIR}/include"
     "${CONFIG_DIR}/include"
@@ -1657,6 +1671,10 @@ endif()
 
 if(MICRO_OS_FS_EXT2)
     target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_EXT2=1)
+endif()
+
+if(MICRO_OS_FS_RAMFS)
+    target_compile_definitions(microos64 PRIVATE MICRO_OS_FS_RAMFS=1)
 endif()
 
 # The top 2 GiB, the one region the small model of the compiler can name with

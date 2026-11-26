@@ -57,6 +57,7 @@ static void run_tests(void *arg)
     test_mfs_big();
     test_mkfs_image();
     test_vfs();
+    test_ramfs();
     test_fs_fat();
     test_fs_ext2();
     test_sysfs();

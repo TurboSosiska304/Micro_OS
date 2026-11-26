@@ -160,6 +160,7 @@ else()
     option(MICRO_OS_FS_MFS "MicroFS, the filesystem of the board" ON)
     option(MICRO_OS_FS_FAT32 "FAT12/16/32, read and written, for the tests and a card" ON)
     option(MICRO_OS_FS_EXT2 "ext2, read-only, for the tests and a disk of the world" ON)
+    option(MICRO_OS_FS_RAMFS "ramfs, the writable /tmp of a read-only root" ON)
 
     if(NOT MICRO_OS_FS_MFS)
         message(FATAL_ERROR "the host simulator and the tests mount MicroFS")
@@ -201,6 +202,7 @@ else()
         MICRO_OS_WIFI=$<BOOL:${MICRO_OS_WIFI}>
         MICRO_OS_FS_FAT32=$<BOOL:${MICRO_OS_FS_FAT32}>
         MICRO_OS_FS_EXT2=$<BOOL:${MICRO_OS_FS_EXT2}>
+        MICRO_OS_FS_RAMFS=$<BOOL:${MICRO_OS_FS_RAMFS}>
     )
 
     enable_testing()
@@ -224,6 +226,9 @@ else()
     endif()
     if(MICRO_OS_FS_EXT2)
         add_subdirectory(components/fs_ext2)
+    endif()
+    if(MICRO_OS_FS_RAMFS)
+        add_subdirectory(components/ramfs)
     endif()
     add_subdirectory(components/procfs)
     add_subdirectory(components/devfs)

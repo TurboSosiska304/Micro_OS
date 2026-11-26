@@ -1411,7 +1411,7 @@ static void test_mount(void)
     KT_CHECK(strstr(buf, "mount: unknown option: -z") != NULL);
 
     /* The two tables of the command: the words and the flags. */
-    KT_CHECK(strstr(buf, "usage: mount [<device> <point> <type>] | mount -a") != NULL);
+    KT_CHECK(strstr(buf, "mount <type> <point>") != NULL);
     KT_CHECK(strstr(buf, "usage: umount <point>") != NULL);
     KT_CHECK(strstr(buf, "mount: 2 filesystem(s) mounted from /etc/fstab") != NULL);
     KT_CHECK(strstr(buf, "mount: 0 filesystem(s) mounted from /etc/fstab") != NULL);
