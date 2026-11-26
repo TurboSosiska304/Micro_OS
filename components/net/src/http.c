@@ -320,11 +320,31 @@ int http_get(const struct http_transport *transport, const char *url, char *body
         body_used += (k_size_t)n;
     }
 
+    out->status = status;
+    out->length = body_used;
+    out->total = (content_length >= 0) ? (k_size_t)content_length : 0;
+    out->truncated = false;
+
+    if (content_length >= 0) {
+        out->truncated = (k_size_t)content_length > body_used;
+    } else if (body_used == size - 1) {
+        /* No Content-Length: the buffer is full, so one more byte tells us
+         * whether the body ended or was cut. The byte is not kept - the
+         * buffer has no room for it - but the answer must not lie. */
+        char probe;
+
+        n = transport->recv(ctx, &probe, 1);
+        if (n > 0) {
+            out->truncated = true;
+        } else if (n < 0) {
+            transport->close(ctx);
+            return HTTP_ERROR;
+        }
+    }
+
     transport->close(ctx);
 
     body[body_used] = '\0';
-    out->status = status;
-    out->length = body_used;
 
     return HTTP_OK;
 }
