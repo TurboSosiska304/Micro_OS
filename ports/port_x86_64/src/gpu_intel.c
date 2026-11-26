@@ -518,10 +518,6 @@ static int gpu_intel_ggtt_test(const struct gpu_info *info)
         goto out;
     }
 
-    gpu_intel_address(physical, physical_text, sizeof(physical_text));
-    kshell_printf("gpu: ggtt slot %u, aperture 0x%x, physical 0x%s, pattern 0x%08x: PASS\n",
-                  (unsigned)run.start, (unsigned)((k_u64_t)run.start * GPU_INTEL_GTT_PAGE_SIZE),
-                  physical_text, (unsigned)pattern);
     ok = true;
 
 out:
@@ -536,6 +532,12 @@ out:
     }
     if (allocation != NULL && !keep_buffer) {
         kmm_free(allocation);
+    }
+    if (ok) {
+        gpu_intel_address(physical, physical_text, sizeof(physical_text));
+        kshell_printf("gpu: ggtt slot %u, aperture 0x%x, physical 0x%s, pattern 0x%08x: PASS\n",
+                      (unsigned)run.start, (unsigned)((k_u64_t)run.start * GPU_INTEL_GTT_PAGE_SIZE),
+                      physical_text, (unsigned)pattern);
     }
     return ok ? 0 : -1;
 }
