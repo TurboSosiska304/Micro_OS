@@ -134,6 +134,65 @@ static void test_mc_ramcfg_decode(void)
     KT_CHECK_INT_EQ(gpu_amd_decode_chansize(0xFFFFFEFFu), 32);
 }
 
+static void test_scanout_size_decode(void)
+{
+    ktest_begin("gpu_amd: scanout size decode is conservative");
+
+    /* 1920 * 1080 * 4 = 8294400, clamped to >= 1 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(1920u, 1079u), 1920ll * 1080ll * 4ll);
+    /* Zero pitch -> 0; small surface clamps up to 1 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(0u, 1079u), 0);
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(64u, 0u), 1024ll * 1024ll);
+    /* Clamp to 256 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(0x7FFFu, 0x3FFFu), 256ll * 1024ll * 1024ll);
+}
+
+static void test_scanout_overlap(void)
+{
+    struct gpu_amd_scanout_region r;
+
+    ktest_begin("gpu_amd: vram test refuses overlap with scanout");
+
+    memset(&r, 0, sizeof(r));
+    r.pipe = 0;
+    r.primary = true;
+    r.enabled = true;
+    r.address = 8ull * 1024ull * 1024ull * 1024ull - 4ull * 1024ull * 1024ull;
+    r.size_bytes = 16ull * 1024ull * 1024ull;
+
+    KT_CHECK(gpu_amd_ranges_overlap(r.address, r.size_bytes, r.address + 0x1000u, 4096u));
+    KT_CHECK(!gpu_amd_ranges_overlap(r.address, r.size_bytes, r.address - 4096u - 1ull, 4096u));
+
+    /* choose_test_offset must refuse when last-4MiB candidate overlaps scanout. */
+    {
+        k_u64_t vram = 8ull * 1024ull * 1024ull * 1024ull;
+        k_u64_t off = gpu_amd_choose_test_offset(vram, &r, 1);
+        /* It should either find a non-overlapping lower candidate or return 0. */
+        if (off != 0u) {
+            KT_CHECK(!gpu_amd_scanout_overlaps(off, GPU_AMD_VRAM_TEST_BYTES, &r, 1));
+            KT_CHECK(off >= GPU_AMD_VRAM_TEST_MIN_OFFSET);
+        }
+    }
+}
+
+static void test_scanout_overlap_refuses(void)
+{
+    struct gpu_amd_scanout_region regions[2];
+    k_u64_t vram = 256ull * 1024ull * 1024ull;
+    k_u64_t off;
+
+    ktest_begin("gpu_amd: vram test refuses when all candidates overlap scanout");
+
+    memset(regions, 0, sizeof(regions));
+    /* Cover the whole usable area above 16MiB with scanout regions. */
+    regions[0].enabled = true;
+    regions[0].address = 16ull * 1024ull * 1024ull;
+    regions[0].size_bytes = 240ull * 1024ull * 1024ull;
+
+    off = gpu_amd_choose_test_offset(vram, regions, 1);
+    KT_CHECK_INT_EQ((long long)off, 0);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -145,4 +204,7 @@ void test_gpu_amd(void)
     test_mc_memsize_decode();
     test_mc_chmap_decode();
     test_mc_ramcfg_decode();
+    test_scanout_size_decode();
+    test_scanout_overlap();
+    test_scanout_overlap_refuses();
 }

@@ -256,10 +256,20 @@ static const struct kmod g_gpu_mod = {
     .detail = gpu_mod_detail,
 };
 
+int port_x86_64_gpu_amd_vramtest(bool do_write);
+
 static int cmd_gpu(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    if (argc >= 2 && strcmp(argv[1], "vramtest") == 0) {
+        bool do_write = false;
+        if (argc >= 3 && strcmp(argv[2], "--write") == 0) {
+            do_write = true;
+        } else if (argc >= 3) {
+            kshell_printf("usage: gpu vramtest [--write]\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramtest(do_write);
+    }
 
     port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
     kshell_printf("%s\n", g_gpu_line);
