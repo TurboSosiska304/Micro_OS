@@ -125,8 +125,12 @@ OVERALL_DEADLINE = float("inf")
 OVERALL_CHECK = "the USB smoke stays within its overall timeout"
 
 
+def smoke_remaining() -> float:
+    return max(0.0, OVERALL_DEADLINE - time.monotonic())
+
+
 def smoke_window(timeout: float) -> float:
-    return max(0.0, min(timeout, OVERALL_DEADLINE - time.monotonic()))
+    return max(0.0, min(timeout, smoke_remaining()))
 
 # The INFO line of a root port that finished its reset. Keep both values: the
 # before state diagnoses a bad PLS/PP sequence, and the after state is the gate.
@@ -164,7 +168,7 @@ def sha256_file(path: str, limit: int = 0) -> str:
 
     with open(path, "rb") as handle:
         while True:
-            if smoke_window(0.0) <= 0.0:
+            if smoke_remaining() <= 0.0:
                 raise RuntimeError("USB smoke overall timeout while reading an image")
             want = 1024 * 1024 if left <= 0 else min(1024 * 1024, left)
             chunk = handle.read(want)
@@ -342,7 +346,7 @@ class Machine:
         monitor does with one `sendkey` a time.
         """
         for name in names:
-            if smoke_window(0.0) <= 0.0:
+            if smoke_remaining() <= 0.0:
                 return
             self.monitor_command(f"sendkey {name}")
             time.sleep(min(delay, smoke_window(delay)))
