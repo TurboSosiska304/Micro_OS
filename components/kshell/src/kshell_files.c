@@ -1591,7 +1591,8 @@ static int cmd_mount(int argc, char **argv)
     options[0].letter = 'a';
     options[0].value = &all;
 
-    rc = kshell_options(argc, argv, options, 1, "mount [-a] [<device> <point> <type>]", &args);
+    rc = kshell_options(argc, argv, options, 1,
+                        "mount [-a] [<device> <point> <type>] | mount <type> <point>", &args);
     if (rc == KSHELL_OPTIONS_HELP) {
         return kshell_help_show(argv[0]);
     }
@@ -1642,8 +1643,29 @@ static int cmd_mount(int argc, char **argv)
         return KSHELL_OK;
     }
 
+    if (args.argc == 2) {
+        /*
+         * mount <type> <point> — a filesystem with no device, like ramfs.
+         * The first word has to name a known type, otherwise the caller meant
+         * the three-word form and left one out.
+         */
+        if (vfs_type_find(args.argv[0]) >= 0) {
+            rc = vfs_mount_type(args.argv[1], args.argv[0], NULL);
+            if (rc != 0) {
+                return mount_error_text("mount", args.argv[1], rc);
+            }
+
+            kshell_printf("mount: %s is mounted at %s\n", args.argv[0], args.argv[1]);
+
+            return KSHELL_OK;
+        }
+
+        kshell_printf("usage: mount [<device> <point> <type>] | mount <type> <point> | mount -a\n");
+        return KSHELL_USAGE;
+    }
+
     if (args.argc != 3) {
-        kshell_printf("usage: mount [<device> <point> <type>] | mount -a\n");
+        kshell_printf("usage: mount [<device> <point> <type>] | mount <type> <point> | mount -a\n");
         return KSHELL_USAGE;
     }
 

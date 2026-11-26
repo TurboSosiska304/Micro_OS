@@ -67,6 +67,9 @@
 #if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
 #include "fs_ext2/ext2.h"
 #endif
+#if defined(MICRO_OS_FS_RAMFS) && MICRO_OS_FS_RAMFS
+#include "ramfs/ramfs_vfs.h"
+#endif
 
 /* The volume the boot mounts: the first partition of the disk of QEMU when
  * one was attached, "ram0" otherwise (src/ata.c, ADR 0008). */
@@ -269,6 +272,12 @@ static int filesystem_bring_up(const char **type)
         kwarn("x86-64: MicroFS could not register its type");
     }
 
+#if defined(MICRO_OS_FS_RAMFS) && MICRO_OS_FS_RAMFS
+    if (ramfs_vfs_register_type() != 0) {
+        kwarn("x86-64: the ramfs could not register its type");
+    }
+#endif
+
     rc = k_root_mount(device, type);
 
     if (rc != 0) {
@@ -297,6 +306,36 @@ static int filesystem_bring_up(const char **type)
      */
     (void)port_x86_64_fbdev_register();
     port_x86_64_input_register();
+
+#if defined(MICRO_OS_FS_RAMFS) && MICRO_OS_FS_RAMFS
+    /*
+     * A read-only root cannot hold the files of the desk in /tmp: the
+     * window manager keeps the pixels of a window there, and the stick and
+     * the ISO are read-only by the rule of ADR 0041. Mount a ramfs at /tmp
+     * so that the machine of 2.0 can draw its windows on the medium the
+     * release hands out.
+     */
+    {
+        k_size_t i;
+        bool root_ro = false;
+
+        for (i = 0; i < vfs_mount_count(); i++) {
+            if (strcmp(vfs_mount_name(i), "/") == 0) {
+                root_ro = vfs_mount_is_read_only(i);
+                break;
+            }
+        }
+
+        if (root_ro) {
+            int trc = vfs_mount_type("/tmp", "ramfs", NULL);
+            if (trc == 0) {
+                kinfo("x86-64: /tmp is a ramfs, the root is read-only");
+            } else {
+                kwarn("x86-64: /tmp could not be mounted as ramfs (%s)", vfs_strerror(trc));
+            }
+        }
+    }
+#endif
 
     /* The programs are files the tool left in the volume; nothing is
      * written here. A volume a person made without /bin is a machine

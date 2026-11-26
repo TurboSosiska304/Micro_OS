@@ -8,8 +8,8 @@
 #include "kernel/vfs.h"
 #include "ramfs/ramfs_vfs.h"
 
-#define RAMFS_POINT "/ram"
-#define RAMFS_TEST_FILE "/ram/big.bin"
+#define RAMFS_POINT "/"
+#define RAMFS_TEST_FILE "/big.bin"
 
 static k_u8_t g_file_data[VFS_FILE_DATA_SIZE];
 
@@ -17,7 +17,7 @@ static void setup(void)
 {
     (void)vfs_umount(RAMFS_POINT);
     (void)ramfs_vfs_reset();
-    (void)ramfs_vfs_register(RAMFS_POINT);
+    KT_CHECK_INT_EQ(ramfs_vfs_register(RAMFS_POINT), 0);
 }
 
 static void teardown(void)
