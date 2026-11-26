@@ -110,7 +110,6 @@ static int software_copy(k_blit_surface *dst, const k_blit_rect *dst_rect,
                          const k_blit_surface *src, const k_blit_rect *src_rect)
 {
     k_blit_rect dpart;
-    k_blit_rect spart;
     k_i32_t row;
     k_i32_t sx;
     k_i32_t sy;
