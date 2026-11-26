@@ -74,12 +74,16 @@ reached:
    signal may write; a task that ignores it is named in the log and the
    shutdown goes on - the machine cannot wait forever for a program.
 4. **The sync and the flush again**, because of the writes of step 3.
-5. **Every mount is taken down, the last one first.** A filesystem writes the
+5. **The machine log is closed.** It stops accepting console bytes, waits for
+   a batch already being written, flushes the last batch and clears its ring.
+   This belongs before the unmounts: the writer must never meet a volume that
+   is leaving, and the next flush puts the last transcript on the disk.
+6. **Every mount is taken down, the last one first.** A filesystem writes the
    last of its metadata in its `umount` (ext2's bitmaps and superblock), and a
    mount below another is never busy when the order is reversed. A filesystem
    that refuses to leave stops the shutdown: its state is the last thing that
    has not reached the medium.
-6. **The last flush, then `k_port_power(action)`.** The flush after the
+7. **The last flush, then `k_port_power(action)`.** The flush after the
    unmounts catches the cache of the medium under the metadata the `umount`
    wrote.
 
@@ -87,12 +91,12 @@ A refusal at any step clears the stopping state and returns the error to the
 shell, which prints the sentence: the machine keeps running, the getty opens
 its door again. The rule of ADR 0041 is the reason: **the data is worth more
 than the speed of a shutdown**. The one exception is `-f`, which skips steps
-2 to 6 and takes the machine down after a warning that no volume was synced;
+2 to 7 and takes the machine down after a warning that no volume was synced;
 no command makes it the default.
 
 The first flush is deliberately the one that decides the cheap case: it runs
 before a task is touched, so a disk that refuses costs a sentence and not the
-boot. A refusal **after** the signals (step 4 or 5) cannot bring back the
+boot. A refusal **after** the signals (step 4 or later) cannot bring back the
 tasks the SIGTERM ended; the shell of the call is still there and the reason
 is the line of the log. That price of the order is written in
 `docs/debts.md` (K20) rather than hidden.

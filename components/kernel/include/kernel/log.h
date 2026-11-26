@@ -70,6 +70,8 @@ void klog_clear(void);
  * the log of the boot can be written to a file.
  */
 void klog_capture_start(void);
+/* Capture and print at the same time, for a port whose console already exists. */
+void klog_capture_start_mirroring(void);
 void klog_capture_stop(void);
 const char *klog_captured_text(void);
 k_size_t klog_captured_size(void);

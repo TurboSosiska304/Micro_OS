@@ -47,11 +47,13 @@ bool k_power_ending(void);
  *   3. SIGTERM to every task but this one, and a bounded wait;
  *   4. the sync and the flush again, because a task may have written in
  *      the step above;
- *   5. every mount is taken down (the last one first, so a mount below is
+ *   5. the machine log stops accepting bytes, waits for a batch already in
+ *      flight, flushes its last bytes and clears its ring;
+ *   6. every mount is taken down (the last one first, so a mount below is
  *      never busy);
- *   6. the disks are flushed once more and k_port_power(action) is asked.
+ *   7. the disks are flushed once more and k_port_power(action) is asked.
  *
- * `force` skips the steps 2 to 6 and takes the machine down with a warning:
+ * `force` skips the steps 2 to 7 and takes the machine down with a warning:
  * it is the answer for a person who knows that the volume is gone, and no
  * command of the shell makes it the default.
  *

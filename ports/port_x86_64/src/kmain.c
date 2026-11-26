@@ -29,6 +29,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
 #include "kernel/root.h"
@@ -356,6 +357,13 @@ static void init_task(void *arg)
 {
     K_UNUSED(arg);
 
+    /* The root is mounted and this task can block on the VFS. Install the
+     * captured boot once; everything printed from here belongs to run.log. */
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) != 0) {
+        kerror("x86-64: the logs cannot be installed");
+    }
+    klog_capture_stop();
+
     /*
      * The program of the boot runs before the shell: execve is a wait now,
      * so the init task is its parent and the shell does not exist until the
@@ -422,6 +430,9 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        /* The existing init loop owns the log batches: no extra task slot and
+         * no writer left running when this task is signalled at shutdown. */
+        k_logfile_tick();
         k_sched_sleep_ms(100u);
     }
 }
@@ -432,6 +443,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     const char *root_type = NULL;
     int mounted;
     int defaults;
+
+    /* COM1 exists before the kernel does. Keep the first boot line in the
+     * capture without hiding it from the person watching the console. */
+    klog_capture_start_mirroring();
 
     port_x86_64_init(boot_info, boot_magic, kernel_phys);
 

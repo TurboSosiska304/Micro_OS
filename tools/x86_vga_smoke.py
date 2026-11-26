@@ -4157,7 +4157,8 @@ def run_boot_desktop(
 
             expect("the desk of the machine ends with the power",
                    machine.process.poll() is not None,
-                   "QEMU was still running after the shutdown of the desk")
+                   "QEMU was still running after the shutdown of the desk; the log ends with "
+                   + repr(machine.read_serial()[-1600:]))
         finally:
             machine.close()
 

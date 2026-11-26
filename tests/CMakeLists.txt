@@ -9,6 +9,7 @@ if(NOT ESP_PLATFORM)
         cases/test_gpu_intel.c
         cases/test_board.c
         cases/test_log.c
+        cases/test_logfile.c
         cases/test_ansi.c
         cases/test_port.c
         cases/test_blockdev.c

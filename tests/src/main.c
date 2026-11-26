@@ -27,6 +27,7 @@ static void run_tests(void *arg)
     test_gpu_intel();
     test_board();
     test_log();
+    test_logfile();
     test_ansi();
     test_port();
     test_blockdev();

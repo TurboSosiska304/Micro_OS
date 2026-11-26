@@ -3705,7 +3705,6 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
         "uid=0(root)" in answer("id", 1),
         answer("id", 1),
     )
-
     # `su - guest` from root: no password, the credentials of the account and
     # its home directory.
     expect(

@@ -3,6 +3,7 @@
  */
 #include "kernel/console.h"
 
+#include "kernel/logfile.h"
 #include "kernel/port.h"
 #include "kernel/task.h"
 #include "kernel/wait.h"
@@ -107,6 +108,11 @@ void k_console_write(const char *data, k_size_t len)
         return;
     }
 
+    /* The file log sees only what the machine printed. A secret reader turns
+     * this off for its own task, so even an echo by the port cannot put a
+     * password in run.log; output of every other task continues normally. */
+    k_logfile_console_write(data, len);
+
     k_port_write(data, len);
 
     /*
@@ -132,6 +138,28 @@ void k_console_write(const char *data, k_size_t len)
 int k_console_readline(char *buf, k_size_t size)
 {
     return k_port_console_readline(buf, size);
+}
+
+/*
+ * A secret dialogue suppresses the console log for the calling task only.
+ * The flag is not global: a password on one telnet session must not hide what
+ * another task prints, and the shell that asked for it must not stay silent
+ * after the line ends.
+ */
+void k_console_set_input_not_logged(bool enabled)
+{
+    struct task *self = task_self();
+
+    if (self != NULL) {
+        self->input_not_logged = enabled;
+    }
+}
+
+bool k_console_input_not_logged(void)
+{
+    struct task *self = task_self();
+
+    return self != NULL && self->input_not_logged;
 }
 
 struct k_terminal *k_terminal_current(void)
