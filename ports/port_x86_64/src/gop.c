@@ -13,7 +13,7 @@
  *    renderer of the kernel (kernel/render.h); a 16-bit mode exists in the
  *    specification but almost no firmware offers one;
  *  - it is memory behind a bus, at an address above the identity map of the
- *    boot and not to be cached.
+ *    boot and not to be kept in write-back cache;
  *
  * So the console draws into a shadow of the picture in RGB565 - the picture
  * src/fb.c makes, one cell of the font at a time, and the picture `/dev/fb0`
@@ -137,46 +137,64 @@ static k_u32_t channel_pack(const struct gop_channel *channel, k_u32_t value)
 /* One line of the shadow into one line of the frame. The colours of the
  * renderer are 565 (five bits, six and five), and the eight bits of each are
  * the widening fb.c uses for its palette: the low bits repeat the high ones,
- * so 0x1F of red is white and not a dark red with a step in it. */
+ * so 0x1F of red is white and not a dark red with a step in it. Rows are built
+ * in a local chunk and copied, rather than stored to the framebuffer pixel by
+ * pixel; the chunk keeps the stack small on a 4096-pixel firmware frame. */
+#define GOP_CONVERT_CHUNK 128u
+
 static void convert_line(int line)
 {
     const k_u16_t *source = s_shadow + (k_size_t)line * s_shadow_pixels;
-    int x;
+    k_u32_t pixels[GOP_CONVERT_CHUNK];
+    int x = 0;
 
-    if (s_bytes == 2) {
-        volatile k_u16_t *pixels = (volatile k_u16_t *)(void *)(s_frame + (k_size_t)line * s_pitch);
+    while (x < s_width) {
+        int count = s_width - x;
+        int index;
 
-        for (x = 0; x < s_width; x++) {
-            k_u16_t pixel = source[x];
-            k_u32_t red = (k_u32_t)((pixel >> 11) & 0x1Fu);
-            k_u32_t green = (k_u32_t)((pixel >> 5) & 0x3Fu);
-            k_u32_t blue = (k_u32_t)(pixel & 0x1Fu);
-
-            pixels[x] = (k_u16_t)(channel_pack(&s_red, (red << 3) | (red >> 2)) |
-                                  channel_pack(&s_green, (green << 2) | (green >> 4)) |
-                                  channel_pack(&s_blue, (blue << 3) | (blue >> 2)));
+        if (count > (int)GOP_CONVERT_CHUNK) {
+            count = (int)GOP_CONVERT_CHUNK;
         }
 
-        return;
-    }
+        if (s_bytes == 2) {
+            volatile k_u16_t *destination =
+                (volatile k_u16_t *)(void *)(s_frame + (k_size_t)line * s_pitch);
 
-    {
-        volatile k_u32_t *pixels = (volatile k_u32_t *)(void *)(s_frame + (k_size_t)line * s_pitch);
+            for (index = 0; index < count; index++) {
+                k_u16_t pixel = source[x + index];
+                k_u32_t red = (k_u32_t)((pixel >> 11) & 0x1Fu);
+                k_u32_t green = (k_u32_t)((pixel >> 5) & 0x3Fu);
+                k_u32_t blue = (k_u32_t)(pixel & 0x1Fu);
 
-        for (x = 0; x < s_width; x++) {
-            k_u16_t pixel = source[x];
-            k_u32_t red = (k_u32_t)((pixel >> 11) & 0x1Fu);
-            k_u32_t green = (k_u32_t)((pixel >> 5) & 0x3Fu);
-            k_u32_t blue = (k_u32_t)(pixel & 0x1Fu);
+                pixels[index] = (k_u16_t)(channel_pack(&s_red, (red << 3) | (red >> 2)) |
+                                          channel_pack(&s_green, (green << 2) | (green >> 4)) |
+                                          channel_pack(&s_blue, (blue << 3) | (blue >> 2)));
+            }
 
-            /* The byte the format calls reserved is opaque: it is what a
-             * blitter of a firmware leaves there, and a display that reads it
-             * as alpha shows the frame of the boot underneath a picture of
-             * this one otherwise. */
-            pixels[x] = channel_pack(&s_red, (red << 3) | (red >> 2)) |
-                        channel_pack(&s_green, (green << 2) | (green >> 4)) |
-                        channel_pack(&s_blue, (blue << 3) | (blue >> 2)) | 0xFF000000u;
+            memcpy((void *)(uintptr_t)(destination + x), pixels, (k_size_t)count * sizeof(k_u16_t));
+        } else {
+            volatile k_u32_t *destination =
+                (volatile k_u32_t *)(void *)(s_frame + (k_size_t)line * s_pitch);
+
+            for (index = 0; index < count; index++) {
+                k_u16_t pixel = source[x + index];
+                k_u32_t red = (k_u32_t)((pixel >> 11) & 0x1Fu);
+                k_u32_t green = (k_u32_t)((pixel >> 5) & 0x3Fu);
+                k_u32_t blue = (k_u32_t)(pixel & 0x1Fu);
+
+                /* The byte the format calls reserved is opaque: it is what a
+                 * blitter of a firmware leaves there, and a display that reads it
+                 * as alpha shows the frame of the boot underneath a picture of
+                 * this one otherwise. */
+                pixels[index] = channel_pack(&s_red, (red << 3) | (red >> 2)) |
+                                channel_pack(&s_green, (green << 2) | (green >> 4)) |
+                                channel_pack(&s_blue, (blue << 3) | (blue >> 2)) | 0xFF000000u;
+            }
+
+            memcpy((void *)(uintptr_t)(destination + x), pixels, (k_size_t)count * sizeof(k_u32_t));
         }
+
+        x += count;
     }
 }
 
@@ -422,14 +440,14 @@ const struct port_x86_64_screen *port_x86_64_gop_screen(void)
     }
 
     /* The window of the frame: the 2 MiB page it starts in and its offset, the
-     * way the VBE path maps the memory of the card. A frame above the identity
-     * map of the boot is a frame the port has to name in the top 2 GiB, and
-     * the pages are uncached because the bytes are the card's. */
+     * way the VBE path maps the memory of the card. The framebuffer map gives
+     * the stores write-combining through PAT; it does not change MTRRs or the
+     * uncached windows of the controllers. */
     offset = mode.phys & (PORT_X86_64_SCREEN_PAGE - 1u);
     window = mode.phys - offset;
 
-    if (port_x86_64_paging_map_mmio(PORT_X86_64_SCREEN_VIRT, window,
-                                    (k_size_t)mode.bytes + (k_size_t)offset) == 0u) {
+    if (port_x86_64_paging_map_framebuffer(PORT_X86_64_SCREEN_VIRT, window,
+                                           (k_size_t)mode.bytes + (k_size_t)offset) == 0u) {
         kerror("screen: the frame of the firmware at 0x%x cannot be mapped",
                (unsigned)(mode.phys >> 16));
         return NULL;

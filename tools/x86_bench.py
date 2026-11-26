@@ -89,6 +89,7 @@ PARAMETERS = {
     "pipe_bytes": 4 * 1024 * 1024,
     "file_mib": 16,
     "console_lines": 200,
+    "screen_cells": 160 * 50,
     "pipeline_bytes": 4 * 1024 * 1024,
     "chunk_bytes": 65536,
     "lat_samples": 2000,
@@ -132,6 +133,7 @@ ROWS = [
     ("file_write", "MiB/s", True, "file_write", "16 MiB written in 64 KiB blocks"),
     ("file_read", "MiB/s", True, "file_read", "16 MiB read in 64 KiB blocks"),
     ("console", "lines/s", True, "console", "200 lines written to the console"),
+    ("screen_text", "ns", True, "screen_text", "one 160x50 screen through the framebuffer"),
     ("lat_syscall_p50", "ns", True, "lat_syscall", "p50 of 2 000 calls of getpid()"),
     ("lat_syscall_p99", "ns", True, "lat_syscall", "p99 of the same calls"),
     ("lat_pipe_p50", "ns", True, "lat_pipe", "p50 of a byte through a pipe"),
@@ -143,7 +145,8 @@ ROWS = [
 # command is a mode of `/bin/bench` and the row is what a release is compared
 # by, and two of them are not the same word.
 STEP_ROWS = {"syscall": "syscall_getpid", "fork": "fork_exec",
-             "filewrite": "file_write", "fileread": "file_read"}
+             "filewrite": "file_write", "fileread": "file_read",
+             "screen": "screen_text"}
 
 TABLE_LINE = re.compile(r"^bench: (?P<name>[a-z0-9_]+) (?P<value>[0-9]+\.[0-9]+) (?P<unit>\S+)$")
 NOTE_LINE = re.compile(
@@ -337,6 +340,7 @@ def one_run(args, index: int) -> dict:
         failure = None
 
         steps = [
+            ("screen", f"exec /bin/bench screen {PARAMETERS['screen_cells']}"),
             ("fill", "exec /bin/bench fill"
                      f" {PIPE_FILE} {PARAMETERS['pipeline_bytes'] // (1024 * 1024)}"),
             ("syscall", f"exec /bin/bench syscall {PARAMETERS['syscall_calls']}"),
@@ -351,7 +355,8 @@ def one_run(args, index: int) -> dict:
         ]
 
         try:
-            with Machine(args.build, image, disk=args.disk) as machine:
+            with Machine(args.build, image, disk=args.disk,
+                         extra_args=["-vga", "std"]) as machine:
                 machine.open(timeout=args.timeout)
                 boot_seconds = machine.boot_seconds
 

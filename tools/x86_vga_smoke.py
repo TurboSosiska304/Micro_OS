@@ -11,9 +11,9 @@ machine in a window can type at all.
 
 There is no display here, and none is needed: QEMU with -display none still
 has its video device, and its monitor reads the picture (screendump) and
-presses keys (sendkey). The test boots the machine seven times and checks the
-two screens of ADR 0023 and the programs of the interface (ADR 0028, ADR
-0030, ADR 0054):
+presses keys (sendkey). The test boots the machine eight times and checks the
+two screens of ADR 0023, the PAT and no-PAT framebuffer policies, and the
+programs of the interface (ADR 0028, ADR 0030, ADR 0054):
 
   1. the framebuffer (-vga std, the default): the boot says the screen is the
      framebuffer of 1280x800 by 128x57 cells, the screenshot is a PPM of
@@ -840,6 +840,23 @@ class Machine:
 
     def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
                  image: str | None = None, cpu: str | None = None) -> None:
+        # The first-frame checks are timing sensitive. Another lane's QEMU on
+        # the same host starves TCG and makes a correct picture fail, so every
+        # boot waits for a quiet host. Match the process name rather than
+        # `pgrep -f`: a shell command that merely mentions QEMU is not a VM.
+        for _ in range(40):
+            probe = subprocess.run(
+                ["pgrep", "-x", "qemu-system-x86"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if probe.returncode != 0:
+                break
+            time.sleep(30)
+        else:
+            raise RuntimeError("QEMU host stayed busy for 20 minutes")
+
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
@@ -1225,25 +1242,25 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     not foreign,
                     f"{len(foreign)} cell(s) of the first frame hold no glyph: {foreign[:5]}",
                 )
-                # The banner of the kernel, "MicroOS ...", is somewhere in the
-                # first frame: the console scrolls, and a line that has left
-                # the top of the screen is a line the frame cannot show. The
-                # font of the port has the lower case, so the cells are the
-                # letters themselves and not their upper case, which is what
-                # the 5x7 font of the board would draw.
-                banner_row = find_text_row(first, "MicroOS", GREY, BLACK)
+                # Device probes log before the banner once the screen exists.
+                # Find the banner instead of assuming it is the first row, then
+                # verify the board line exactly one cell below it. The cells are
+                # the letters themselves, not the upper case of the 5x7 font.
+                banner = first.find_run("MicroOS", GREY, BLACK)
                 expect(
                     "the first line of the first frame is the banner",
-                    banner_row >= 0,
-                    "the banner is not in the first frame",
+                    banner is not None
+                    and all(
+                        first.cell_is(banner[0], index, GLYPHS[letter], GREY, BLACK)
+                        for index, letter in enumerate("MicroOS")
+                    ),
+                    "the banner is not a run of the glyphs of the font",
                 )
-                # The step of a line is the cell of 16 pixels: the line after
-                # the banner starts on the next row of cells.
                 expect(
                     "the lines of the first frame are 16 pixels apart",
-                    banner_row >= 0
-                    and first.cell_is(banner_row + 1, 0, GLYPHS["b"], GREY, BLACK),
-                    "the cell of the second line is not at the step of 16 pixels",
+                    banner is not None
+                    and first.cell_is(banner[0] + 1, 0, GLYPHS["b"], GREY, BLACK),
+                    "the board line is not one 16-pixel row below the banner",
                 )
 
             # --- the screen after the boot
@@ -1255,6 +1272,24 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 "the port chooses the framebuffer of 160x50 cells",
                 "x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 160x50 cells" in serial,
                 "the boot did not name the framebuffer of ADR 0023 and its grid",
+            )
+            expect(
+                "the framebuffer PTE reads back as PAT write-combining and NX",
+                re.search(
+                    r"screen: framebuffer cache is write-combining, "
+                    r"PAT=0x[0-9a-f]{16} \(entry 5=0x01\), "
+                    r"PTE flags=0x800000000000108b",
+                    serial,
+                )
+                is not None,
+                "the boot did not read back PAT entry 5 and the expected large-page PTE",
+            )
+            expect(
+                "the framebuffer leaves MTRRs unchanged and the map W^X",
+                re.search(r"screen: MTRR_DEF_TYPE=0x[0-9a-f]{16} \(unchanged\)", serial)
+                is not None
+                and "x86-64: the map is W^X, the text is read-only and the data is NX" in serial,
+                "the MTRR read-back or the W^X audit is missing",
             )
             expect(
                 "the boot applies the font of the PC",
@@ -1290,10 +1325,15 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                     {"g", "p", "y"} <= seen,
                     f"the picture holds no glyph of {sorted({'g', 'p', 'y'} - seen)}",
                 )
+                banner = picture.find_run("MicroOS", GREY, BLACK)
                 expect(
-                    "the cells of the first line are the glyphs of the font",
-                    find_text_row(picture, "MicroOS", GREY, BLACK) >= 0,
-                    "the banner is not in the picture in the glyphs of the font",
+                    "the cells of the banner line are the glyphs of the font",
+                    banner is not None
+                    and all(
+                        picture.cell_is(banner[0], index, GLYPHS[letter], GREY, BLACK)
+                        for index, letter in enumerate("MicroOS")
+                    ),
+                    "a cell of the banner line is not the glyph of the font",
                 )
                 expect(
                     "the theme of the boot is grey on black",
@@ -1329,17 +1369,22 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
             # picture is taken again until the grid it asks for is there. A
             # single dump after the line can catch the screen in the middle
             # of its own repaint.
-            picture = settled_picture(
-                machine,
-                workdir,
-                lambda seen: seen.only_colors(GREY, BLACK)
-                and not seen.foreign_cells(GREY, LINE_PITCH_GAP2),
-            )
+            def gap_ready(seen):
+                banner = seen.find_run("MicroOS", GREY, BLACK, LINE_PITCH_GAP2)
+                return (
+                    seen.only_colors(GREY, BLACK)
+                    and not seen.foreign_cells(GREY, LINE_PITCH_GAP2)
+                    and banner is not None
+                    and seen.cell_is(
+                        banner[0] + 1, 0, GLYPHS["b"], GREY, BLACK, LINE_PITCH_GAP2
+                    )
+                )
+
+            picture = settled_picture(machine, workdir, gap_ready)
             if picture is not None:
                 expect(
                     "the picture of the gap of 2 is 44 rows of 18 pixels",
-                    picture.only_colors(GREY, BLACK)
-                    and not picture.foreign_cells(GREY, LINE_PITCH_GAP2),
+                    gap_ready(picture),
                     "the picture is not the grid of 18 pixels a line",
                 )
 
@@ -1560,6 +1605,60 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 machine.run_line("config set console.paper theme", timeout),
                 "the console did not go back to the pair of the theme",
             )
+        finally:
+            machine.close()
+
+    return checks
+
+
+def run_framebuffer_no_pat(loader: str, kernel: str, timeout: float, verbose: bool,
+                           display: str) -> list:
+    """A CPU without PAT still has a correct, write-through framebuffer."""
+    checks = []
+
+    with tempfile.TemporaryDirectory(prefix="microos-vga-no-pat-") as workdir:
+        machine = Machine(loader, kernel, workdir, "std", display, cpu="qemu64,-pat")
+
+        def expect(name: str, condition: bool, detail: str = "") -> None:
+            checks.append((f"framebuffer without PAT: {name}", bool(condition), detail))
+
+        try:
+            booted = machine.wait_serial(PROMPT, timeout)
+            expect("the shell reaches its prompt", booted, "the boot never reached the prompt")
+
+            serial = machine.read_serial()
+            expect(
+                "the framebuffer stays mapped",
+                "x86-64: the screen is the framebuffer of 1280x800, 16 bpp, 160x50 cells" in serial,
+                "the fallback did not keep the framebuffer",
+            )
+            expect(
+                "the PTE reads back as write-through and NX",
+                "screen: framebuffer cache is write-through (no verified PAT), "
+                "PTE flags=0x800000000000008b" in serial
+                and "screen: framebuffer cache is write-combining" not in serial,
+                "the no-PAT PTE is not the expected write-through map",
+            )
+            expect(
+                "MTRRs are unchanged and the map is W^X",
+                re.search(r"screen: MTRR_DEF_TYPE=0x[0-9a-f]{16} \(unchanged\)", serial)
+                is not None
+                and "x86-64: the map is W^X, the text is read-only and the data is NX" in serial,
+                "the no-PAT boot did not read back MTRRs or audit W^X",
+            )
+
+            picture = machine.picture(workdir)
+            expect(
+                "the write-through picture is the same grid",
+                picture is not None
+                and (picture.width, picture.height) == (VBE_WIDTH, VBE_HEIGHT)
+                and picture.only_colors(GREY, BLACK)
+                and not picture.foreign_cells(GREY),
+                "the no-PAT picture has a foreign pixel or cell",
+            )
+
+            if verbose:
+                print(serial)
         finally:
             machine.close()
 
@@ -3343,27 +3442,6 @@ def run_text(loader: str, kernel: str, timeout: float, verbose: bool, display: s
     return checks
 
 
-def find_text_row(picture, text: str, ink: tuple, paper: tuple, pitch: int = LINE_PITCH) -> int:
-    """The row of a picture that spells `text`, or -1.
-
-    The console scrolls, so a line of the boot is not always the first line
-    of the screen: the frame is searched for the text instead of assuming
-    the row it had at the start. A dump that catches the screen after a line
-    has left it answers -1, and the check that asks says so.
-    """
-    if picture is None:
-        return -1
-
-    for row in range(picture.height // pitch):
-        if all(
-            picture.cell_is(row, column, GLYPHS[letter], ink, paper, pitch)
-            for column, letter in enumerate(text)
-        ):
-            return row
-
-    return -1
-
-
 def settled_picture(machine, directory: str, condition, seconds: float = 4.0):
     """The picture once the condition holds, or the last one before the end.
 
@@ -4124,6 +4202,7 @@ def main(argv: list) -> int:
 
     try:
         checks = run_framebuffer(loader, kernel, args.timeout, args.verbose, args.display)
+        checks += run_framebuffer_no_pat(loader, kernel, args.timeout, args.verbose, args.display)
         checks += run_ui(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_editor(loader, kernel, args.image, args.timeout, args.verbose, args.display)
         checks += run_fm(loader, kernel, args.image, args.timeout, args.verbose, args.display)

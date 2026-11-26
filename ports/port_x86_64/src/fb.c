@@ -22,10 +22,10 @@
  * sequences (kernel/ansi.h). Every cell carries its own (paper << 4) | ink,
  * so a red warning and a grey line are one grid and one scroll.
  *
- * A pixel is one store into the memory the card shows. There is no shadow
- * frame, no double buffer and no flush: the window of QEMU reads the memory
- * it is given, so the picture is the framebuffer and a flush would copy it
- * onto itself.
+ * A console cell is built a row at a time in a local sixteen-byte buffer and
+ * copied into the write-combining window. There is no shadow frame, no double
+ * buffer and no flush: the window of QEMU reads the memory it is given, so the
+ * picture is the framebuffer and a flush would copy it onto itself.
  */
 #include "port_x86_64_screen.h"
 
@@ -247,6 +247,41 @@ static void glyph_draw(int x, int y, char character, k_u16_t color)
     }
 }
 
+/*
+ * One opaque cell of the console: the paper and the glyph are known together,
+ * so a whole row of eight pixels can be assembled locally and copied with one
+ * store stream. The buffer is sixteen bytes and the font bits are unchanged.
+ */
+static void glyph_cell_draw(int x, int y, char character, k_u16_t ink, k_u16_t paper)
+{
+    const k_u8_t *glyph = font8x16_glyph(character);
+    k_u16_t pixels[FB_CELL_WIDTH];
+    int column;
+    int row;
+
+    if (x < 0 || y < 0 || x + FB_CELL_WIDTH > g_width || y + FONT8_HEIGHT > g_height) {
+        return;
+    }
+
+    for (row = 0; row < FONT8_HEIGHT; row++) {
+        k_u8_t bits = glyph[row];
+
+        for (column = 0; column < FB_CELL_WIDTH; column++) {
+            pixels[column] = paper;
+        }
+
+        for (column = 0; column < FONT8_WIDTH; column++) {
+            if ((bits & (k_u8_t)(0x80u >> column)) != 0u) {
+                pixels[column] = ink;
+            }
+        }
+
+        memcpy((void *)(uintptr_t)(g_fb + ((k_size_t)y + (k_size_t)row) * (k_size_t)g_stride +
+                                   (k_size_t)x),
+               pixels, sizeof(pixels));
+    }
+}
+
 /* --- the renderer of the kernel -------------------------------------------- */
 
 static int render_width(void *ctx)
@@ -386,12 +421,7 @@ static void cell_paint(int row, int column, bool inverted)
 
     cell = &g_cells[row][column];
     attr_colors(cell->attr, inverted, &ink, &paper);
-
-    render_fill_rect(NULL, x, y, FB_CELL_WIDTH, FB_CELL_HEIGHT, paper);
-
-    if (cell->character != ' ') {
-        glyph_draw(x, y, cell->character, ink);
-    }
+    glyph_cell_draw(x, y, cell->character, ink, paper);
 }
 
 /*
