@@ -43,3 +43,24 @@ person who cuts the release, which is the autopilot: no colleague edits them.
   `microos-agents/README.md`;
 * a name that is no longer used is retired in this file with the release it
   stopped at, instead of being quietly reused for something else.
+
+## The host of a gate
+
+A smoke is a measurement, and a measurement of a machine that is busy with
+another measurement is not one. Two rules, both learned from a red line that
+was not a defect:
+
+* **one QEMU at a time.** A lane that wants to boot waits for the machine:
+  `while pgrep -x qemu-system-x86_64 >/dev/null; do sleep 20; done`, and the
+  same for `qemu-system-aarch64`. `release_gate.sh` waits for a load average
+  of 2 for the whole run; a lane waits for the emulator.
+* **`pgrep -f qemu-system` is not that check.** The pattern matches the command
+  line of the shell that runs it, so the loop answers "busy" forever and a lane
+  waits twenty minutes for a machine that is empty. `pgrep -x` matches the name
+  of the process and nothing else.
+
+The measurements that suffered from this are the frame checks of
+`x86-vga-smoke`: they read the screen a second after the boot and a busy host
+changes what the second catches. A check like that belongs to the picture (the
+smoke searches the frame for the banner instead of assuming its row), never to
+a fixed sleep.
