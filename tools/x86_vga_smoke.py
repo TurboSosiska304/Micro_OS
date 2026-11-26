@@ -840,6 +840,23 @@ class Machine:
 
     def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
                  image: str | None = None, cpu: str | None = None) -> None:
+        # The first-frame checks are timing sensitive. Another lane's QEMU on
+        # the same host starves TCG and makes a correct picture fail, so every
+        # boot waits for a quiet host. Match the process name rather than
+        # `pgrep -f`: a shell command that merely mentions QEMU is not a VM.
+        for _ in range(40):
+            probe = subprocess.run(
+                ["pgrep", "-x", "qemu-system-x86"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            if probe.returncode != 0:
+                break
+            time.sleep(30)
+        else:
+            raise RuntimeError("QEMU host stayed busy for 20 minutes")
+
         self.serial_path = os.path.join(workdir, "serial.sock")
         self.monitor_path = os.path.join(workdir, "monitor.sock")
         self.transcript = b""
