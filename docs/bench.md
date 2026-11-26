@@ -493,7 +493,7 @@ That is the expected QEMU result: its video memory is ordinary RAM and TCG
 does not turn PAT write-combining into a faster store path. The text row also
 includes 8 000 COM1 byte stores, which dominate the short framebuffer work.
 The cache policy is therefore gated separately: `make x86-vga-smoke` reads
-back `PAT=0x0007040600070401` (entry 5 = WC), the framebuffer PTE
+back `PAT=0x0007010600070406` (entry 5 = WC), the framebuffer PTE
 `0x800000000000108b` (PAT, PWT, RW, P, PS and NX), an unchanged
 `MTRR_DEF_TYPE=0x0000000000000c06`, a clean W^X audit and the same picture. A
 second boot with `qemu64,-pat` requires the write-through PTE
