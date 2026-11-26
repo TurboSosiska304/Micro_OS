@@ -39,6 +39,7 @@ void test_mfs_chain(void);
 void test_mfs_big(void);
 void test_mkfs_image(void);
 void test_vfs(void);
+void test_ramfs(void);
 void test_fs_fat(void);
 void test_fs_ext2(void);
 void test_sysfs(void);
