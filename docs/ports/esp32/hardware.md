@@ -213,7 +213,7 @@ firmware does instead is what the wiring leaves: `power sleep` asks the clock
 for the seconds to the next match and arms the timer of the chip for that
 moment, and the flag of the clock (`AF`) tells the next boot that the timer
 and the alarm were the same event. The boot says which one it was —
-`rtc: the alarm woke the board` in `/log/start.log`, and `power` on the
+`rtc: the alarm woke the board` in the RAM boot log, and `power` on the
 console says the same — and the doctor shows the line of the clock with the
 alarm that is armed. From the **off** state the alarm switches the board on
 through the same latch, which is the way the product documentation describes

@@ -18,6 +18,7 @@ static k_log_level_t g_level = K_LOG_LEVEL_INFO;
 static char g_capture[KERNEL_LOG_CAPTURE_SIZE];
 static k_size_t g_capture_size;
 static bool g_capture_on;
+static bool g_capture_mirror;
 
 static k_size_t str_len(const char *s)
 {
@@ -135,7 +136,7 @@ static void klog_emit(k_log_level_t level, k_log_tone_t tone, const char *fmt, v
 
     k_port_exit_critical();
 
-    if (capture) {
+    if (capture && !g_capture_mirror) {
         return;
     }
 
@@ -191,16 +192,34 @@ void klog_tone(k_log_tone_t tone, const char *fmt, ...)
     va_end(ap);
 }
 
-void klog_capture_start(void)
+static void capture_start(bool mirror)
 {
+    k_port_enter_critical();
     g_capture_size = 0;
     g_capture[0] = '\0';
     g_capture_on = true;
+    g_capture_mirror = mirror;
+    k_port_exit_critical();
+}
+
+void klog_capture_start(void)
+{
+    capture_start(false);
+}
+
+/* A port with a console from the first instruction can keep the boot capture
+ * and still print it. The board keeps the original collect-then-write mode. */
+void klog_capture_start_mirroring(void)
+{
+    capture_start(true);
 }
 
 void klog_capture_stop(void)
 {
+    k_port_enter_critical();
     g_capture_on = false;
+    g_capture_mirror = false;
+    k_port_exit_critical();
 }
 
 const char *klog_captured_text(void)

@@ -71,6 +71,7 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
 {
     k_size_t len = 0;
     bool cut = false;
+    bool result;
 
     if (buf == NULL || size == 0) {
         return false;
@@ -84,6 +85,12 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
         session_write(prompt);
     }
 
+    /* The prompt is ordinary output and belongs in the log. From here until
+     * the line ends, even an echo made by the port is hidden from run.log. */
+    if (secret) {
+        k_console_set_input_not_logged(true);
+    }
+
     for (;;) {
         int c = k_console_getchar();
 
@@ -92,7 +99,8 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
              * of telnet that closed, a board told off. Not a wrong answer. */
             buf[len] = '\0';
             session_write("\n");
-            return false;
+            result = false;
+            goto done;
         }
 
         if (c == '\n' || c == '\r') {
@@ -104,9 +112,9 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
                 if (too_long != NULL) {
                     *too_long = true;
                 }
-                return true;
             }
-            return true;
+            result = true;
+            goto done;
         }
 
         if (c == '\b' || c == 127) {
@@ -140,6 +148,12 @@ bool session_read_line(const char *prompt, char *buf, k_size_t size, bool secret
             cut = true;
         }
     }
+
+done:
+    if (secret) {
+        k_console_set_input_not_logged(false);
+    }
+    return result;
 }
 
 static void read_account_name(char *name, k_size_t size)

@@ -37,6 +37,8 @@ struct fake_terminal {
     char out[512];
     size_t out_len;
     bool echo;
+    bool saw_input_hidden;
+    bool saw_input_logged;
 };
 
 static struct mfs_ram_device g_volume;
@@ -81,6 +83,12 @@ static int fake_get(void *arg)
 
     if (terminal->at >= strlen(terminal->input)) {
         return -1;
+    }
+
+    if (k_console_input_not_logged()) {
+        terminal->saw_input_hidden = true;
+    } else {
+        terminal->saw_input_logged = true;
     }
 
     return (int)(unsigned char)terminal->input[terminal->at++];
@@ -158,6 +166,9 @@ static void test_read_line(void)
     KT_CHECK(wrote(&terminal, "password: "));
     KT_CHECK(!wrote(&terminal, "microos"));
     KT_CHECK_STR_EQ(terminal.out, "password: ");
+    KT_CHECK(terminal.saw_input_hidden);
+    KT_CHECK(!terminal.saw_input_logged);
+    KT_CHECK(!k_console_input_not_logged());
 
     k_terminal_set(NULL);
 
@@ -168,6 +179,8 @@ static void test_read_line(void)
     KT_CHECK_STR_EQ(line, "ab");
     KT_CHECK(wrote(&terminal, "abX"));
     KT_CHECK(wrote(&terminal, "\b \b"));
+    KT_CHECK(terminal.saw_input_logged);
+    KT_CHECK(!terminal.saw_input_hidden);
     k_terminal_set(NULL);
 
     /* A client that kept its own echo gets no echo from the server. */
@@ -187,6 +200,12 @@ static void test_read_line(void)
     /* The end of the input is a terminal that closed, and not a line. */
     install(&terminal, "", true);
     KT_CHECK(!session_read_line(NULL, line, sizeof(line), false, &too_long));
+    k_terminal_set(NULL);
+
+    /* A secret terminal that closes must not leave the task's log muted. */
+    install(&terminal, "", true);
+    KT_CHECK(!session_read_line(NULL, line, sizeof(line), true, &too_long));
+    KT_CHECK(!k_console_input_not_logged());
     k_terminal_set(NULL);
 }
 

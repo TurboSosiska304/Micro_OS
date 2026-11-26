@@ -539,6 +539,10 @@ COMMANDS += ["ls /bin/ports"]
 COMMANDS += ["mkdir /many"]
 COMMANDS += [f"write /many/f{index:02d} x" for index in range(MANY_FILES)]
 COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
+# The machine keeps its own boot and console logs on a writable root. Reading
+# the boot file is safe; wc asks for the run log's size without printing its
+# prompts back into the transcript and confusing the prompt-driven runner.
+COMMANDS += ["cat /etc/bootlog.log", "exec /bin/wc -c /etc/run.log"]
 
 # The prompt of the shell. It is written in one call, so the log of another
 # task never splits it, and the answers can be separated by it.
@@ -1432,6 +1436,19 @@ def check(output: str) -> list:
 
     # --- the shell
     expect("the shell starts", "MicroOS shell ready" in output)
+    bootlog = answer("cat /etc/bootlog.log").partition("\n")[2]
+    first_boot_line = next((line for line in output.splitlines() if line.startswith("MicroOS ")), "")
+    expect(
+        "the writable root keeps the captured boot",
+        bool(first_boot_line) and bootlog.startswith(first_boot_line),
+        bootlog[:200],
+    )
+    expect(
+        "the console session has a non-empty run.log",
+        re.search(r"[1-9][0-9]* /etc/run\.log", answer("exec /bin/wc -c /etc/run.log"))
+        is not None,
+        answer("exec /bin/wc -c /etc/run.log"),
+    )
     expect(
         "the shell runs in a task",
         "no tasks yet" not in output,

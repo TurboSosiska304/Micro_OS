@@ -17,6 +17,7 @@
 #include "kernel/errno.h"
 #include "kernel/kmod.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/vfs.h"
 #include "kernel/port.h"
 #include "kernel/port/power.h"
@@ -200,40 +201,6 @@ static void console_bring_up(void)
 }
 
 /*
- * The log of the boot goes to the file /log/start.log, so that the console
- * stays readable. The doctor report and the summary still go to the console.
- */
-static int write_boot_log(void)
-{
-    struct vfs_file file;
-    /* The place for the data of the filesystem of an open file. */
-    static k_u8_t file_data[VFS_FILE_DATA_SIZE];
-    const char *text;
-    int rc;
-
-    /* The directory of the log. */
-    rc = vfs_mkdir("/log");
-    if (rc != 0 && rc != -3) {
-        kwarn("init: cannot create the directory /log (rc=%d)", rc);
-    }
-
-    rc = vfs_open("/log/start.log", VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, file_data);
-    if (rc != 0) {
-        kwarn("init: cannot create the log file (rc=%d)", rc);
-        return rc;
-    }
-
-    text = klog_captured_text();
-    if (text != NULL && klog_captured_size() > 0) {
-        vfs_write(&file, text, klog_captured_size());
-    }
-
-    vfs_close(&file);
-
-    return 0;
-}
-
-/*
  * The init task: the first task of the system (PID 1). It checks the kernel
  * and the hardware, and later starts the shell and the other services.
  */
@@ -280,14 +247,17 @@ static void init_task(void *arg)
         kwarn("init: the doctor found problems, see the report");
     }
 
-    /* The log of the boot goes to the file, the console gets the report. */
-    if (write_boot_log() == 0) {
-        klog_capture_stop();
-        kinfo("init: the log of the boot is in /log/start.log (%u bytes)",
-              (unsigned)klog_captured_size());
+    /* The board keeps /etc in NVS and has no volume it may append to. The
+     * captured boot and the console therefore stay in the same bounded RAM
+     * log as a read-only root, and the line on the console says so. */
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), false) == 0) {
+        if (k_logfile_service_start() != 0) {
+            kwarn("init: the task of the log cannot start");
+        }
     } else {
-        klog_capture_stop();
+        kerror("init: the logs cannot be installed");
     }
+    klog_capture_stop();
 
     kmod_report();
 

@@ -159,6 +159,11 @@ def check(output: str) -> list:
         "x86-64: the root volume is boot0p1" in output,
     )
     expect(
+        "the read-only boot says its logs are in RAM",
+        "the root is read-only, /etc/bootlog.log and /etc/run.log are in RAM" in output,
+        "the boot did not say where the logs are kept",
+    )
+    expect(
         "the volume of the CD is not formatted again",
         "is not formatted yet" not in output,
         "the boot formatted the volume of the boot medium",

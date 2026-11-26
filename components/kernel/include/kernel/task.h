@@ -126,6 +126,12 @@ struct task {
      */
     struct k_terminal *terminal;
     /*
+     * The dialogue of this task hides its input from the file log while a
+     * password is read. It belongs beside the terminal because two sessions
+     * may ask for a secret at the same moment.
+     */
+    bool input_not_logged;
+    /*
      * The mode of the terminal of that session (kernel/tty.h): made on the
      * first question a program asks of its terminal and freed with the task.
      * A task with no terminal of its own uses the mode of the console and

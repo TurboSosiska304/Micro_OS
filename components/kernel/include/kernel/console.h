@@ -45,6 +45,16 @@ void k_console_remove_sink(k_console_sink_fn sink);
 void k_console_write(const char *data, k_size_t len);
 
 /*
+ * Suppress the file log of input for the calling task. A reader of a password
+ * enables this after printing the prompt and disables it on every way out;
+ * other tasks keep their log, and the bytes still reach the screen or telnet
+ * terminal. This is a second barrier beside `secret` in session_read_line():
+ * even a port or terminal that echoes input cannot leak it into run.log.
+ */
+void k_console_set_input_not_logged(bool enabled);
+bool k_console_input_not_logged(void);
+
+/*
  * Whether the console of this machine has colours: a screen that reads the
  * SGR sequences of a terminal. The port says so once, before the shell
  * exists; the default is off, because a serial port and the UART of the

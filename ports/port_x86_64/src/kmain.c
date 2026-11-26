@@ -29,6 +29,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
 #include "kernel/root.h"
@@ -355,6 +356,13 @@ static void init_task(void *arg)
 {
     K_UNUSED(arg);
 
+    /* The root is mounted and this task can block on the VFS. Install the
+     * captured boot once; everything printed from here belongs to run.log. */
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) != 0) {
+        kerror("x86-64: the logs cannot be installed");
+    }
+    klog_capture_stop();
+
     /*
      * The program of the boot runs before the shell: execve is a wait now,
      * so the init task is its parent and the shell does not exist until the
@@ -403,6 +411,12 @@ static void init_task(void *arg)
     }
 #endif
 
+    /* Start the writer after the console and the listener: their pids are part
+     * of the contract of this port's smoke tests (the console is pid 3). */
+    if (k_logfile_service_start() != 0) {
+        kwarn("x86-64: the task of the log cannot start");
+    }
+
     /*
      * The init of the machine is also the parent of the last resort: a child
      * whose parent died is reparented to pid 1 by the kernel, and this loop
@@ -431,6 +445,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     const char *root_type = NULL;
     int mounted;
     int defaults;
+
+    /* COM1 exists before the kernel does. Keep the first boot line in the
+     * capture without hiding it from the person watching the console. */
+    klog_capture_start_mirroring();
 
     port_x86_64_init(boot_info, boot_magic, kernel_phys);
 

@@ -50,7 +50,8 @@ tools/device-test.sh /dev/ttyACM0      # build, flash, read, RESULT: PASS
 ```
 
 What works: the boot with the self test and the hardware doctor, the console on
-the UART and on the TFT, MicroFS on the flash, `/log/start.log`, the scripts of
+the UART and on the TFT, MicroFS on the flash, the boot and console logs in RAM
+(the board has no append volume), the scripts of
 `/etc/init.d`, the drivers (display, buttons, buzzer, LED, IR on the pin of the
 LED, IMU, RTC, battery, microphone, sound detector, WiFi), deep sleep with the
 wake of the timer, of BUTTON C and of the RTC alarm, `telnet` on port 23,

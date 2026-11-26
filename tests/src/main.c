@@ -26,6 +26,7 @@ static void run_tests(void *arg)
     test_version();
     test_board();
     test_log();
+    test_logfile();
     test_ansi();
     test_port();
     test_blockdev();
