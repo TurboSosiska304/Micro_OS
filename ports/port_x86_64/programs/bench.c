@@ -14,6 +14,7 @@
  *     bench fileread <path> <MiB>     the same file read back
  *     bench fill <path> <MiB>         the file of the pipe test, untimed
  *     bench console <lines>       lines written to the console of the shell
+ *     bench screen <cells>        one 160x50 screen of text through the console
  *     bench latsyscall <samples>  the p50 and p99 of one call of getpid()
  *     bench latpipe <samples>     the same of one byte through a pipe
  *
@@ -68,7 +69,15 @@
  * enough that the number is the line and not the bytes. */
 #define CONSOLE_LINE "bench console: the line of the measurement\n"
 
+/* One full screen of the VBE mode of ADR 0023: 160 columns of the 8x16 font
+ * and fifty rows. The console wraps at the last column, so no newline bytes
+ * are needed and the measured write is exactly the 8 000 visible cells. */
+#define SCREEN_COLUMNS 160u
+#define SCREEN_ROWS 50u
+#define SCREEN_CELLS (SCREEN_COLUMNS * SCREEN_ROWS)
+
 static unsigned char g_chunk[CHUNK_BYTES];
+static char g_screen[SCREEN_CELLS];
 
 /* The pattern of a chunk: the offset decides the byte, so a read of the wrong
  * block of the volume does not agree with the write by luck. */
@@ -183,6 +192,11 @@ static int tsc_calibrate(void)
 static unsigned long long tsc_to_ns(unsigned long long ticks)
 {
     return ticks * 1000ull / (unsigned long long)g_tsc_per_us;
+}
+
+static unsigned long long tsc_to_ms(unsigned long long ticks)
+{
+    return tsc_to_ns(ticks) / 1000000ull;
 }
 
 /*
@@ -676,6 +690,54 @@ static int bench_console(unsigned long lines)
     return 0;
 }
 
+/*
+ * One full screen of text, timed by the counter rather than the millisecond
+ * clock. The clear and the calibration are outside the measured write: the
+ * number is the console, the glyphs and the framebuffer of one 160x50 grid.
+ */
+static int bench_screen(unsigned long cells)
+{
+    unsigned long long started;
+    unsigned long long elapsed;
+    unsigned long index;
+
+    if (cells != SCREEN_CELLS) {
+        printf("bench error: screen takes %lu cells\n", (unsigned long)SCREEN_CELLS);
+        return 1;
+    }
+
+    for (index = 0; index < SCREEN_CELLS; index++) {
+        unsigned long row = index / SCREEN_COLUMNS;
+        unsigned long column = index % SCREEN_COLUMNS;
+
+        g_screen[index] = (char)(' ' + (row * 37u + column * 13u) % 95u);
+    }
+
+    if (write(ULIBC_STDOUT, "\033[2J\033[H", 7) != 7) {
+        printf("bench error: the clear of the screen: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (!tsc_calibrate()) {
+        printf("bench error: the counter of the processor did not advance\n");
+        return 1;
+    }
+
+    started = tsc_now();
+
+    if (write(ULIBC_STDOUT, g_screen, sizeof(g_screen)) != (long)sizeof(g_screen)) {
+        printf("bench error: the screen: %s\n", strerror(errno));
+        return 1;
+    }
+
+    elapsed = tsc_now() - started;
+
+    note("screen_text", "cells", cells, tsc_to_ms(elapsed));
+    report_ns("screen_text", tsc_to_ns(elapsed));
+
+    return 0;
+}
+
 /* --- the latency of a call and of a byte --------------------------------- */
 
 static int bench_lat_syscall(unsigned long samples)
@@ -957,7 +1019,7 @@ static int usage(void)
 {
     static const char text[] =
         "usage: bench syscall <calls> | fork <runs> | pipe <bytes> |\n"
-        "             filewrite|fileread|fill <path> <MiB> | console <lines> |\n"
+        "             filewrite|fileread|fill <path> <MiB> | console <lines> | screen <cells> |\n"
         "             latsyscall <samples> | latpipe <samples>\n";
 
     (void)write(ULIBC_STDERR, text, sizeof(text) - 1);
@@ -1032,6 +1094,10 @@ int main(int argc, char *const argv[], char *const envp[])
 
     if (strcmp(argv[1], "console") == 0) {
         return bench_console(value);
+    }
+
+    if (strcmp(argv[1], "screen") == 0) {
+        return bench_screen(value);
     }
 
     if (strcmp(argv[1], "latsyscall") == 0) {

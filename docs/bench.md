@@ -50,6 +50,7 @@ row: it adds a row.
 | `file_write` | 16 MiB in 64 KiB blocks | `exec /bin/bench filewrite /bench.big 16` |
 | `file_read` | the same file | `exec /bin/bench fileread /bench.big 16` |
 | `console` | 200 lines of 43 bytes | `exec /bin/bench console 200` |
+| `screen_text` | 8 000 cells (160x50) | `exec /bin/bench screen 8000` |
 | `lat_syscall_p50`, `lat_syscall_p99` | 2 000 calls | `exec /bin/bench latsyscall 2000` |
 | `lat_pipe_p50`, `lat_pipe_p99` | 256 bytes | `exec /bin/bench latpipe 256` |
 | `shell_pipe` | 4 MiB | `cat /bench.bin \| wc -c` |
@@ -78,7 +79,7 @@ beyond the histogram — and the tool ignores those as well. A failure of a
 benchmark is a line `bench error: ...` and a status of the program that is not
 zero, which is the answer of the tool as well.
 
-Ten rows are the clock of the machine (the program measures itself) and one,
+Eleven rows are the clock of the machine (the program measures itself) and one,
 `shell_pipe`, is the wall clock of the host, because the shell pipeline prints
 no rate of its own. The tool prints the seconds of the host beside every row
 of the human summary so that the two clocks are never confused.
@@ -455,6 +456,9 @@ The other rows have the answers of the code they lean on:
 * `console` is one `write` of 43 bytes per line to the serial console: the
   door and the emulated UART, and not the buffered `printf` of the library
   and not the shell's `echo` (which adds a program start per line).
+* `screen_text` is one write of 8 000 printable cells after a clear, timed by
+  the TSC around the whole write. It is the console, the 8x16 glyphs and the
+  framebuffer of one 160x50 screen, not the serial rate of `console`.
 
 ## Comparing two releases
 

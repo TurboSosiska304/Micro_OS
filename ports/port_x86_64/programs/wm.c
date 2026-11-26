@@ -204,6 +204,7 @@ struct wm_frames {
     unsigned frames;
     unsigned long first_pixels;
     unsigned long first_ms;
+    unsigned long long first_tsc_ns;
     unsigned long damaged_pixels;
     unsigned long slowest_ms;
     unsigned long slowest_pixels;
@@ -262,6 +263,54 @@ static unsigned long now_ms(void)
     }
 
     return (unsigned long)moment.tv_sec * 1000ul + (unsigned long)(moment.tv_nsec / 1000000l);
+}
+
+/* The first full frame is also read by the time stamp counter. The clock of
+ * the machine has milliseconds; a frame of the framebuffer is short enough
+ * that the counter is the clock that can compare two rendering paths. */
+static unsigned long long tsc_now(void)
+{
+    unsigned int low;
+    unsigned int high;
+
+    __asm__ volatile("lfence\n\trdtsc" : "=a"(low), "=d"(high) : : "memory");
+
+    return ((unsigned long long)high << 32) | low;
+}
+
+static unsigned long g_tsc_per_us;
+
+static int tsc_calibrate(void)
+{
+    struct timespec start;
+    struct timespec now;
+    unsigned long long first;
+    unsigned long long last;
+    unsigned long long us;
+
+    if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) {
+        return 0;
+    }
+
+    first = tsc_now();
+
+    do {
+        long long seconds;
+        long long nanos;
+
+        if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+            return 0;
+        }
+
+        seconds = (long long)(now.tv_sec - start.tv_sec);
+        nanos = (long long)(now.tv_nsec - start.tv_nsec);
+        us = (unsigned long long)(seconds * 1000000ll + nanos / 1000ll);
+    } while (us < 100000ull);
+
+    last = tsc_now();
+    g_tsc_per_us = (unsigned long)((last - first) / us);
+
+    return g_tsc_per_us != 0;
 }
 
 /* --- the clock of the panel ----------------------------------------------- */
@@ -1033,6 +1082,15 @@ static void frames_report(void)
 
     if (length > 0) {
         (void)write(ULIBC_STDOUT, line, (size_t)length);
+    }
+
+    if (g_frames.first_tsc_ns != 0u) {
+        length = snprintf(line, sizeof(line), "wm: the first frame took %llu ns by TSC (%lu px)\n",
+                          g_frames.first_tsc_ns, g_frames.first_pixels);
+
+        if (length > 0) {
+            (void)write(ULIBC_STDOUT, line, (size_t)length);
+        }
     }
 }
 
@@ -2143,13 +2201,20 @@ int main(int argc, char *const argv[], char *const envp[])
      * rest of the report (docs/desktop.md). */
     {
         unsigned long started = now_ms();
+        unsigned long long first;
+        unsigned long long elapsed;
+
+        (void)tsc_calibrate();
+        first = tsc_now();
 
         scene_paint(&(struct ui_rect){0, 0, g_width, g_height});
         cursor_paint();
 
+        elapsed = tsc_now() - first;
         g_frames.frames = 1u;
         g_frames.first_pixels = (unsigned long)g_width * (unsigned long)g_height;
         g_frames.first_ms = now_ms() - started;
+        g_frames.first_tsc_ns = g_tsc_per_us != 0u ? elapsed * 1000ull / g_tsc_per_us : 0u;
     }
 
     desktop_open();
