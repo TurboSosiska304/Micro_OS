@@ -107,26 +107,29 @@ void k_console_write(const char *data, k_size_t len)
         return;
     }
 
-    k_port_write(data, len);
-
     /*
-     * The table is read under the critical section and the sinks are called
-     * outside it: a sink may be slow (a socket of telnet) and the kernel
-     * logs from inside its own sections, where a blocking call cannot go.
+     * The whole write is one critical section: on SMP, two cores writing to
+     * the same console interleave their bytes on the wire if each write is
+     * serialized only inside k_port_write(). The BKL is recursive per core,
+     * so the k_port_write() inside it and a nested klog from the same core
+     * are both fine. Sinks are called inside the section as well; the sinks
+     * of this tree are display buffers and never sleep.
      */
     k_port_enter_critical();
+
+    k_port_write(data, len);
 
     for (i = 0; i < K_CONSOLE_SINK_MAX; i++) {
         sinks[i] = g_sinks[i];
     }
-
-    k_port_exit_critical();
 
     for (i = 0; i < K_CONSOLE_SINK_MAX; i++) {
         if (sinks[i] != NULL) {
             sinks[i](data, len);
         }
     }
+
+    k_port_exit_critical();
 }
 
 int k_console_readline(char *buf, k_size_t size)
