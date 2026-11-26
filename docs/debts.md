@@ -604,6 +604,22 @@ family - the EEPROM read through the ME, or the `E1000_RAH0` the firmware
 programmed - and a MAC derived from the machine when neither answers, with a
 line that says it is derived.
 
+## K29 - The cleanroom of 2.0.2, and the root that the shell deletes
+
+A cleanroom pass on the release of 2.0.2 (simulator; the x86 journeys waited
+for the emulator) found one way to lose a machine and four ways to mislead a
+person. The list is the first entry of the procedure of 2.1
+(`docs/plan-2.1.md`, "The cleanroom pass").
+
+| Finding | Level | Where | What it needs |
+|---|---|---|---|
+| `rm /` answers "use -r", and `rm -r /` then deletes every file of the volume it can reach (`/proc` and `/dev` answer "operation not supported" and the walk goes on): `ls /` is left with the two virtual filesystems and nothing else | **L1** | `components/kshell/src/kshell_files.c` (`rm`) | A guard on the root and on a mount point: the shell refuses `rm -r /` and refuses to walk across a mount, the way `rm --one-file-system` does. The hint must not lead to the loss: "use -r" is only said for a directory that may be removed. |
+| `sleep -1` sleeps 60 seconds and reports `18446744073709551615 ms is too much` | L2 | `components/kshell/src/kshell_sys.c` (`sleep`) | A negative argument is `EINVAL` before any wait, and the message names the argument and not a wrapped number. |
+| `echo` with more than eight words answers "too many arguments in one stage", while `docs/wiki/troubleshooting.md` promises that the tail is ignored | L2/L3 | the parser of `components/kshell`, `docs/wiki/troubleshooting.md` | One of the two is wrong; the document is the promise, so the parser gives the sentence of the document or the document says the truth. |
+| `http get` of a 600-byte body answers `256 byte(s)` and a body cut in the middle with no word about the truncation; `wget` of the same URL answers 600 | L3 | `components/kshell` (`http`), `components/net` | Either the buffer grows or the answer says what it kept: a silent cut is a lie about the file. |
+| `help` on the simulator lists `http`, `wget`, `ota`, `ntp`, `httpd` and `mqtt`, and `docs/wiki/shell.md` says they are not registered there | L3 | the registration of the commands, `docs/wiki/shell.md` | The list of the commands is the machine's, and the page is generated from it or says why it differs. |
+| `sidebar` of the pages: `files.md` and `troubleshooting.md` say `rm` has no `-r` (it has), `files.md` shows `mount` printing only mount points (the machine prints `none on / type ...`), `shell.md` gives `cat > /tmp/f` and `ls /bin \| wc -l` as examples for a machine that has neither `/tmp` (on the simulator) nor `wc`, and `settings.md` promises a fallback to the default for a bad value (`config set display.rotation 400` keeps 400) | L3/L4 | `docs/wiki/*.md`, `components/config` | The pages are checked against the machine by the `log-smoke`/`help` list that 2.1 builds, and a value that does not apply says so instead of keeping the number. |
+
 ## K25 - Five ports of the laptop that do not enumerate
 
 The xHCI of the test laptop reports five ports with a device and refuses all
