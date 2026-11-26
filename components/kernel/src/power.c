@@ -205,14 +205,14 @@ int k_power_shutdown(enum k_power_action action, bool force)
     KERNEL_PANIC("the port returned from the power of the machine");
 }
 
-_Noreturn void k_reboot(void)
+[[noreturn]] void k_reboot(void)
 {
     k_port_reset();
 
     KERNEL_PANIC("the port returned from reset");
 }
 
-_Noreturn void k_halt(void)
+[[noreturn]] void k_halt(void)
 {
     k_port_halt();
 

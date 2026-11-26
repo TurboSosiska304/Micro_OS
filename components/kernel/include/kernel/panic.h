@@ -7,10 +7,10 @@
 #include "kernel/types.h"
 
 #if defined(__GNUC__)
-_Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
-    __attribute__((format(__printf__, 3, 4)));
+[[noreturn]] void kernel_panic(const char *file, int line, const char *fmt, ...)
+    [[gnu::format(__printf__, 3, 4)]];
 #else
-_Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...);
+[[noreturn]] void kernel_panic(const char *file, int line, const char *fmt, ...);
 #endif
 
 #define KERNEL_PANIC(...) kernel_panic(__FILE__, __LINE__, __VA_ARGS__)

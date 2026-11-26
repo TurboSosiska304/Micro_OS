@@ -10,12 +10,12 @@
  */
 #include "kernel/port/cpu.h"
 
-__attribute__((weak)) k_u32_t k_port_cpu_count(void)
+[[gnu::weak]] k_u32_t k_port_cpu_count(void)
 {
     return 1;
 }
 
-__attribute__((weak)) k_u32_t k_port_cpu_id(void)
+[[gnu::weak]] k_u32_t k_port_cpu_id(void)
 {
     return 0;
 }
@@ -26,7 +26,7 @@ __attribute__((weak)) k_u32_t k_port_cpu_id(void)
  * their own ticks: the task waits for the next millisecond, which is what the
  * kernel did before the call existed (ADR 0012).
  */
-__attribute__((weak)) void k_port_cpu_wake(k_u32_t cpu)
+[[gnu::weak]] void k_port_cpu_wake(k_u32_t cpu)
 {
     K_UNUSED(cpu);
 }

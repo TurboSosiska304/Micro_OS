@@ -19,8 +19,12 @@
 #include "ulibc.h"
 
 #define HUGE_VAL (__builtin_huge_val())
+#ifndef INFINITY
 #define INFINITY (__builtin_inff())
+#endif
+#ifndef NAN
 #define NAN (__builtin_nanf(""))
+#endif
 
 #define M_E 2.7182818284590452354
 #define M_LOG2E 1.4426950408889634074

@@ -118,8 +118,9 @@ function(microos_userland_library name)
     )
     target_compile_definitions(${name} PRIVATE ${LIB_DEFINES})
     set_target_properties(${name} PROPERTIES
-        C_STANDARD 11
+        C_STANDARD 23
         C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
         POSITION_INDEPENDENT_CODE OFF
     )
 endfunction()
