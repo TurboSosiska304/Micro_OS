@@ -74,6 +74,47 @@ the build, `RAMFS_RESERVE_KB`) is not given to a write, which answers
 A deletion returns its memory at once, `unlink` of an open file keeps the
 blocks until the last descriptor closes, a read past the end of a file answers
 zero, and `truncate` frees the tail. The board does not build the filesystem.
+
+## The machine we ship is the machine we test (the owner, 26 November)
+
+The stick of 2.0.1 says two things in the first lines of its boot:
+
+```
+x86-64: 8 cpu(s) reported by the firmware, 1 in use (apic 0xfee00000)
+x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone
+```
+
+The laptop of the owner has four cores and eight threads and the image uses
+one of them, because `KERNEL_SMP` is off by default and every gate boots the
+image built without it. That is the same defect as the desk on a read-only
+root, one level up: **the release hands out a machine that no gate has run**.
+
+So the image of 2.0.2 is built with `KERNEL_SMP=ON`, and every gate of the
+port runs that image:
+
+* `KERNEL_SMP` is the default of `ports/port_x86_64` and of the stick and ISO
+  targets, not an option a lane turns on for a test.
+* `KERNEL_CPUS_MAX` is raised from four to **eight**: the machine of the owner
+  is 4 cores and 8 threads, and a limit of four silently ignores half of it.
+  The cost is a `struct k_cpu`, a run queue and a 64 KiB stack per core, and
+  the number is measured, not guessed (`-smp 8` in QEMU, the log line of the
+  boot).
+* The line of the boot stays honest in both directions: a firmware that
+  reports more cores than the build holds says so, and a core that does not
+  answer the start-up IPI is named.
+* The gates run with eight processors: `make x86-smoke`, `make x86-vga-smoke`,
+  `make x86-smp-smoke` and `make soak-smp` on the image that is shipped, and
+  the smoke of the stick asserts `8 cpu(s) reported by the firmware, 8 in use`
+  (the machine of QEMU) before it runs the desk.
+
+The debts of K8 are the reason this is a line of the plan and not a flag:
+`docs/debts.md` records the big kernel lock, the per-core state, the I/O APIC,
+the wake IPI, the FPU state and the guard page as **done**; what is open is a
+data race of a test (`test_smp_double_claim`), a two-core stress that migrates
+a task inside a filesystem call, and the weak default of a port with one core.
+None of them is a reason to ship one core; the first one is a reason to fix
+the test.
+
 ## What is not in this release
 
 **C23.** Measured on 26 November: the host and the x86-64 port compile with
