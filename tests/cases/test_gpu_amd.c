@@ -10,6 +10,7 @@
 
 #include "kernel/kmod.h"
 #include "port_x86_64_gpu.h"
+#include "port_x86_64_gpu_amd.h"
 #include "port_x86_64_gpu_ids.h"
 
 /* The vendor table in the header references the real AMD probe symbol. Host
@@ -94,6 +95,42 @@ static void test_kmod_state_names(void)
     KT_CHECK(KMOD_UNKNOWN != KMOD_SKIP);
 }
 
+static void test_mc_memsize_decode(void)
+{
+    ktest_begin("gpu_amd: CONFIG_MEMSIZE decode clamps garbage upper bits");
+
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(8192u), 8192);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(4096u), 4096);
+    /* Linux gmc_v8_0.c: if upper 16 bits set and lower 16 nonzero, clamp. */
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0xDEAD2000u), 0x2000);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0xFFFF0000u), 0);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0u), 0);
+}
+
+static void test_mc_chmap_decode(void)
+{
+    ktest_begin("gpu_amd: MC_SHARED_CHMAP NOOFCHAN decode");
+
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(0u << 12), 1);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(1u << 12), 2);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(2u << 12), 4);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(3u << 12), 8);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(4u << 12), 3);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(5u << 12), 6);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(6u << 12), 10);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(7u << 12), 12);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(8u << 12), 16);
+}
+
+static void test_mc_ramcfg_decode(void)
+{
+    ktest_begin("gpu_amd: MC_ARB_RAMCFG CHANSIZE decode");
+
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(0u), 32);
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(1u << 8), 64);
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(0xFFFFFEFFu), 32);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -102,4 +139,7 @@ void test_gpu_amd(void)
     test_table_has_live_card();
     test_vendor_table();
     test_kmod_state_names();
+    test_mc_memsize_decode();
+    test_mc_chmap_decode();
+    test_mc_ramcfg_decode();
 }

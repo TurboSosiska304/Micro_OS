@@ -21,7 +21,7 @@
 #include "kshell/kshell.h"
 
 static struct gpu_info g_gpu;
-static char g_gpu_line[192];
+static char g_gpu_line[256];
 static bool g_gpu_registered;
 
 static void format_size(char *buf, k_size_t size, k_u64_t bytes)
@@ -87,6 +87,19 @@ static void format_tail(char *buf, k_size_t size, const struct gpu_info *info)
         return;
     }
 
+    if (info->vram_mc_bytes != 0u) {
+        unsigned mc_mib = (unsigned)(info->vram_mc_bytes / (1024ull * 1024ull));
+        if (info->gc_num_se != 0u) {
+            snprintf(buf, size, "vram %u MiB (MC), mc chmap 0x%08x l1tlb 0x%08x, se %u sh/se %u",
+                     mc_mib, (unsigned)info->mc_shared_chmap, (unsigned)info->mc_vm_mx_l1_tlb_cntl,
+                     (unsigned)info->gc_num_se, (unsigned)info->gc_num_sh_per_se);
+        } else {
+            snprintf(buf, size, "vram %u MiB (MC), mc chmap 0x%08x l1tlb 0x%08x", mc_mib,
+                     (unsigned)info->mc_shared_chmap, (unsigned)info->mc_vm_mx_l1_tlb_cntl);
+        }
+        return;
+    }
+
     format_size(vram, sizeof(vram), info->vram_bytes);
     snprintf(buf, size, "vram %s", vram);
 }
@@ -94,7 +107,7 @@ static void format_tail(char *buf, k_size_t size, const struct gpu_info *info)
 const char *port_x86_64_gpu_format(char *buf, k_size_t size)
 {
     char mmio[32];
-    char tail[96];
+    char tail[128];
     const char *name;
 
     if (buf == NULL || size == 0u) {
