@@ -16,6 +16,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/exec.c"
     "src/fb.c"
     "src/fb_ops.c"
+    "src/blit.c"
     "src/input.c"
     "src/input_hid.c"
     "src/input_scancode.c"
