@@ -17,11 +17,11 @@
 
 /* The laptop first, then nearby Kaby Lake-R/Whiskey Lake identities. */
 static const struct gpu_intel_id g_gpu_intel_ids[] = {
-    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 5u, 3u, 4u, 5u},
-    {0x8086u, 0x5916u, "Intel HD 620", 9u, 5u, 3u, 4u, 5u},
-    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 5u, 3u, 4u, 5u},
-    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 5u, 3u, 4u, 5u},
-    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 5u, 3u, 4u, 5u},
+    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
+    {0x8086u, 0x5916u, "Intel HD 620", 9u, 0u, 3u, 4u, 5u},
+    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
+    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u},
+    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 0u, 3u, 4u, 5u},
 };
 
 const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
@@ -35,6 +35,27 @@ const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
     }
 
     return NULL;
+}
+
+/*
+ * Kaby Lake's PCI revision does not equal either IP stepping. The public
+ * i915 revision table maps rev 07 to display C0 (and GT G0); other KBL
+ * revisions differ. Unknown families/revisions stay explicitly unknown.
+ */
+static const char *const g_gpu_intel_kbl_display_steps[] = {
+    NULL, "B0", "B0", "B0", "C0", "B1", "B1", "C0",
+};
+
+static const char *gpu_intel_display_step(k_u16_t device, k_u8_t revision)
+{
+    if ((device == 0x5917u || device == 0x5916u || device == 0x87C0u) &&
+        (k_size_t)revision < K_ARRAY_SIZE(g_gpu_intel_kbl_display_steps)) {
+        const char *step = g_gpu_intel_kbl_display_steps[revision];
+
+        return step != NULL ? step : "unknown";
+    }
+
+    return "unknown";
 }
 
 #define PCI_INTEL_VENDOR 0x8086u
@@ -163,19 +184,19 @@ static void gpu_intel_panel(const struct gpu_intel_info *info)
 {
     if (info->panel_width != 0u && info->panel_height != 0u) {
         kinfo("gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%x, "
-              "mmio 0x%08x%08x, display gen %u.%u, panel %ux%u",
+              "mmio 0x%08x%08x, display %u.%02u stepping %s, panel %ux%u",
               info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->revision,
               (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->function,
               (unsigned)(info->mmio_base >> 32), (unsigned)(info->mmio_base & 0xFFFFFFFFu),
-              (unsigned)info->display_gen, (unsigned)info->display_rel, (unsigned)info->panel_width,
-              (unsigned)info->panel_height);
+              (unsigned)info->display_gen, (unsigned)info->display_rel, info->display_step,
+              (unsigned)info->panel_width, (unsigned)info->panel_height);
     } else {
         kinfo("gpu: %s (%04x:%04x rev %02x) at %02x:%02x.%x, "
-              "mmio 0x%08x%08x, display gen %u.%u, panel unknown",
+              "mmio 0x%08x%08x, display %u.%02u stepping %s, panel unknown",
               info->name, (unsigned)info->vendor, (unsigned)info->device, (unsigned)info->revision,
               (unsigned)info->bus, (unsigned)info->slot, (unsigned)info->function,
               (unsigned)(info->mmio_base >> 32), (unsigned)(info->mmio_base & 0xFFFFFFFFu),
-              (unsigned)info->display_gen, (unsigned)info->display_rel);
+              (unsigned)info->display_gen, (unsigned)info->display_rel, info->display_step);
     }
 }
 
@@ -215,6 +236,7 @@ kmod_state_t gpu_intel_probe(struct gpu_intel_info *info)
     info->function = card.function;
     info->display_gen = identity->display_gen;
     info->display_rel = identity->display_rel;
+    info->display_step = gpu_intel_display_step(info->device, info->revision);
     info->pipes = identity->pipes;
     info->transcoders = identity->transcoders;
     info->ports = identity->ports;

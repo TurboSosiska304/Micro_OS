@@ -45,6 +45,7 @@ struct gpu_intel_info {
     k_u8_t function;
     k_u8_t display_gen;
     k_u8_t display_rel;
+    const char *display_step;
     k_u8_t pipes;
     k_u8_t transcoders;
     k_u8_t ports;

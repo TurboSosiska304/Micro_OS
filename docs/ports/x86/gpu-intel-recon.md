@@ -5,9 +5,10 @@ that its MMIO answers, and report the panel state that firmware left behind.
 It does not set a mode, train a link, touch backlight, submit GPU work, or
 change a display register.
 
-**Status:** public facts and register knowledge only. Every machine-specific
-value below is marked **confirm on the laptop** until the owner supplies the
-read-only `lspci`, EDID, VBT and i915 diagnostics listed in section 8.
+**Status:** the laptop facts below were captured read-only over SSH. The PCI,
+EDID, connector, dmesg and VBT values are measured, not predictions. The only
+unmeasured part is how the same power state looks when Micro OS, without DMC,
+takes over.
 
 ## 1. Provenance and licence boundary
 
@@ -32,31 +33,182 @@ Primary references are listed in section 9. The supplied `docs/plan-gpu.md`
 section 5 was not present at the base commit of this worktree; the boundary
 above follows the rules supplied with this task.
 
-## 2. Hardware hypothesis
+## 2. Measured hardware
 
-| Fact | Expected value | Confidence |
+The owner captured `/tmp/opencode/laptop-recon.txt`,
+`/tmp/opencode/laptop-recon2.txt` and `/tmp/opencode/x1c6-vbt.bin` on the
+ThinkPad. The VBT blob stays outside the repository.
+
+| Fact | Measured value | Evidence |
 |---|---|---|
-| Machine | ThinkPad X1 Carbon 6th Gen, type 20KH/20KG | owner fact |
-| GPU | Intel UHD Graphics 620, GT2, Kaby Lake-R | public fact |
-| PCI vendor:device | `8086:5917` | **confirm on live `lspci`** |
-| PCI revision | example `07`; the probe accepts and reports the actual byte | **confirm on live `lspci`** |
-| Subsystem | Lenovo vendor and board-specific subsystem ID | **confirm on live `lspci`** |
-| PCI address | normally `00:02.0`, function 0 | **confirm on live `lspci`** |
-| Class | VGA-compatible display, `03:00:00` | **confirm on live `lspci`** |
-| BAR0 | 64-bit memory window; the probe needs only its first 0x80000 bytes | **confirm base, type and size on the laptop** |
-| Graphics microarchitecture | gen 9.5 / Kaby Lake-R GT2 | public fact |
-| i915 display IP version | 9; “9.5” is the platform/marketing generation, not a separate display IP release | confirmed by the i915 KBL mapping |
-| GPU execution units | 24 EUs / 192 shaders | public fact; not display pipes |
-| Display pipes | A, B, C: three | i915 `skl_display` topology; **confirm fuses/runtime mask** |
-| CPU transcoders | A, B, C and EDP: four | i915 `skl_display` topology; **confirm runtime mask** |
-| Logical DDI ports | A through E: up to five | silicon topology, not five sockets |
-| Board routing | expected eDP on A, external DP/HDMI on the remaining wired DDIs | **confirm from VBT child devices and DRM connectors** |
-| Internal panel | one of the X1C6 FHD/WQHD/HDR options; FHD 1920x1080 is not guaranteed | **confirm EDID and VBT** |
-| Firmware | no GuC or HuC is loaded by this probe | intentional |
+| Machine | ThinkPad X1 Carbon 6th Gen | owner |
+| GPU | Intel Kaby Lake-R GT2, UHD Graphics 620 | `lspci` |
+| PCI address | `0000:00:02.0`, function 0 | `lspci` |
+| Vendor:device:revision | `8086:5917`, revision `07` | `lspci` |
+| Subsystem | Lenovo `17aa:225c` | `lspci` |
+| Class | `030000`, VGA-compatible controller, prog-if `00` | `lspci` |
+| Command | `I/O+ Mem+ BusMaster+`; memory decode is already enabled | `lspci` |
+| Power state | PCI PM v2 at capability `d0`; status `D0` | `lspci` |
+| BAR0 | `0x2ff0000000`, 64-bit, non-prefetchable, 16 MiB | `lspci` |
+| BAR2 | `0x2fe0000000`, 64-bit, prefetchable, 256 MiB (GTT) | `lspci`; not used by the probe |
+| BAR4 | I/O window at `0xe000`, 64 bytes | `lspci`; not used by the probe |
+| Expansion ROM | `0xc0000`, 128 KiB, **disabled** | `lspci`; the probe does not enable it |
+| Display IP | **9.00, stepping C0** | live i915 dmesg plus the KBL DID/revision tables |
+| Graphics architecture | Kaby Lake-R GT2, often marketed as gen 9.5; this is not the display IP version | public platform fact |
+| GPU execution units | 24 EUs / 192 shaders | public platform fact; not display pipes |
+| Display topology | A/B/C pipes, A/B/C/EDP CPU transcoders, up to five logical DDIs | i915 `skl_display`; runtime fuse mask was not exported by the available debugfs |
+| Connectors | `eDP-1` connected; `DP-1`, `DP-2`, `HDMI-A-1`, `HDMI-A-2` disconnected | live DRM state |
+| Active panel mode | `1920x1080` | live mode report |
+| EDID | one valid 128-byte base block, BOE `HV140FHM-N61` | live sysfs EDID, decoded below |
+| VBT | 6144-byte debugfs blob; meaningful `vbt_size` 4441; BDB version 212 | captured blob |
+| DMC | `i915/kbl_dmc_ver1_04.bin`, payload v1.4 | live i915 dmesg |
+| Micro OS firmware | no DMC, GuC or HuC is loaded by this probe | intentional |
 
-Lenovo's PSREF lists 1920x1080, 2560x1440 and HDR 2560x1440 panel options for
-this generation. A machine name is therefore not a panel identity. The EDID
-manufacturer/product fields and the VBT panel entry are the evidence.
+The measured PCI state matches the probe's assumptions: `8086:5917` is in the
+ID table, function 0 and class `03:00` match, PMCSR is D0, BAR0 is a 64-bit
+memory window, and memory decode is already set. On this laptop the probe will
+therefore not need its conditional PCI command write. BAR2, BAR4 and the ROM
+are outside the probe's read set.
+
+### 2.1 Where display 9.00 stepping C0 comes from
+
+The live kernel reports:
+
+```text
+Found kabylake (device ID 5917) integrated display version 9.00 stepping C0
+```
+
+Kaby Lake has no display GMD_ID register to query. The version is derived in
+two stages:
+
+1. DID `5917` selects the KBL platform and the `skl_display` description,
+   whose display IP is major 9, release 0.
+2. PCI revision `07` indexes the KBL stepping table. Revision 7 maps to
+   **display C0** and GT G0; PCI revision is not itself the IP stepping.
+
+The earlier draft's “gen 9.5” described the graphics microarchitecture and
+was wrong as a display-engine version. The code now records release 0 and
+reports `display 9.00 stepping C0` for this measured PCI revision. Unknown
+revisions or non-KBL families report `stepping unknown` rather than guessing.
+
+### 2.2 Measured EDID facts
+
+i915 read the panel EDID; Micro OS has **not** performed an AUX read. The
+captured 128-byte block has a valid header and modulo-256 checksum.
+
+| EDID field | Measured value |
+|---|---|
+| Version/revision | EDID 1.4 |
+| Manufacturer | BOE (`09 e5`) |
+| Product/model code | 1759 (`0x06df`) |
+| Serial number | 0 / not supplied |
+| Manufacture date | week 1 of 2016 |
+| Panel names | `BOE CQ`, `HV140FHM-N61` |
+| Interface | DisplayPort, digital |
+| Bits per primary color | 8 bpc |
+| Color formats | RGB 4:4:4 |
+| Gamma | 2.20 |
+| Physical image size | 31 × 17 cm |
+| Preferred timing | 1920 × 1080 at 60.011884 Hz |
+| Preferred pixel clock | 141.400 MHz |
+| Preferred horizontal timing | active 1920, front 60, sync 32, back 130; total 2142; positive sync |
+| Preferred vertical timing | active 1080, front 3, sync 6, back 11; total 1100; negative sync |
+| Second timing | 1920 × 1080 at 48.009507 Hz, 113.120 MHz |
+| Second horizontal timing | front 48, sync 32, back 142; total 2142; positive sync |
+| Second vertical timing | front 3, sync 6, back 11; total 1100; negative sync |
+| Declared range descriptor | absent |
+
+There is no EDID monitor-range descriptor. The two DTDs span 48.009507 to
+60.011884 Hz vertically, 52.810 to 66.013 kHz horizontally, and 113.120 to
+141.400 MHz pixel clock; those are observed descriptors, **not** a declared
+minimum/maximum range. The preferred DTD and the live 1920x1080 mode agree.
+
+### 2.3 Measured VBT facts
+
+The blob is not committed. Its measured identity is:
+
+```text
+size:    6144 bytes
+sha256:  811a4e619a470b97072c36326c4c6ff13c13c7635a67b3fad871cfd3750380be
+```
+
+Header fields:
+
+| Field | Value |
+|---|---|
+| Signature | `$VBT SKYLAKE` |
+| VBT header version | 100 |
+| VBT header size | 48 |
+| `vbt_size` | 4441 |
+| VBT checksum | valid: the first 4441 bytes sum to zero modulo 256 |
+| BDB offset | 48 (`0x30`) |
+| BDB signature | `BIOS_DATA_BLOCK` |
+| BDB version | 212 (`0xd4`) |
+| BDB header size | 22 |
+| BDB size | 4392 (`0x1128`) |
+
+Relevant blocks found by a bounded walk (offsets are from the start of the
+file; size is the payload size after the three-byte block header):
+
+| BDB | Offset | Size | Content used here |
+|---:|---:|---:|---|
+| 254 | `0x0046` | 234 | private/skip data |
+| 1 | `0x0133` | 5 | General Features |
+| 2 | `0x0170` | 309 | General Definitions and child devices |
+| 12 | `0x051c` | 19 | Driver Features |
+| 27 | `0x05f8` | 748 | eDP sequencing/link data; record only |
+| 40 | `0x09b4` | 26 | LFP Options |
+| 41 | `0x09d1` | 148 | LFP table pointers |
+| 42 | `0x0a68` | 1298 | LFP timing/PNP/name tables |
+| 43 | `0x0f7d` | 129 | backlight data; record only |
+| 44 | `0x1001` | 22 | power-conservation data; record only |
+| 46 | `0x101a` | 304 | chromaticity data |
+
+BDB 2 declares 38-byte child-device records. Three records have a nonzero
+device type:
+
+| Handle | Type | DVO port | AUX | DDC pin | Wiring | Interpretation |
+|---|---|---|---|---:|---:|---|
+| `0x0008` | `0x1806` | DPA (`10`) | A (`0x40`) | 3 | 0 | internal LFP/eDP on DDI A |
+| `0x0004` | `0x60d6` | DPB (`7`) | B (`0x10`) | 5 | 1 | external DP dual-mode |
+| `0x0040` | `0x60d6` | DPC (`8`) | C (`0x20`) | 4 | 2 | external DP dual-mode |
+
+The other five records have device type zero and are not routing evidence.
+The two DP dual-mode records explain why DRM exposes both DP and HDMI
+connector names for external outputs.
+
+BDB 40 sets `panel_type = 2` (`panel_type2 = 0`). The selected LFP entry 2,
+however, contains placeholder/default data:
+
+| Field | VBT entry 2 |
+|---|---|
+| Fixed timing size | 1024 × 768 |
+| DTD pixel clock | 65.000 MHz |
+| DTD horizontal | active 1024, blank 320 |
+| DTD vertical | active 768, blank 38 |
+| DTD sync offsets | horizontal 24/136, vertical 3/6 |
+| PNP product/serial | 3 / 3 |
+| PNP date | week 0, 2002 |
+| Panel name | `LFP_PanelName` |
+
+This does **not** match the measured BOE EDID or the active 1920x1080 mode.
+The VBT is still useful for DDI/AUX routing and board capabilities, but its
+panel DTD/PNP/name placeholders must not override EDID and live timing. This
+is exactly why the first driver step records evidence instead of replaying
+VBT register values.
+
+### 2.4 DMC is present on Linux, absent from this probe
+
+The live i915 driver loaded `i915/kbl_dmc_ver1_04.bin` (v1.4). On gen9 the
+DMC participates in display DC-state and power-well handling. Micro OS does
+not load or emulate it in this probe, so:
+
+* DC5/DC6 transitions and some power-domain requests are outside this step;
+* status registers may reflect firmware/DMC-owned state rather than a state
+  Micro OS can change;
+* the probe only reads state and stops if PW1 is not already on;
+* a later modesetting step will need an explicit decision about DMC, not an
+  implicit assumption that Linux left every display resource available.
 
 ## 3. The safe handshake
 
@@ -148,16 +300,18 @@ the firmware does not expect. `SKL_DFSM` at `0x51000` is useful for pipe fuse
 information, but it lies in a GT forcewake range and is deliberately **not**
 read by this probe.
 
-### 3.5 Display generation and topology
+### 3.5 Display version and topology
 
-Kaby Lake does not expose a display GMD_ID version register. The i915 display
-probe maps KBL PCI IDs to the gen9 display description. The Micro OS ID table
-therefore records:
+Kaby Lake does not expose a display GMD_ID version register. The live i915
+result, `display version 9.00 stepping C0`, is derived from DID `5917` plus
+PCI revision `07`, as recorded in section 2.1. The Micro OS ID table therefore
+stores display IP major 9 and release 0; a small KBL revision table supplies
+the display stepping without pretending that PCI revision is the IP step.
 
-* display IP major 9 and platform generation 9.5 separately;
-* three display pipes, four CPU transcoders including EDP, and five possible
-  logical DDIs;
-* actual runtime/fused counts remain a laptop/VBT confirmation item.
+The topology recorded by the table is three display pipes, four CPU
+transcoders including EDP, and five possible logical DDIs. The measured VBT
+and DRM connectors narrow the board routing to eDP/DDI A and DP dual-mode
+DDI B/C; the runtime fuse mask was not available in the captured debugfs.
 
 The eDP timing read reports the **active firmware-left timing**, not a claim
 that EDID was read and not a new mode. It is deliberately labelled `panel
@@ -168,13 +322,14 @@ fields are implausible.
 
 Reading EDID is useful, but it is not part of this read-only probe. Both AUX
 and GMBUS reads require writes to controller registers, so they belong behind
-an explicit later gate.
+an explicit later gate. The facts in section 2.2 came from the EDID that the
+live i915 driver read; Micro OS has not issued an AUX transaction.
 
-For the internal panel, the expected path is DisplayPort I2C-over-AUX on AUX A
-(eDP/DDI A). On gen9 the AUX A control register is BAR0 `0x64010`, and its five
-little-endian data words are `0x64014..0x64024`. Other channels have different
-control banks; do not assume A for an external connector without VBT/DRM
-mapping.
+For the internal panel, the measured path is DisplayPort I2C-over-AUX on AUX A
+(eDP/DDI A): the VBT child device names DPA and AUX A. On gen9 the AUX A
+control register is BAR0 `0x64010`, and its five little-endian data words are
+`0x64014..0x64024`. Other channels have different control banks; do not assume
+A for an external connector without VBT/DRM mapping.
 
 A safe future transaction is:
 
@@ -221,16 +376,18 @@ ROM on older systems. The VBT starts with `$VBT`; it is not the whole VBIOS and
 it is not GuC/HuC firmware.
 
 For reconnaissance on Linux, the least invasive source is i915's read-only
-debugfs copy:
+debugfs copy. The measured laptop blob and its parsed fields are in section
+2.3; the binary is deliberately not in this repository:
 
 ```sh
-sudo cat /sys/kernel/debug/dri/0/i915_vbt > /tmp/x1c6-vbt.bin
+sudo cat /sys/kernel/debug/dri/0000:00:02.0/i915_vbt > /tmp/x1c6-vbt.bin
 sha256sum /tmp/x1c6-vbt.bin
 ```
 
-Use the actual DRM minor number. If debugfs is unavailable, a read-only PCI
-ROM/OpRegion dump is a fallback, but do not flash, unlock or write either ROM.
-Record the source and hash of every blob.
+The live PCI expansion ROM is present but disabled, so enabling it is neither
+necessary nor part of this probe. If debugfs is unavailable, a read-only
+ROM/OpRegion dump is a fallback, but do not flash, unlock or write either ROM;
+record the source and hash of every blob.
 
 ### 5.2 Container validation
 
@@ -266,7 +423,9 @@ Before interpreting a VBT:
 The first driver step needs only: BDB version, panel type, child-device routing
 (eDP on which DDI/AUX), panel name/PNP ID, native timing and color depth. Power
 sequences, GPIO, PWM, link-training values and register-value blobs are
-reconnaissance material, not commands to replay.
+reconnaissance material, not commands to replay. On this laptop the VBT panel
+entry is placeholder data (section 2.3), so EDID and active timing take
+precedence for panel identity while VBT remains the routing source.
 
 VBT child-device fields are versioned. A field introduced after the captured
 BDB version must not be interpreted. In particular, AUX/DDC mapping and panel
@@ -327,24 +486,27 @@ power-cycle the laptop, and preferably an external monitor. Save the VBT and
 EDID hashes before testing so a later display can be compared with a known
 state.
 
-## 8. Live-laptop confirmation checklist
+## 8. Live-laptop results and remaining check
 
-The five facts that decide whether this probe can safely proceed are:
+The five decision facts are now recorded:
 
-1. **PCI identity and decode:** exact BDF, `8086:5917`, revision, subsystem,
-   class, BAR0 base/type/size, command and D0 state.
-2. **Display topology:** i915 display version 9, runtime pipe/transcoder/port
-   masks, fused-off pipes, and actual connector-to-DDI/AUX mapping.
-3. **Panel identity:** eDP connector, EDID manufacturer/product/name, native
-   resolution/timing and the currently active mode.
-4. **VBT board data:** VBT/BDB version, panel type, child devices, panel name,
-   DTD and color depth, with a SHA-256 of the captured blob.
-5. **Power handshake:** whether firmware leaves the GPU in D0 and PW1/DDI state
-   sufficient for read-only MMIO when Micro OS starts; no forcewake may be
-   needed or acquired by this probe.
+1. **PCI identity and decode:** `0000:00:02.0`, `8086:5917` rev `07`, Lenovo
+   `17aa:225c`, class `030000`, BAR0 `0x2ff0000000`/16 MiB, `Mem+`, D0.
+2. **Display topology:** display IP 9.00 stepping C0; VBT routes eDP to DDI A /
+   AUX A and external dual-mode outputs to DDI B/C; DRM reports eDP-1 connected
+   and four external connectors disconnected. Runtime fuse masks were not
+   exported by the available debugfs.
+3. **Panel identity:** BOE model 1759, `HV140FHM-N61`, EDID 1.4, 8 bpc,
+   preferred 1920x1080@60.011884 Hz; live mode 1920x1080.
+4. **VBT board data:** 6144-byte blob, SHA-256 in section 2.3, BDB 212,
+   panel type 2, three meaningful child devices; panel DTD/PNP/name entries are
+   placeholders and do not match EDID.
+5. **Power handshake under Linux:** D0 and memory decode are confirmed. The
+   remaining unknown is the PW1/DDI state when Micro OS starts without DMC; the
+   probe reads that state and never raises a power well.
 
-Read-only commands for the owner (run on the laptop; paths may use a DRM minor
-other than 0):
+The read-only commands used for the capture are kept below as a reproducible
+checklist (paths may use a DRM minor other than 0):
 
 ```sh
 uname -a
@@ -369,7 +531,7 @@ for e in /sys/class/drm/card*-eDP-*/edid; do
 done
 
 ls -l /sys/kernel/debug/dri/*/i915_vbt /sys/kernel/debug/dri/*/i915_display_capabilities 2>/dev/null || true
-sudo cat /sys/kernel/debug/dri/0/i915_vbt > /tmp/x1c6-vbt.bin
+sudo cat /sys/kernel/debug/dri/0000:00:02.0/i915_vbt > /tmp/x1c6-vbt.bin
 sha256sum /tmp/x1c6-vbt.bin
 sudo dmesg | grep -Ei 'i915|drm|gpu|edid|vbt|dmc' | tail -80
 ```
@@ -387,6 +549,8 @@ forcewake debug tools for this reconnaissance.
   <https://github.com/torvalds/linux/blob/v6.6/include/drm/i915_pciids.h>
 * Linux v6.6 display topology:
   <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/display/intel_display_device.c>
+* Linux v6.6 PCI-revision-to-display-stepping table:
+  <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/intel_step.c>
 * Linux v6.6 register definitions:
   <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/i915_reg.h>
 * Linux v6.6 forcewake ranges:

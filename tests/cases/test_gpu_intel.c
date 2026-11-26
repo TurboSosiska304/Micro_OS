@@ -56,7 +56,7 @@ static void test_laptop_identity(void)
 {
     const struct gpu_intel_id *id = gpu_intel_id_lookup(0x8086u, 0x5917u);
 
-    ktest_begin("gpu-intel: the ThinkPad identity is UHD 620, display 9.5");
+    ktest_begin("gpu-intel: the ThinkPad identity is UHD 620, display 9.00");
 
     KT_CHECK(id != NULL);
     if (id == NULL) {
@@ -65,7 +65,7 @@ static void test_laptop_identity(void)
 
     KT_CHECK_STR_EQ(id->name, "Intel UHD 620");
     KT_CHECK_INT_EQ(id->display_gen, 9);
-    KT_CHECK_INT_EQ(id->display_rel, 5);
+    KT_CHECK_INT_EQ(id->display_rel, 0);
     KT_CHECK_INT_EQ(id->pipes, 3);
     KT_CHECK_INT_EQ(id->transcoders, 4);
     KT_CHECK_INT_EQ(id->ports, 5);
