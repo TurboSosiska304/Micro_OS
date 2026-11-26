@@ -2,7 +2,8 @@
  * Micro OS — synthetic global page tables of the Intel display driver.
  *
  * Facts from drivers/gpu/drm/i915/gt/intel_gtt.h,
- * drivers/gpu/drm/i915/gt/intel_ggtt.c and
+ * drivers/gpu/drm/i915/gt/intel_ggtt.c,
+ * drivers/gpu/drm/i915/display/intel_fb.c and
  * drivers/gpu/drm/i915/display/skl_universal_plane.c (GPL-2.0, Linux v6.12);
  * code written here for Micro OS (MIT).
  */

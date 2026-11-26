@@ -27,6 +27,13 @@ static k_u32_t s_fb_map_calls;
 
 /* The host case links the Intel source but not the x86-64 paging port. */
 k_u64_t g_port_x86_64_kernel_phys;
+static k_u64_t s_ticks;
+
+k_u64_t port_x86_64_ticks(void)
+{
+    s_ticks++;
+    return s_ticks;
+}
 
 bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device, struct port_x86_64_pci_device *found)
 {

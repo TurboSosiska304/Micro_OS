@@ -2,8 +2,9 @@
 
 This is the first step of an Intel display driver: identify the card, prove
 that its MMIO answers, and report the panel state that firmware left behind.
-It does not set a mode, train a link, touch backlight, submit GPU work, or
-change a display register.
+The boot probe does not set a mode, train a link, touch backlight, submit GPU
+work, or change a display register. The only later write path is the
+owner-confirmed `gpu flip --yes` experiment described in section 3.8.
 
 **Status:** the laptop facts below were captured read-only over SSH. The PCI,
 EDID, connector, dmesg and VBT values are measured, not predictions. The only
@@ -360,6 +361,42 @@ checks both neighboring PTEs, and restores the original PTE on every exit path.
 No display register is written and no firmware, forcewake or power-well request
 is made.
 
+### 3.8 Stage 3: confirmed same-pixel plane flip
+
+`gpu flip` is a read-only dry-run. Only `gpu flip --yes` enters the write path,
+and only for the measured laptop identity `8086:5917` revision `07` with
+subsystem `17aa:225c`. The command re-probes the display, excludes every live
+surface, reserves a guarded GGTT run, allocates a physically contiguous RAM
+copy, copies the source through BAR2 and compares every byte before touching a
+display register.
+
+At the next pipe frame counter change it writes the saved `DSPCNTR`/`PLANE_CTL`,
+`PLANE_STRIDE` and the new `PLANE_SURF`. Two frame changes later it requires
+`PLANE_SURFLIVE` to name the new surface and compares the copied pixels again.
+It then restores the old surface at the next frame and requires `SURFLIVE` to
+return to the old address. The one-line rollback is: write `PLANE_SURF(old)`
+first, then `PLANE_STRIDE(old)` and `DSPCNTR(old)`, then restore the GGTT run
+only after `SURFLIVE` confirms the old surface. If the plane restore itself
+fails, or the old surface does not become live, the new GGTT mapping and RAM
+allocation are intentionally kept alive so a scratch mapping cannot turn the
+screen black.
+
+This does not set a mode, train DDI/eDP, change backlight or load DMC/GuC/HuC.
+A probe that cannot already see PW1 and the active eDP pipe refuses the flip.
+The remaining live unknown is whether the firmware-left display state survives
+the Micro OS handoff without DMC; that is an owner-confirmed laptop test, not a
+QEMU test.
+
+Owner checklist:
+
+1. Boot the signed image with serial/power recovery ready; run `gpu info` and
+   record the `gpu: ggtt framebuffer ...` line.
+2. Run `gpu ggtt-test`; require `PASS` and no neighboring-entry error.
+3. Run `gpu flip`; check the source/target, dimensions and pitch in the dry-run.
+4. Run `gpu flip --yes`; require `copy verified` and `restored original surface`.
+5. If the image is black/garbled or any error appears, stop, save the log and
+   power-cycle; do not repeat the experiment.
+
 ## 4. EDID through AUX/DDC: the next, separate step
 
 Reading EDID is useful, but it is not part of this read-only probe. Both AUX
@@ -671,8 +708,16 @@ same two commands and photograph the last screen lines instead of using serial.
   <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/display/intel_display_device.c>
 * Linux v6.6 PCI-revision-to-display-stepping table:
   <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/intel_step.c>
-* Linux v6.6 register definitions:
-  <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/i915_reg.h>
+* Linux v6.12 register definitions:
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/i915_reg.h>
+* Linux v6.12 GGTT layout and programming:
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/gt/intel_gtt.h>
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/gt/intel_ggtt.c>
+* Linux v6.12 universal-plane registers and programming:
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/display/skl_universal_plane_regs.h>
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/display/skl_universal_plane.c>
+* Linux v6.12 cursor registers:
+  <https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/i915/display/intel_cursor_regs.h>
 * Linux v6.6 forcewake ranges:
   <https://github.com/torvalds/linux/blob/v6.6/drivers/gpu/drm/i915/intel_uncore.c>
 * Linux v6.6 power wells:

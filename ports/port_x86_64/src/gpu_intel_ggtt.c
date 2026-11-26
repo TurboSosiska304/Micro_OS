@@ -2,7 +2,8 @@
  * Micro OS — decoding of the flat gen8 global graphics page table.
  *
  * Facts from drivers/gpu/drm/i915/gt/intel_gtt.h,
- * drivers/gpu/drm/i915/gt/intel_ggtt.c and
+ * drivers/gpu/drm/i915/gt/intel_ggtt.c,
+ * drivers/gpu/drm/i915/display/intel_fb.c and
  * drivers/gpu/drm/i915/display/skl_universal_plane.c (GPL-2.0, Linux v6.12);
  * code written here for Micro OS (MIT).
  */
@@ -240,6 +241,7 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_s
                                                   k_u64_t saved)
 {
     k_u32_t i;
+    bool ok = true;
 
     if (entries == NULL || run == NULL || run->count == 0u ||
         (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count) {
@@ -248,8 +250,8 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_s
     for (i = 0u; i < run->count; i++) {
         entries[run->start + i] = saved;
         if (entries[run->start + i] != saved) {
-            return GPU_INTEL_GGTT_INVALID;
+            ok = false;
         }
     }
-    return GPU_INTEL_GGTT_OK;
+    return ok ? GPU_INTEL_GGTT_OK : GPU_INTEL_GGTT_INVALID;
 }

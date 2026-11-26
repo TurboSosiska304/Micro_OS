@@ -98,6 +98,8 @@ static const char *gpu_intel_display_step(k_u16_t device, k_u8_t revision)
 #define GPU_INTEL_PLANE_STRIDE_BASE 0x70188u
 #define GPU_INTEL_PLANE_SIZE_BASE 0x70190u
 #define GPU_INTEL_PLANE_SURF_BASE 0x7019Cu
+#define GPU_INTEL_PLANE_SURFLIVE_BASE 0x701ACu
+#define GPU_INTEL_PIPE_FRAME_BASE 0x70040u
 #define GPU_INTEL_PIPE_REGISTER_STEP 0x1000u
 #define GPU_INTEL_PLANE_REGISTER_STEP 0x100u
 #define GPU_INTEL_CURSOR_CTL_BASE 0x70080u
@@ -105,6 +107,7 @@ static const char *gpu_intel_display_step(k_u16_t device, k_u8_t revision)
 #define GPU_INTEL_CURSOR_GUARD_PAGES 64u
 #define GPU_INTEL_APERTURE_PAGE 0x200000u
 
+#define GPU_INTEL_RENDER_DECOMPRESSION (1u << 15)
 #define GPU_INTEL_PW1_STATE (1u << 28)
 #define GPU_INTEL_DDI_ENABLE (1u << 31)
 #define GPU_INTEL_TRANS_ENABLE (1u << 31)
@@ -120,6 +123,11 @@ static k_u64_t s_aperture_base;
 static k_u32_t gpu_intel_mmio_read(k_u32_t offset)
 {
     return s_mmio[offset / sizeof(k_u32_t)];
+}
+
+static void gpu_intel_mmio_write(k_u32_t offset, k_u32_t value)
+{
+    s_mmio[offset / sizeof(k_u32_t)] = value;
 }
 
 /* A bounded, read-only capability walk; a missing power capability is unsafe. */
@@ -444,6 +452,7 @@ static int gpu_intel_ggtt_test(const struct gpu_info *info)
     k_u32_t pattern = 0x47545431u;
     bool installed = false;
     bool ok = false;
+    bool keep_buffer = false;
     k_size_t i;
     enum gpu_intel_ggtt_result rc;
     char physical_text[24];
@@ -519,12 +528,263 @@ out:
     if (installed) {
         if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run, original) !=
             GPU_INTEL_GGTT_OK) {
-            kerror("gpu: GGTT slot %u could not be restored", (unsigned)run.start);
+            kerror("gpu: GGTT slot %u could not be restored; keeping RAM alive",
+                   (unsigned)run.start);
             ok = false;
+            keep_buffer = true;
         }
     }
-    if (allocation != NULL) {
+    if (allocation != NULL && !keep_buffer) {
         kmm_free(allocation);
+    }
+    return ok ? 0 : -1;
+}
+
+static bool gpu_intel_flip_laptop(const struct gpu_info *info)
+{
+    return info->vendor == 0x8086u && info->device == 0x5917u && info->rev == 0x07u &&
+           info->subsystem_vendor == 0x17AAu && info->subsystem_device == 0x225Cu;
+}
+
+static bool gpu_intel_wait_frame(const struct gpu_info *info)
+{
+    /* Kaby Lake uses the G4X full frame counter, not the split PIPEFRAME pair. */
+    k_u32_t offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PIPE_FRAME_BASE);
+    k_u32_t before = gpu_intel_mmio_read(offset);
+    k_u64_t deadline = port_x86_64_ticks() + 100u;
+
+    do {
+        if (gpu_intel_mmio_read(offset) != before) {
+            return true;
+        }
+    } while (port_x86_64_ticks() < deadline);
+    return false;
+}
+
+static bool gpu_intel_plane_program(const struct gpu_info *info, k_u32_t control, k_u32_t stride,
+                                    k_u32_t surface)
+{
+    k_u32_t control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    k_u32_t stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    k_u32_t surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+
+    gpu_intel_mmio_write(control_offset, control);
+    gpu_intel_mmio_write(stride_offset, stride);
+    gpu_intel_mmio_write(surface_offset, surface);
+    return gpu_intel_mmio_read(control_offset) == control &&
+           gpu_intel_mmio_read(stride_offset) == stride &&
+           gpu_intel_mmio_read(surface_offset) == surface;
+}
+
+/* The old surface is written first: rollback must not leave the plane armed on new RAM. */
+static bool gpu_intel_plane_restore(const struct gpu_info *info, k_u32_t control, k_u32_t stride,
+                                    k_u32_t surface)
+{
+    k_u32_t control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    k_u32_t stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    k_u32_t surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+
+    gpu_intel_mmio_write(surface_offset, surface);
+    gpu_intel_mmio_write(stride_offset, stride);
+    gpu_intel_mmio_write(control_offset, control);
+    return gpu_intel_mmio_read(surface_offset) == surface &&
+           gpu_intel_mmio_read(stride_offset) == stride &&
+           gpu_intel_mmio_read(control_offset) == control;
+}
+
+static int gpu_intel_flip(const struct gpu_info *info, bool confirmed)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    struct gpu_intel_gtt_run run;
+    k_size_t excluded_count = 0u;
+    k_u32_t control;
+    k_u32_t stride;
+    k_u32_t surface;
+    k_u32_t new_surface;
+    k_u32_t live_offset;
+    k_u32_t live;
+    void *allocation = NULL;
+    k_u8_t *page = NULL;
+    k_u64_t physical = 0u;
+    k_u64_t saved_gtt = 0u;
+    volatile k_u8_t *source = NULL;
+    bool run_installed = false;
+    bool display_touched = false;
+    bool plane_restored = false;
+    bool keep_buffer = false;
+    bool ok = false;
+    k_size_t i;
+    enum gpu_intel_ggtt_result rc;
+    char source_physical[24];
+    char target_physical[24];
+
+    if (info->state != KMOD_OK || !info->display_ready || !info->framebuffer_known ||
+        info->panel_pipe == GPU_INTEL_PANEL_PIPE_UNKNOWN || s_gtt_entries == NULL) {
+        kshell_printf("gpu: flip needs an active, readable Intel display\n");
+        return -1;
+    }
+    if (!gpu_intel_flip_laptop(info)) {
+        kshell_printf("gpu: flip is limited to the measured ThinkPad 17aa:225c\n");
+        return -1;
+    }
+    if ((info->plane_surface & ~GPU_INTEL_PLANE_SURFACE_MASK) != 0u ||
+        (info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) != 0u ||
+        (info->plane_control & 3u) != 0u) {
+        kshell_printf("gpu: flip refuses surface flags, compression or rotation\n");
+        return -1;
+    }
+
+    control =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE));
+    stride =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE));
+    surface =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE));
+    if (control != info->plane_control || stride != info->plane_stride ||
+        surface != info->plane_surface) {
+        kshell_printf("gpu: the display changed after the probe; run gpu info again\n");
+        return -1;
+    }
+    if (!gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        kshell_printf("gpu: flip cannot exclude every live display surface\n");
+        return -1;
+    }
+
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->framebuffer.pte_count, excluded, excluded_count, &run);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: no guarded GGTT run for %u pages (rc=%d)\n",
+                      (unsigned)info->framebuffer.pte_count, (int)rc);
+        return -1;
+    }
+    new_surface = run.start * GPU_INTEL_GTT_PAGE_SIZE;
+    live_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURFLIVE_BASE);
+
+    gpu_intel_address(info->framebuffer.phys, source_physical, sizeof(source_physical));
+    kshell_printf("gpu: flip %s: source 0x%s, ggtt 0x%x, %ux%u, pitch %u, %u bytes\n",
+                  confirmed ? "plan" : "dry-run", source_physical,
+                  (unsigned)info->framebuffer.surface, (unsigned)info->framebuffer.width,
+                  (unsigned)info->framebuffer.height, (unsigned)info->framebuffer.pitch,
+                  (unsigned)info->framebuffer.bytes);
+    kshell_printf("gpu: flip %s: target ggtt 0x%x, slot %u, %u page(s), ctl 0x%08x, "
+                  "stride 0x%x\n",
+                  confirmed ? "plan" : "dry-run", (unsigned)new_surface, (unsigned)run.start,
+                  (unsigned)run.count, (unsigned)control, (unsigned)stride);
+    if (!confirmed) {
+        kshell_printf("gpu: flip dry-run: nothing written; use gpu flip --yes on the laptop\n");
+        return 0;
+    }
+
+    allocation = kmm_alloc((k_size_t)info->framebuffer.bytes + GPU_INTEL_GTT_PAGE_SIZE - 1u,
+                           KMM_PRIORITY_KERNEL);
+    if (allocation == NULL) {
+        kshell_printf("gpu: flip has no contiguous RAM for %u bytes\n",
+                      (unsigned)info->framebuffer.bytes);
+        goto out;
+    }
+    page = (k_u8_t *)(((uintptr_t)allocation + GPU_INTEL_GTT_PAGE_SIZE - 1u) &
+                      ~(uintptr_t)(GPU_INTEL_GTT_PAGE_SIZE - 1u));
+    physical = port_x86_64_bus_phys(page);
+    if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u) {
+        kshell_printf("gpu: flip RAM has no aligned physical address\n");
+        goto out;
+    }
+    for (i = 0u; i < info->framebuffer.pte_count; i++) {
+        if (port_x86_64_bus_phys(page + i * GPU_INTEL_GTT_PAGE_SIZE) !=
+            physical + i * GPU_INTEL_GTT_PAGE_SIZE) {
+            kshell_printf("gpu: flip RAM is not physically contiguous\n");
+            goto out;
+        }
+    }
+
+    source = gpu_intel_map_aperture(info->framebuffer.surface, info->framebuffer.bytes);
+    if (source == NULL) {
+        kshell_printf("gpu: flip cannot map the source aperture\n");
+        goto out;
+    }
+    memcpy(page, (const void *)source, info->framebuffer.bytes);
+    if (memcmp(page, (const void *)source, info->framebuffer.bytes) != 0) {
+        kshell_printf("gpu: flip copy does not match the source\n");
+        goto out;
+    }
+
+    rc = gpu_intel_ggtt_borrow(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run, physical,
+                               &saved_gtt);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: flip GGTT install failed (rc=%d)\n", (int)rc);
+        goto out;
+    }
+    run_installed = true;
+
+    if (!gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out waiting for vblank\n");
+        goto out;
+    }
+    display_touched = true;
+    if (!gpu_intel_plane_program(info, control, stride, new_surface)) {
+        kshell_printf("gpu: flip plane registers did not read back\n");
+        goto out;
+    }
+    if (!gpu_intel_wait_frame(info) || !gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out waiting for scanout\n");
+        goto out;
+    }
+
+    live = gpu_intel_mmio_read(live_offset);
+    if ((live & GPU_INTEL_PLANE_SURFACE_MASK) != new_surface ||
+        memcmp(page, (const void *)source, info->framebuffer.bytes) != 0) {
+        kshell_printf("gpu: flip scanout or pixel copy is not the same\n");
+        goto out;
+    }
+    gpu_intel_address(physical, target_physical, sizeof(target_physical));
+    kshell_printf("gpu: flip active at physical 0x%s, SURFLIVE 0x%08x: copy verified\n",
+                  target_physical, (unsigned)live);
+
+    if (!gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out before restore\n");
+        goto out;
+    }
+    plane_restored = gpu_intel_plane_restore(info, control, stride, surface);
+    if (!plane_restored) {
+        kerror("gpu: flip could not restore the original plane; retrying rollback");
+        goto out;
+    }
+    if (!gpu_intel_wait_frame(info) ||
+        (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != surface) {
+        kshell_printf("gpu: original surface did not become live again\n");
+        plane_restored = false;
+        goto out;
+    }
+
+    kshell_printf("gpu: flip restored original surface 0x%08x\n", (unsigned)surface);
+    ok = true;
+
+out:
+    if (display_touched && !plane_restored) {
+        if (gpu_intel_plane_restore(info, control, stride, surface) && gpu_intel_wait_frame(info) &&
+            (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) == surface) {
+            plane_restored = true;
+        } else {
+            kerror("gpu: flip rollback is not live; keeping new GGTT mapping and RAM alive");
+            keep_buffer = true;
+            run_installed = false;
+        }
+    }
+    if (run_installed) {
+        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run,
+                                   saved_gtt) != GPU_INTEL_GGTT_OK) {
+            kerror("gpu: flip could not restore GGTT slot %u; keeping RAM alive",
+                   (unsigned)run.start);
+            ok = false;
+            keep_buffer = true;
+        }
+    }
+    if (allocation != NULL && !keep_buffer) {
+        kmm_free(allocation);
+    }
+    if (!ok) {
+        kshell_printf("gpu: flip aborted; original plane %s\n",
+                      plane_restored ? "restored" : "not confirmed");
     }
     return ok ? 0 : -1;
 }
@@ -742,14 +1002,29 @@ static int cmd_gpu(int argc, char **argv)
     }
 
     if (argc == 2 && strcmp(argv[1], "ggtt-test") == 0) {
-        if (g_gpu_probe_rc != 0 || !g_gpu_info.framebuffer_known) {
-            kshell_printf("gpu: a readable Intel framebuffer is required\n");
+        struct gpu_info fresh;
+        int rc = gpu_intel_probe(&fresh);
+
+        if (rc != 0 || !fresh.framebuffer_known || !gpu_intel_flip_laptop(&fresh)) {
+            kshell_printf("gpu: a readable ThinkPad framebuffer is required\n");
             return KSHELL_ERROR;
         }
-        return gpu_intel_ggtt_test(&g_gpu_info) == 0 ? KSHELL_OK : KSHELL_ERROR;
+        return gpu_intel_ggtt_test(&fresh) == 0 ? KSHELL_OK : KSHELL_ERROR;
     }
 
-    kshell_printf("usage: gpu [info|ggtt-test]\n");
+    if ((argc == 2 && strcmp(argv[1], "flip") == 0) ||
+        (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0)) {
+        struct gpu_info fresh;
+        int rc = gpu_intel_probe(&fresh);
+
+        if (rc != 0) {
+            kshell_printf("gpu: flip refused: probe rc=%d, state=%d\n", rc, (int)fresh.state);
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_flip(&fresh, argc == 3) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
+    kshell_printf("usage: gpu [info|ggtt-test|flip [--yes]]\n");
     return KSHELL_USAGE;
 }
 
@@ -757,11 +1032,15 @@ int gpu_intel_register(void)
 {
     static const struct kshell_help help = {
         .summary = "inspect the Intel display and its global page table",
-        .usage = "gpu [info|ggtt-test]",
+        .usage = "gpu [info|ggtt-test|flip [--yes]]",
         .detail = "Without a subcommand, or with info, prints the read-only probe result\n"
                   "and the firmware-left framebuffer mapping. ggtt-test temporarily maps\n"
                   "one RAM page into a guarded free GGTT slot, writes and reads it through\n"
-                  "BAR2, checks both neighbors, and restores the original PTE.\n",
+                  "BAR2, checks both neighbors, and restores the original PTE. flip is a\n"
+                  "dry-run unless --yes is explicit; the write path is limited to the\n"
+                  "measured ThinkPad, copies the frame, checks SURFLIVE, and restores the\n"
+                  "original plane address. The GGTT run is released only after SURFLIVE\n"
+                  "confirms the old surface; otherwise the new mapping and RAM stay alive.\n",
     };
 
     g_gpu_probe_rc = gpu_intel_probe(&g_gpu_info);
