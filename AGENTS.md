@@ -127,7 +127,8 @@ nobody builds.
 
 ## Code conventions
 
-* C11. No C++, no GNU extensions in the portable kernel.
+* C11. No C++, no GNU extensions in the portable kernel. C23 from 2.1; Rust
+  only as an island behind a C ABI, with an ADR (0058).
 * 4 spaces, max 100 columns, no tabs, LF, trailing newline (enforced by
   `make integrity`).
 * `-Wall -Wextra -Werror`: warnings are errors.

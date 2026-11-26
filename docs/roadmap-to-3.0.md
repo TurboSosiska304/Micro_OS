@@ -179,7 +179,8 @@ It belongs to 2.1 and not to 2.0.2 on purpose: a release that fixes the desk
 and the shutdown of a real laptop must not also change the dialect of every
 translation unit. What C23 buys the tree: `#embed` (the font and the tables
 without a generator), `[[noreturn]]`/`[[fallthrough]]`, `nullptr`,
-`constexpr`, `typeof`, `stdbit.h`, and `0b1010`.
+`constexpr`, `typeof`, `stdbit.h`, and `0b1010`. The language of the tree, and
+why it is not Rust, is ADR 0058.
 
 ## 11. The packages of a person (promised to 3.0)
 
