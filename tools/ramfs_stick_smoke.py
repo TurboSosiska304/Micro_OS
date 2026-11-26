@@ -26,6 +26,7 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_STICK = os.path.join(ROOT, "build-uefi", "stick.img")
+DEFAULT_ISO = os.path.join(ROOT, "build-x86-iso", "microos.iso")
 
 PROMPT = "microos> "
 
@@ -47,15 +48,18 @@ def find_ovmf(names: list, explicit: str | None, env: str) -> str | None:
 
 
 class Machine:
-    def __init__(self, stick: str, code: str, variables: str) -> None:
+    def __init__(self, stick: str | None, code: str | None, variables: str | None,
+                 iso: str | None = None) -> None:
         self.stick = stick
+        self.iso = iso
         self.code = code
         self.variables = variables
         self.process: subprocess.Popen | None = None
         self.serial = None
         self.monitor = None
         self.transcript = b""
-        self.work = tempfile.mkdtemp(prefix="ramfs-stick-", dir="/tmp/opencode")
+        prefix = "ramfs-iso-" if iso else "ramfs-stick-"
+        self.work = tempfile.mkdtemp(prefix=prefix, dir="/tmp/opencode")
         self.serial_path = os.path.join(self.work, "serial.sock")
         self.monitor_path = os.path.join(self.work, "monitor.sock")
 
@@ -98,23 +102,35 @@ class Machine:
         return text.decode("utf-8", errors="replace")
 
     def open(self, timeout: float) -> bool:
-        variables = os.path.join(self.work, "vars.fd")
-        shutil.copyfile(self.variables, variables)
-
-        command = [
-            "qemu-system-x86_64",
-            "-drive", f"if=pflash,format=raw,readonly=on,file={self.code}",
-            "-drive", f"if=pflash,format=raw,file={variables}",
-            "-device", "qemu-xhci,id=xhci",
-            "-drive", f"if=none,id=usbdisk,file={self.stick},format=raw",
-            "-device", "usb-storage,drive=usbdisk,bus=xhci.0",
-            "-m", "512",
-            "-vga", "std",
-            "-display", "none",
-            "-no-reboot",
-            "-serial", f"unix:{self.serial_path},server=on,wait=off",
-            "-monitor", f"unix:{self.monitor_path},server=on,wait=off",
-        ]
+        if self.iso is not None:
+            command = [
+                "qemu-system-x86_64",
+                "-cdrom", self.iso,
+                "-m", "256",
+                "-boot", "d",
+                "-vga", "std",
+                "-display", "none",
+                "-no-reboot",
+                "-serial", f"unix:{self.serial_path},server=on,wait=off",
+                "-monitor", f"unix:{self.monitor_path},server=on,wait=off",
+            ]
+        else:
+            variables = os.path.join(self.work, "vars.fd")
+            shutil.copyfile(self.variables, variables)
+            command = [
+                "qemu-system-x86_64",
+                "-drive", f"if=pflash,format=raw,readonly=on,file={self.code}",
+                "-drive", f"if=pflash,format=raw,file={variables}",
+                "-device", "qemu-xhci,id=xhci",
+                "-drive", f"if=none,id=usbdisk,file={self.stick},format=raw",
+                "-device", "usb-storage,drive=usbdisk,bus=xhci.0",
+                "-m", "512",
+                "-vga", "std",
+                "-display", "none",
+                "-no-reboot",
+                "-serial", f"unix:{self.serial_path},server=on,wait=off",
+                "-monitor", f"unix:{self.monitor_path},server=on,wait=off",
+            ]
 
         self.process = subprocess.Popen(
             command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT
@@ -222,21 +238,35 @@ def check(title: str, ok: bool, detail: str = "") -> bool:
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stick", default=DEFAULT_STICK)
+    parser.add_argument("--iso", default=None,
+                        help="boot this ISO instead of the UEFI stick")
     parser.add_argument("--ovmf-code", default=None)
     parser.add_argument("--ovmf-vars", default=None)
     parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--shots", default=None)
     args = parser.parse_args(argv)
 
-    if not os.path.isfile(args.stick):
-        print(f"ramfs_stick_smoke: missing stick image {args.stick}", file=sys.stderr)
-        return 2
+    iso = args.iso
+    if iso is None and os.path.basename(sys.argv[0]) == "ramfs_iso_smoke.py":
+        iso = DEFAULT_ISO
 
-    code = find_ovmf(OVMF_CODE, args.ovmf_code, "MICROOS_OVMF_CODE")
-    variables = find_ovmf(OVMF_VARS, args.ovmf_vars, "MICROOS_OVMF_VARS")
-    if code is None or variables is None:
-        print("ramfs_stick_smoke: no OVMF firmware found", file=sys.stderr)
-        return 2
+    if iso is not None:
+        if not os.path.isfile(iso):
+            print(f"ramfs_stick_smoke: missing ISO image {iso}", file=sys.stderr)
+            return 2
+    else:
+        if not os.path.isfile(args.stick):
+            print(f"ramfs_stick_smoke: missing stick image {args.stick}", file=sys.stderr)
+            return 2
+
+    code = None
+    variables = None
+    if iso is None:
+        code = find_ovmf(OVMF_CODE, args.ovmf_code, "MICROOS_OVMF_CODE")
+        variables = find_ovmf(OVMF_VARS, args.ovmf_vars, "MICROOS_OVMF_VARS")
+        if code is None or variables is None:
+            print("ramfs_stick_smoke: no OVMF firmware found", file=sys.stderr)
+            return 2
 
     if shutil.which("qemu-system-x86_64") is None:
         print("ramfs_stick_smoke: qemu-system-x86_64 not found", file=sys.stderr)
@@ -246,22 +276,33 @@ def main(argv: list[str]) -> int:
     if shots:
         os.makedirs(shots, exist_ok=True)
 
-    machine = Machine(args.stick, code, variables)
+    machine = Machine(args.stick, code, variables, iso=iso)
     ok = True
+    medium = "ISO" if iso is not None else "stick"
     try:
         booted = machine.open(args.timeout)
-        ok &= check("the stick boots to a shell prompt", booted,
+        ok &= check(f"the {medium} boots to a shell prompt", booted,
                     machine.read_serial()[-400:])
 
         boot_text = machine.read_serial()
 
-        # The ramfs should be auto-mounted at /tmp on a read-only root.
         mounts = ""
         if machine.run_line("cat /proc/mounts", 60.0):
             mounts = machine.read_serial()
         root_ro = re.search(r"\S+\s+/\s+\S+\s+ro\b", mounts) is not None
         has_tmp_ramfs = re.search(r"\S+\s+/tmp\s+ramfs\s+rw", mounts) is not None
-        if root_ro:
+
+        if iso is not None:
+            ok &= check("the boot log says the root is read-only",
+                        "read-only" in boot_text,
+                        boot_text[-600:])
+            ok &= check("the boot log says /tmp is a ramfs",
+                        "/tmp is a ramfs" in boot_text,
+                        boot_text[-600:])
+            ok &= check("mount names ramfs (rw) on /tmp",
+                        has_tmp_ramfs,
+                        mounts[-400:])
+        elif root_ro:
             ok &= check("the root is read-only and /tmp is mounted as ramfs",
                         has_tmp_ramfs, mounts[-400:])
         else:
@@ -301,19 +342,34 @@ def main(argv: list[str]) -> int:
         if shots:
             machine.screendump(os.path.join(shots, "stick-term.ppm"))
 
-        # Type help in the terminal.
-        time.sleep(2.0)
-        machine.type_text("help")
-        machine.sendkey("ret")
-        deadline = time.monotonic() + 60.0
+        # Alt+T gives the new terminal window focus. Wait for it to be
+        # ready, type the builtin help, then run an external command to prove
+        # the terminal is alive and responsive.
+        time.sleep(3.0)
+
         help_done = False
-        while time.monotonic() < deadline:
-            serial = machine.read_serial()
-            if "term: the command help" in serial or "term: help left" in serial:
-                help_done = True
+        for _ in range(3):
+            machine.sendkey("ctrl-u")
+            time.sleep(0.2)
+            machine.type_text("help")
+            machine.sendkey("ret")
+            time.sleep(2.0)
+            machine.sendkey("ctrl-u")
+            time.sleep(0.2)
+            machine.type_text("echo ramfs-ok")
+            machine.sendkey("ret")
+            deadline = time.monotonic() + 60.0
+            while time.monotonic() < deadline:
+                serial = machine.read_serial()
+                if "term: the command echo" in serial or "term: echo left with 0" in serial:
+                    help_done = True
+                    break
+                time.sleep(0.5)
+            if help_done:
                 break
-            time.sleep(0.5)
-        ok &= check("terminal responds to help",
+            time.sleep(1.0)
+
+        ok &= check("terminal responds to help and runs a command",
                     help_done,
                     machine.read_serial()[-800:])
 
