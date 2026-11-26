@@ -67,3 +67,8 @@ target_link_libraries(microos_stress PRIVATE
     microos_mfs
     microos_port_host
 )
+
+# Host tools: they use POSIX (pwrite, ftruncate, ...) and opt into gnu23.
+set_target_properties(mkfs_mfs_image microos_mkfs microos_sign microos_stress
+    PROPERTIES C_STANDARD 23 C_EXTENSIONS ON
+)

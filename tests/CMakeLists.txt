@@ -372,6 +372,7 @@ if(NOT ESP_PLATFORM)
         # the release's own build does not ask for are turned off here.
         -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered
         -Wno-missing-prototypes -Wno-strict-prototypes
+        -Wno-discarded-qualifiers
         # The calculator is the program under test: the sanitizer of the test
         # binary is for the kernel, and a leak of the release at its exit (the
         # release frees its state only in a debug build) must not turn a good
@@ -379,6 +380,10 @@ if(NOT ESP_PLATFORM)
         -fno-sanitize=all
     )
     target_link_options(microos_bc_host PRIVATE -fno-sanitize=all)
+    set_target_properties(microos_bc_host PROPERTIES
+        C_STANDARD 23
+        C_EXTENSIONS ON
+    )
 
     target_compile_definitions(microos_tests PRIVATE
         MICROOS_BC_HOST="$<TARGET_FILE:microos_bc_host>")
@@ -793,6 +798,18 @@ target_compile_definitions(microos_tests PRIVATE
     # without the sanitizer, and the rest of the tests carry it.
     target_compile_options(microos_heap_tests PRIVATE -fno-sanitize=all)
     target_link_options(microos_heap_tests PRIVATE -fno-sanitize=all)
+    # Host test binaries: they and the third-party code they compile use
+    # POSIX interfaces, so they opt into gnu23 on their own targets.
+    set_target_properties(
+        microos_tests microos_test_file microos_userland_tests
+        microos_libc_user_tests microos_heap_tests
+        PROPERTIES C_STANDARD 23 C_EXTENSIONS ON
+    )
+    if(TARGET microos_magic_compile)
+        set_target_properties(microos_magic_compile PROPERTIES
+            C_STANDARD 23 C_EXTENSIONS ON)
+    endif()
+
     add_test(NAME heap COMMAND microos_heap_tests)
     set_tests_properties(heap PROPERTIES TIMEOUT 60)
 

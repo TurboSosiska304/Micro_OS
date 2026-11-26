@@ -87,9 +87,9 @@ else()
 
     include("${CMAKE_CURRENT_LIST_DIR}/cmake/reproducible.cmake")
 
-    set(CMAKE_C_STANDARD 11)
+    set(CMAKE_C_STANDARD 23)
     set(CMAKE_C_STANDARD_REQUIRED ON)
-    set(CMAKE_C_EXTENSIONS ON)
+    set(CMAKE_C_EXTENSIONS OFF)
 
     if(NOT CMAKE_BUILD_TYPE)
         set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "" FORCE)

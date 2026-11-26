@@ -127,8 +127,9 @@ nobody builds.
 
 ## Code conventions
 
-* C11. No C++, no GNU extensions in the portable kernel. C23 from 2.1; Rust
-  only as an island behind a C ABI, with an ADR (0058).
+* C23. No C++, no GNU extensions in the portable kernel; a port that needs a
+  compiler extension sets `gnu23` on its own target, not globally. Rust only as
+  an island behind a C ABI, with an ADR (0058).
 * 4 spaces, max 100 columns, no tabs, LF, trailing newline (enforced by
   `make integrity`).
 * `-Wall -Wextra -Werror`: warnings are errors.

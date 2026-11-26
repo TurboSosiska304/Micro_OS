@@ -86,8 +86,9 @@ endif()
 set(NET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/net")
 set(PKG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/pkg")
 
-set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
 # under us), no PIC, no SSE in the C of the kernel (the state of the units is
@@ -362,7 +363,7 @@ set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
 # at every switch (docs/debts.md, K9), so two such programs may compute at
 # once. The kernel itself never touches them.
 set(USERLAND_CFLAGS
-    -O2 -ffreestanding -fno-stack-protector
+    -std=c23 -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
 )

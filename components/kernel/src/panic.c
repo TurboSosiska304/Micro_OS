@@ -17,7 +17,7 @@ static k_size_t str_len(const char *text)
     return len;
 }
 
-_Noreturn void kernel_panic(const char *file, int line, const char *fmt, ...)
+[[noreturn]] void kernel_panic(const char *file, int line, const char *fmt, ...)
 {
     char msg[192];
     va_list ap;

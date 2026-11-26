@@ -23,6 +23,12 @@ target_include_directories(microos_port_host PRIVATE
 target_link_libraries(microos_port_host PUBLIC microos_kernel microos_kshell)
 find_package(Threads REQUIRED)
 target_link_libraries(microos_port_host PUBLIC Threads::Threads)
+# The host port talks to POSIX (sockets, netdb, pthread): it needs the
+# extensions of the system, so it opts into gnu23 on its own target.
+set_target_properties(microos_port_host PROPERTIES
+    C_STANDARD 23
+    C_EXTENSIONS ON
+)
 
 add_executable(microos_sim
     src/sim_main.c
