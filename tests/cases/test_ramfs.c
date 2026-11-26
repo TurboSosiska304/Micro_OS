@@ -3,6 +3,7 @@
 
 #include <string.h>
 
+#include "kernel/clock.h"
 #include "kernel/errno.h"
 #include "kernel/sysinfo.h"
 #include "kernel/vfs.h"
@@ -15,6 +16,11 @@ static k_u8_t g_file_data[VFS_FILE_DATA_SIZE];
 
 static void setup(void)
 {
+    /* A machine without a battery has no time until it is told one: the case
+     * gives it a moment of its own, so the stamp of a node does not depend on
+     * the order of the tests or on the build. */
+    (void)k_clock_set_unix(1700000000u);
+
     (void)vfs_umount(RAMFS_POINT);
     (void)ramfs_vfs_reset();
     KT_CHECK_INT_EQ(ramfs_vfs_register(RAMFS_POINT), 0);
@@ -243,8 +249,20 @@ static void test_df_stat(void)
 
     KT_CHECK_INT_EQ(vfs_statx(RAMFS_TEST_FILE, &stx), 0);
     KT_CHECK_INT_EQ((int)stx.size, 5);
-    KT_CHECK(stx.mtime > 0);
-    KT_CHECK(stx.ctime > 0);
+
+    /*
+     * The stamp is the clock of the machine, whatever it says: a machine
+     * without a battery has a clock that starts at zero and counts the uptime,
+     * so "greater than zero" is a property of how long the test has run and not
+     * of the filesystem. The stamp of the creation is now (or a second ago),
+     * and the change is the same moment.
+     */
+    {
+        k_u64_t now = k_clock_now_unix();
+
+        KT_CHECK(stx.mtime <= now && stx.mtime + 2u >= now);
+        KT_CHECK(stx.ctime == stx.mtime);
+    }
 
     KT_CHECK_INT_EQ(vfs_unlink(RAMFS_TEST_FILE), 0);
     teardown();

@@ -794,6 +794,24 @@ static int ramfs_vfs_close(void *ctx, struct vfs_file *vfs_file)
     return 0;
 }
 
+/*
+ * The name of a directory entry in the buffer of the caller: at most
+ * VFS_NAME_MAX bytes and always terminated. A name that is longer than the
+ * field of `struct vfs_dirent` is cut here, rather than copied with `strncpy`
+ * and a terminator written at the limit, which the compiler refuses to trust.
+ */
+static void ramfs_name_out(char *dst, const char *src)
+{
+    k_size_t i = 0;
+
+    while (i < VFS_NAME_MAX && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+
+    dst[i] = '\0';
+}
+
 static int ramfs_vfs_list(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
                           k_size_t *count)
 {
@@ -833,8 +851,7 @@ static int ramfs_vfs_list(void *ctx, const char *path, struct vfs_dirent *out, k
         struct vfs_dirent *dent = &out[found];
 
         memset(dent, 0, sizeof(*dent));
-        strncpy(dent->name, entry->name, VFS_NAME_MAX);
-        dent->name[VFS_NAME_MAX] = '\0';
+        ramfs_name_out(dent->name, entry->name);
         if (child != NULL) {
             dent->inode = child->inode;
             dent->type = child->type;
@@ -884,8 +901,7 @@ static int ramfs_vfs_readdir(void *ctx, struct vfs_file *vfs_file, struct vfs_di
             struct ramfs_node *child = entry->node;
 
             memset(dent, 0, sizeof(*dent));
-            strncpy(dent->name, entry->name, VFS_NAME_MAX);
-            dent->name[VFS_NAME_MAX] = '\0';
+            ramfs_name_out(dent->name, entry->name);
             if (child != NULL) {
                 dent->inode = child->inode;
                 dent->type = child->type;
