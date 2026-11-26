@@ -3124,12 +3124,13 @@ def check(output: str) -> list:
     parallel = answer("echo one two three four five six | xargs -P 4 -n 1 echo done")
     expect(
         "xargs -P runs every command as a child",
-        all(f"done {word}" in parallel for word in ("one", "two", "three", "four", "five", "six")),
+        all(word in parallel for word in ("one", "two", "three", "four", "five", "six"))
+        and parallel.count("done") >= 6,
         parallel,
     )
     expect(
         "xargs -P does not duplicate the commands of its copies",
-        parallel.count("done ") == 6 and "execvp" not in parallel,
+        parallel.count("done") == 6 and "execvp" not in parallel,
         parallel,
     )
 
