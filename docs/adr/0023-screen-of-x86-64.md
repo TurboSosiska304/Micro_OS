@@ -251,3 +251,39 @@ what the tree does now.
   sixteen colours of the fallback. `make test` covers the SGR parser
   (`test_ansi.c`) and the sequences of `ls --color` without a screen
   (`test_kshell.c`).
+
+## What changed in 2.0.2: write combining and row copies
+
+The owner's laptop exposed a cost QEMU could not: after UEFI handed over its
+frame, every four-byte store was an uncached transaction and the console
+printed only 5-10 characters a second. The VBE path was cacheable but had no
+write-combining type either. The picture needed a memory type between
+write-back and uncached.
+
+The port reserves **IA32_PAT entry 5** for write-combining. Every PAT-capable
+core writes that one entry, preserves the other seven, and reads the MSR back.
+A 2 MiB framebuffer PTE selects the entry with `PAT=1`, `PCD=0`, `PWT=1`, and
+keeps `P`, `RW` and `NX`. The choice is PAT rather than a variable MTRR because
+the PTE names exactly the kernel's framebuffer window: it consumes none of the
+machine's finite variable MTRRs, changes no physical alias or identity-map
+entry, and leaves every MMIO register window uncached. MTRRs are not rewritten;
+their normal precedence remains in force.
+
+| Path | Before | After |
+|---|---|---|
+| VBE framebuffer | `0x8000000000000083` (WB) | `0x800000000000108b` (PAT WC) |
+| UEFI GOP framebuffer | `0x800000000000009b` (UC) | `0x800000000000108b` (PAT WC) |
+| CPU without PAT | - | `0x800000000000008b` (WT) |
+
+A CPU without PAT, or a PAT read-back that does not match, drops bit 12 and
+keeps `PCD=0`, `PWT=1`: write-through memory. That is slower than WC but correct,
+and a missing feature never becomes a panic. `make x86-vga-smoke` boots both a
+PAT CPU and `qemu64,-pat`, reads back the PTE/PAT/MTRR values, checks the
+picture, and requires the W^X audit to stay clean.
+
+The console also stopped painting a cell one pixel at a time. Each 8x16 cell
+is now sixteen rows of eight RGB565 pixels: the paper and font bits are
+combined in a local sixteen-byte row and copied to the framebuffer with one
+`memcpy`. A space clears its rows through the same path, and scrolling already
+moved the picture with one `memmove`. The font, colours, cell geometry and
+visible pixels do not change.

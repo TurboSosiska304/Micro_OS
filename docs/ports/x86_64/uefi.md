@@ -89,9 +89,10 @@ picture of the kernel in a shadow of 16 bits per pixel from the port's heap
 (4 MiB for 1920x1080) and converts the cells that changed into the frame of
 the firmware:
 
-* the frame is mapped uncached (PCD and PWT, `paging.c`'s
-  `port_x86_64_paging_map_mmio`) in the top 2 GiB, at the virtual window the
-  VBE screen uses as well;
+* the frame is mapped write-combining (`paging.c`'s
+  `port_x86_64_paging_map_framebuffer()`) in the top 2 GiB, at the virtual
+  window the VBE screen uses as well: PAT entry 5 and the large-page PTE select
+  WC, while a CPU without PAT falls back to write-through;
 * the console of `src/fb.c` writes the shadow unchanged - the same grid, the
   same font, the same colours, the same `/dev/fb0`;
 * `src/gop.c` wraps the table of operations of the screen: after `put` it

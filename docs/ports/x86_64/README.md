@@ -234,12 +234,13 @@ size the device reports to be at least the 2,048,000 bytes of the picture
 16 MB at `0xFD000000`.
 
 That address is above the identity map of the first gigabyte, so
-`port_x86_64_paging_map_device()` maps the window at
+`port_x86_64_paging_map_framebuffer()` maps the window at
 `PORT_X86_64_SCREEN_VIRT` (`0xFFFFFFFFA0000000`, half a gigabyte into the top
-2 GiB) in 2 MiB pages, writable and NX. The tables of the higher half are
-shared by every address space, so the `write` of a program in ring 3 draws on
-the same picture as the boot log, and the audit of W^X counts a device page as
-data.
+2 GiB) in 2 MiB pages, writable and NX. PAT entry 5 makes the pages
+write-combining; without PAT they are write-through. The tables of the higher
+half are shared by every address space, so the `write` of a program in ring 3
+draws on the same picture as the boot log, and the audit of W^X counts a device
+page as data.
 
 The mode is turned on without `VBE_NOCLEARMEM`: the card clears the memory it
 shows as part of the switch, and it has to - the cells of the text mode live
@@ -474,8 +475,9 @@ programmed through port I/O, so the rings are the only memory the device sees.
 2.0 keeps that card and adds the card of the laptop (ADR 0055): the e1000e of
 Intel, the I219 of a ThinkPad and the 82574L of `-device e1000e`, whose BAR0
 of 128 KiB is mapped into the top 2 GiB with
-`port_x86_64_paging_map_mmio()` - the window of the screen, the APIC, the SATA
-controller and the NVMe disk. The driver of the card speaks the legacy
+`port_x86_64_paging_map_mmio()` - the APIC, the SATA controller, the NVMe disk
+and the other register windows. The framebuffer has its own write-combining
+map. The driver of the card speaks the legacy
 descriptor, takes the MAC out of the NVM and is polled; the seam of
 `src/netdev.c` is unchanged, and the first driver that comes up takes the
 stack, with the card of the laptop asked for first.
