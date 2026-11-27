@@ -67,9 +67,10 @@ reordered pairs.
    `journal_flush()` validated a slot only while applying it, so a stale slot
    header could redirect a new image to an unrelated home and a later bad slot
    could leave earlier homes replaced. It also did not read the commit header
-   back. All slots and their map checksum are now checked before commit, the
-   committed header is read back before any home is touched, and replay can
-   roll back a bad image instead of refusing the mount.
+   back. All slots and their map checksum are now checked before commit, and
+   the committed header is read back before any home is touched. Replay still
+   refuses genuine media corruption rather than guessing at a rollback after
+   homes may have been changed.
 3. **`fsync` published the inode and bitmap in different transactions.** A cut
    between them left 49 blocks used by an object but marked free. The public
    `mfs_fsync()` now wraps both in one transaction and runs the device flush

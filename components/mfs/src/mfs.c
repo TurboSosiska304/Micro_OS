@@ -901,15 +901,9 @@ static int journal_replay(void)
         }
 
         if (entry.crc != crc32(block, MFS_BLOCK_SIZE)) {
-            /* The commit was checked before any home was touched. A bad
-             * image therefore belongs to a transaction that can still be
-             * rolled back as a whole; refusing the mount would keep the
-             * machine from repairing the journal after a lost write. */
             kerror("mfs: the image of the slot %u is not the one that was committed",
                    (unsigned)slot);
-            (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
-            (void)dev_sync();
-            return MFS_OK;
+            return MFS_EIO;
         }
 
         rc = dev_write(entry.home, block);
