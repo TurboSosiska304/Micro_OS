@@ -193,6 +193,159 @@ static void test_scanout_overlap_refuses(void)
     KT_CHECK_INT_EQ((long long)off, 0);
 }
 
+static void test_vram_mgr_basic(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    struct gpu_amd_scanout_region scan[1];
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+    int rc;
+
+    ktest_begin("gpu_amd: vram mgr alloc/free basic");
+
+    memset(scan, 0, sizeof(scan));
+    rc = gpu_amd_vram_mgr_init(&mgr, 256ull * 1024ull * 1024ull, scan, 0);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_OK);
+    KT_CHECK(mgr.ready);
+    KT_CHECK_INT_EQ(mgr.free_count, 1);
+    KT_CHECK_INT_EQ((long long)mgr.free_extents[0].offset, (long long)GPU_AMD_VRAM_RESERVED_END);
+
+    rc = gpu_amd_vram_alloc(&mgr, 1024ull * 1024ull, &id, &off);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_OK);
+    KT_CHECK(id != 0u);
+    KT_CHECK_INT_EQ((long long)off, (long long)GPU_AMD_VRAM_RESERVED_END);
+    KT_CHECK(gpu_amd_vram_find(&mgr, id) != NULL);
+
+    rc = gpu_amd_vram_free(&mgr, id);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_OK);
+    KT_CHECK(gpu_amd_vram_find(&mgr, id) == NULL);
+    KT_CHECK_INT_EQ(mgr.free_count, 1);
+}
+
+static void test_vram_mgr_coalesce(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t a = 0u, b = 0u, c = 0u;
+    k_u64_t off = 0u;
+    int rc;
+
+    ktest_begin("gpu_amd: vram mgr coalesces neighbors on free");
+
+    rc = gpu_amd_vram_mgr_init(&mgr, 64ull * 1024ull * 1024ull, NULL, 0);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_OK);
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &a, &off), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &b, &off), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &c, &off), GPU_AMD_VRAM_OK);
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, a), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, c), GPU_AMD_VRAM_OK);
+    /* Hole before b and merged hole after b+remainder = 2 extents. */
+    KT_CHECK_INT_EQ(mgr.free_count, 2);
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, b), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(mgr.free_count, 1);
+    KT_CHECK_INT_EQ((long long)mgr.free_extents[0].offset, (long long)GPU_AMD_VRAM_RESERVED_END);
+}
+
+static void test_vram_mgr_double_free(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+
+    ktest_begin("gpu_amd: vram mgr rejects double free and bad id");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 64ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &id, &off), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, id), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, id), GPU_AMD_VRAM_ERR_BAD_ID);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, 9999u), GPU_AMD_VRAM_ERR_BAD_ID);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, 0u), GPU_AMD_VRAM_ERR_BAD_ID);
+}
+
+static void test_vram_mgr_exhaustion(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+    int rc;
+
+    ktest_begin("gpu_amd: vram mgr reports no space / range errors");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 32ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    rc = gpu_amd_vram_alloc(&mgr, 32ull * 1024ull * 1024ull, &id, &off);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_ERR_NO_SPACE);
+
+    rc = gpu_amd_vram_alloc(&mgr, 0u, &id, &off);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_ERR_RANGE);
+
+    rc = gpu_amd_vram_alloc(&mgr, 1ull * 1024ull * 1024ull * 1024ull * 16ull, &id, &off);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_ERR_RANGE);
+}
+
+static void test_vram_mgr_scanout_reserved(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    struct gpu_amd_scanout_region scan[1];
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+
+    ktest_begin("gpu_amd: vram mgr excludes scanout and first 16 MiB");
+
+    memset(scan, 0, sizeof(scan));
+    scan[0].enabled = true;
+    scan[0].pipe = 0;
+    scan[0].primary = true;
+    scan[0].address = 32ull * 1024ull * 1024ull;
+    scan[0].size_bytes = 16ull * 1024ull * 1024ull;
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 256ull * 1024ull * 1024ull, scan, 1),
+                    GPU_AMD_VRAM_OK);
+
+    /* First allocation should be below scanout, at 16 MiB. */
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 1024ull * 1024ull, &id, &off), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ((long long)off, (long long)GPU_AMD_VRAM_RESERVED_END);
+    KT_CHECK(!gpu_amd_scanout_overlaps(off, 1024ull * 1024ull, scan, 1));
+
+    /* A fake allocation overlapping scanout must be rejected by overlap check. */
+    KT_CHECK(gpu_amd_vram_reserved_overlap(&mgr, 32ull * 1024ull * 1024ull, 4096u));
+    KT_CHECK(gpu_amd_vram_reserved_overlap(&mgr, 0u, 4096u));
+    KT_CHECK(!gpu_amd_vram_reserved_overlap(&mgr, 64ull * 1024ull * 1024ull, 4096u));
+}
+
+static void test_vram_mgr_fragmentation(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t ids[8];
+    k_u64_t off = 0u;
+    int i;
+    int rc;
+    k_u32_t big = 0u;
+
+    ktest_begin("gpu_amd: vram mgr handles fragmentation");
+
+    /* Pool exactly 8 blocks: no remainder after filling. */
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(
+                        &mgr, GPU_AMD_VRAM_RESERVED_END + 8ull * GPU_AMD_VRAM_BLOCK_SIZE, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    for (i = 0; i < 8; i++) {
+        ids[i] = 0u;
+        KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &ids[i], &off), GPU_AMD_VRAM_OK);
+    }
+    /* Free every other block to fragment. */
+    for (i = 0; i < 8; i += 2) {
+        KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, ids[i]), GPU_AMD_VRAM_OK);
+    }
+    /* A large allocation should fail (holes are 64K each). */
+    rc = gpu_amd_vram_alloc(&mgr, 128ull * 1024u, &big, &off);
+    KT_CHECK_INT_EQ(rc, GPU_AMD_VRAM_ERR_NO_SPACE);
+    /* Small allocations fit into holes. */
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc(&mgr, 64ull * 1024u, &big, &off), GPU_AMD_VRAM_OK);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -207,4 +360,10 @@ void test_gpu_amd(void)
     test_scanout_size_decode();
     test_scanout_overlap();
     test_scanout_overlap_refuses();
+    test_vram_mgr_basic();
+    test_vram_mgr_coalesce();
+    test_vram_mgr_double_free();
+    test_vram_mgr_exhaustion();
+    test_vram_mgr_scanout_reserved();
+    test_vram_mgr_fragmentation();
 }
