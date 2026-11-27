@@ -931,6 +931,11 @@ enum gpu_amd_surface_err {
 
 struct gpu_amd_surface_slot {
     bool mapped;
+    /* An owned surface belongs to the holder of /dev/fb0: the last close of
+     * that device, including the close a dying program gets from task_exit,
+     * frees the block after the plane has been restored. An unowned surface
+     * is a kernel experiment and stays until `gpu bufunmap`/`gpu buffree`. */
+    bool fb_owned;
     k_u32_t id;
     k_u64_t map_vaddr;
     k_u64_t map_paddr;
@@ -964,6 +969,14 @@ static inline void gpu_amd_surface_reset(struct gpu_amd_surface_slot *slot)
     if (slot != NULL) {
         *slot = (struct gpu_amd_surface_slot){0};
     }
+}
+
+/* A failed restore is a hard error: the block must not be freed while the
+ * scanout may still point at it. */
+static inline bool gpu_amd_surface_should_free(const struct gpu_amd_surface_slot *slot,
+                                               bool restore_ok)
+{
+    return slot != NULL && slot->mapped && slot->fb_owned && restore_ok;
 }
 
 static inline int gpu_amd_surface_plan(const struct gpu_amd_vram_block *block,

@@ -692,6 +692,40 @@ static void test_surface_refusals(void)
                     GPU_AMD_SURFACE_ERR_RANGE);
 }
 
+static void test_surface_lifetime(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    struct gpu_amd_surface_slot slot;
+    k_u32_t first = 0u;
+    k_u32_t second = 0u;
+    k_u64_t off = 0u;
+    k_u64_t vram = 128ull * 1024ull * 1024ull;
+
+    ktest_begin("gpu_amd: fb-owned blocks are released, kernel blocks are not");
+
+    gpu_amd_surface_reset(&slot);
+    KT_CHECK(!gpu_amd_surface_should_free(&slot, true));
+    slot.mapped = true;
+    KT_CHECK(!gpu_amd_surface_should_free(&slot, true));
+    slot.fb_owned = true;
+    KT_CHECK(gpu_amd_surface_should_free(&slot, true));
+    KT_CHECK(!gpu_amd_surface_should_free(&slot, false));
+    gpu_amd_surface_reset(&slot);
+    KT_CHECK(!slot.fb_owned && !slot.mapped);
+
+    /* Two buffers coexist; releasing one must not disturb the other. */
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, vram, NULL, 0), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 256ull * 1024ull, &first, &off, "wm"),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 256ull * 1024ull, &second, &off, " desk"),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK(first != 0u && second != 0u && first != second);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, first), GPU_AMD_VRAM_OK);
+    KT_CHECK(gpu_amd_vram_find(&mgr, first) == NULL);
+    KT_CHECK(gpu_amd_vram_find(&mgr, second) != NULL);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, second), GPU_AMD_VRAM_OK);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -723,4 +757,5 @@ void test_gpu_amd(void)
     test_plane_format_decode();
     test_surface_map_unmap();
     test_surface_refusals();
+    test_surface_lifetime();
 }

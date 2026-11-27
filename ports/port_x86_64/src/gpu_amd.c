@@ -1266,7 +1266,7 @@ int port_x86_64_gpu_amd_buflist(void)
         return 1;
     }
 
-    kshell_printf("gpu buflist: id offset size name filled mapped active\n");
+    kshell_printf("gpu buflist: id offset size name filled mapped owner active\n");
     for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
         const struct gpu_amd_vram_block *b = &g_vram_mgr.allocs[i];
         if (b->id == 0u || b->name[0] == '\0') {
@@ -1288,6 +1288,10 @@ int port_x86_64_gpu_amd_buflist(void)
         } else {
             kshell_printf(" mapped=no");
         }
+        kshell_printf(" owner=%s",
+                      s_amd_surface.mapped && s_amd_surface.id == b->id && s_amd_surface.fb_owned
+                          ? "fb"
+                          : "-");
         kshell_printf(" active=%s\n", s_amd_flip.active && s_amd_flip.id == b->id ? "yes" : "no");
     }
     if (used == 0) {
@@ -1639,7 +1643,7 @@ static void amd_surface_report(const char *action, k_u32_t id, bool armed)
 
     kshell_printf(
         "gpu %s: id=%u name=%s va=0x%x%08x size=%u KiB stride=%u px (%u bytes) "
-        "surface=%u KiB format=%s present=%s\n",
+        "surface=%u KiB format=%s owner=%s present=%s\n",
         action, (unsigned)id, buffer != NULL && buffer->name[0] != '\0' ? buffer->name : "-",
         (unsigned)((k_u64_t)(uintptr_t)slot->surface.base >> 32),
         (unsigned)(k_u32_t)(k_u64_t)(uintptr_t)slot->surface.base,
@@ -1647,10 +1651,10 @@ static void amd_surface_report(const char *action, k_u32_t id, bool armed)
         (unsigned)slot->surface.pitch,
         (unsigned)((k_u64_t)slot->surface.pitch * (k_u64_t)slot->plane.bytes_per_pixel),
         (unsigned)(slot->surface_bytes / 1024ull), gpu_amd_plane_format_name(slot->plane.format),
-        armed ? "VRAM flip (armed)" : "RAM copy (not armed)");
+        slot->fb_owned ? "fb" : "kernel", armed ? "VRAM flip (armed)" : "RAM copy (not armed)");
 }
 
-int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present)
+int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present, bool own)
 {
     const struct gpu_info *info = port_x86_64_gpu_info();
     struct gpu_amd_scanout_region regions[GPU_AMD_DCE_PIPE_COUNT * 2];
@@ -1736,6 +1740,11 @@ int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present)
             kshell_printf("gpu bufmap: plane geometry changed; unmap id=%u first\n", (unsigned)id);
             return 1;
         }
+        if (s_amd_flip.active && s_amd_surface.fb_owned != own) {
+            kshell_printf("gpu bufmap: cannot change ownership of an active id=%u\n", (unsigned)id);
+            return 1;
+        }
+        s_amd_surface.fb_owned = own;
         if (allow_present && !s_amd_surface_armed) {
             s_amd_surface_armed = true;
             amd_present_register();
@@ -1752,6 +1761,7 @@ int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present)
         return 1;
     }
     plan.mapped = true;
+    plan.fb_owned = own;
     s_amd_surface = plan;
     s_amd_surface_armed = allow_present;
     amd_present_register();
@@ -1811,7 +1821,8 @@ int port_x86_64_gpu_amd_bufunmap(k_u32_t id, bool confirmed)
     port_x86_64_paging_unmap_device(s_amd_surface.map_vaddr, (k_size_t)s_amd_surface.map_bytes);
     gpu_amd_surface_reset(&s_amd_surface);
     s_amd_surface_armed = false;
-    kshell_printf("gpu bufunmap: id=%u unmapped\n", (unsigned)id);
+    kshell_printf("gpu bufunmap: id=%u unmapped, block kept; use gpu buffree to release\n",
+                  (unsigned)id);
     kinfo("gpu: bufmap id=%u unmapped", (unsigned)id);
     return 0;
 }
@@ -1883,11 +1894,31 @@ static int amd_present(void *context, const struct k_fb_surface *dst,
 
 static int amd_present_release(void *context)
 {
+    k_u32_t id;
+    int rc;
+
     (void)context;
     if (!amd_restore_plane()) {
         return KERR_IO;
     }
     s_amd_surface_armed = false;
+    if (!gpu_amd_surface_should_free(&s_amd_surface, true)) {
+        return 0;
+    }
+
+    /* The last descriptor of /dev/fb0 is also closed when a program dies:
+     * task_exit closes its file table. An owned block goes back to the free
+     * pool here; a failed restore above keeps both the mapping and the block. */
+    id = s_amd_surface.id;
+    port_x86_64_paging_unmap_device(s_amd_surface.map_vaddr, (k_size_t)s_amd_surface.map_bytes);
+    gpu_amd_surface_reset(&s_amd_surface);
+    rc = gpu_amd_vram_free(&g_vram_mgr, id);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kerror("gpu: fb-owned block id=%u not freed: %s", (unsigned)id, gpu_amd_vram_err_name(rc));
+        return KERR_IO;
+    }
+    kshell_printf("gpu: released fb-owned VRAM block id=%u\n", (unsigned)id);
+    kinfo("gpu: released fb-owned VRAM block id=%u", (unsigned)id);
     return 0;
 }
 
@@ -1899,7 +1930,7 @@ static const struct k_fb_ops s_amd_present_ops = {
 static void amd_present_register(void)
 {
     (void)k_fb_ops_register(&s_amd_present_ops, NULL);
-    kinfo("gpu: AMD VRAM surface backend registered (RGB565 only)");
+    kinfo("gpu: AMD VRAM surface backend registered (RGB565/XRGB8888)");
 }
 
 int port_x86_64_gpu_amd_bufflip(k_u32_t id, bool confirmed, bool keep)
