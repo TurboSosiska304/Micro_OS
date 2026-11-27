@@ -409,6 +409,10 @@ k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_
  */
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len);
 
+/* Clear a named, page-aligned device window from the shared high map. The
+ * frames belong to a device, so they are not released to the RAM arena. */
+void port_x86_64_paging_unmap_device(k_u64_t vaddr, k_size_t len);
+
 /*
  * The page tables of one task. A space is a PML4 and the tables under it; the
  * handle is its physical address, which is also the value that goes into CR3.

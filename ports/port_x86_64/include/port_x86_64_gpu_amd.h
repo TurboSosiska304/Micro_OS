@@ -17,6 +17,10 @@
  *   (MIT, Linux v6.12). Code written here.
  * Facts from drivers/gpu/drm/amd/include/asic_reg/dce/dce_11_0_sh_mask.h
  *   (MIT, Linux v6.12). Code written here.
+ * GRPH_DEPTH/GRPH_FORMAT encoding and linear array-mode facts from
+ * drivers/gpu/drm/amd/display/dc/dce110/dce110_mem_input_v.c and
+ * drivers/gpu/drm/amd/display/dc/dc_hw_types.h (MIT, Linux v6.12).
+ * Code written here.
  *
  * Only register indices, field masks and pure decode helpers are here. No
  * MMIO access, no PCI, no display control writes.
@@ -24,6 +28,7 @@
 #ifndef MICRO_OS_PORT_X86_64_GPU_AMD_H
 #define MICRO_OS_PORT_X86_64_GPU_AMD_H
 
+#include "kernel/fb_ops.h"
 #include "kernel/types.h"
 
 /* BIF register: VRAM size in MiB (Polaris/VI). */
@@ -137,6 +142,7 @@ static inline k_u8_t gpu_amd_decode_chansize(k_u32_t arb_ramcfg)
 
 /* DCE 11 (Polaris) scanout register facts (dword indices). */
 #define GPU_AMD_MMDCP_GRPH_ENABLE 0x1a00u
+#define GPU_AMD_MMDCP_GRPH_CONTROL 0x1a01u
 #define GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS 0x1a04u
 #define GPU_AMD_MMDCP_GRPH_SECONDARY_SURFACE_ADDRESS 0x1a05u
 #define GPU_AMD_MMDCP_GRPH_PITCH 0x1a06u
@@ -145,8 +151,20 @@ static inline k_u8_t gpu_amd_decode_chansize(k_u32_t arb_ramcfg)
 #define GPU_AMD_MMDCP_GRPH_Y_END 0x1a0eu
 
 #define GPU_AMD_GRPH_ENABLE__GRPH_ENABLE_MASK 0x00000001u
+#define GPU_AMD_GRPH_CONTROL__GRPH_DEPTH_MASK 0x00000003u
+#define GPU_AMD_GRPH_CONTROL__GRPH_DEPTH_SHIFT 0u
+#define GPU_AMD_GRPH_CONTROL__GRPH_FORMAT_MASK 0x00000700u
+#define GPU_AMD_GRPH_CONTROL__GRPH_FORMAT_SHIFT 8u
 #define GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK 0x00007fffu
 #define GPU_AMD_GRPH_Y_END__GRPH_Y_END_MASK 0x00003fffu
+
+/* DCE 1.1 memory input: tiling is global rather than per DCP pipe. CPU access
+ * to a plane is allowed only for the linear array modes. */
+#define GPU_AMD_MMDCP_UNP_GRPH_CONTROL 0x4601u
+#define GPU_AMD_UNP_GRPH_CONTROL__GRPH_ARRAY_MODE_MASK 0x00f00000u
+#define GPU_AMD_UNP_GRPH_CONTROL__GRPH_ARRAY_MODE_SHIFT 20u
+#define GPU_AMD_UNP_GRPH_CONTROL__GRPH_MICRO_TILE_MODE_MASK 0x60000000u
+#define GPU_AMD_UNP_GRPH_CONTROL__GRPH_MICRO_TILE_MODE_SHIFT 29u
 
 /* CRTC status (read-only): used to wait for vblank before/after a flip.
  * Facts from drivers/gpu/drm/amd/include/asic_reg/dce/dce_11_0_d.h and
@@ -157,14 +175,107 @@ static inline k_u8_t gpu_amd_decode_chansize(k_u32_t arb_ramcfg)
 /* DCP/CRTC pipe register stride offsets (instances 0-5). */
 #define GPU_AMD_DCE_PIPE_COUNT 6u
 
+enum gpu_amd_plane_format {
+    GPU_AMD_PLANE_UNKNOWN = 0,
+    GPU_AMD_PLANE_INDEXED8,
+    GPU_AMD_PLANE_RGB565,
+    GPU_AMD_PLANE_ARGB8888,
+    GPU_AMD_PLANE_ARGB2101010,
+    GPU_AMD_PLANE_ARGB16161616F
+};
+
+struct gpu_amd_plane_format_info {
+    enum gpu_amd_plane_format format;
+    k_u8_t depth;
+    k_u8_t format_code;
+    k_u8_t bytes_per_pixel;
+};
+
+/* The encoding is the one amdgpu writes in dce110_mem_input_v.c. Unknown
+ * combinations stay unknown: a reservation may be conservative, but a flip or
+ * a CPU surface must never pretend an unknown plane is RGB565. */
+static inline struct gpu_amd_plane_format_info gpu_amd_plane_decode(k_u32_t control)
+{
+    struct gpu_amd_plane_format_info out;
+    k_u32_t format_code;
+
+    out.depth = (k_u8_t)gpu_amd_reg_field(control, GPU_AMD_GRPH_CONTROL__GRPH_DEPTH_MASK,
+                                          GPU_AMD_GRPH_CONTROL__GRPH_DEPTH_SHIFT);
+    format_code = gpu_amd_reg_field(control, GPU_AMD_GRPH_CONTROL__GRPH_FORMAT_MASK,
+                                    GPU_AMD_GRPH_CONTROL__GRPH_FORMAT_SHIFT);
+    out.format_code = (k_u8_t)format_code;
+    out.format = GPU_AMD_PLANE_UNKNOWN;
+    out.bytes_per_pixel = 0u;
+
+    switch (out.depth) {
+    case 0u:
+        if (format_code == 0u) {
+            out.format = GPU_AMD_PLANE_INDEXED8;
+            out.bytes_per_pixel = 1u;
+        }
+        break;
+    case 1u:
+        if (format_code == 1u) {
+            out.format = GPU_AMD_PLANE_RGB565;
+            out.bytes_per_pixel = 2u;
+        }
+        break;
+    case 2u:
+        if (format_code == 0u) {
+            out.format = GPU_AMD_PLANE_ARGB8888;
+            out.bytes_per_pixel = 4u;
+        } else if (format_code == 1u) {
+            out.format = GPU_AMD_PLANE_ARGB2101010;
+            out.bytes_per_pixel = 4u;
+        }
+        break;
+    case 3u:
+        if (format_code == 0u) {
+            out.format = GPU_AMD_PLANE_ARGB16161616F;
+            out.bytes_per_pixel = 8u;
+        }
+        break;
+    default:
+        break;
+    }
+
+    return out;
+}
+
+static inline const char *gpu_amd_plane_format_name(enum gpu_amd_plane_format format)
+{
+    switch (format) {
+    case GPU_AMD_PLANE_INDEXED8:
+        return "INDEXED8";
+    case GPU_AMD_PLANE_RGB565:
+        return "RGB565";
+    case GPU_AMD_PLANE_ARGB8888:
+        return "ARGB8888/ABGR8888";
+    case GPU_AMD_PLANE_ARGB2101010:
+        return "ARGB2101010";
+    case GPU_AMD_PLANE_ARGB16161616F:
+        return "ARGB16161616F";
+    case GPU_AMD_PLANE_UNKNOWN:
+    default:
+        return "UNKNOWN";
+    }
+}
+
 struct gpu_amd_scanout_region {
     k_u8_t pipe;
     bool primary;
     bool enabled;
-    k_u64_t address;
+    k_u64_t register_address;
+    k_u64_t address; /* normalized BAR0 offset */
+    bool address_valid;
     k_u32_t pitch_pixels;
     k_u32_t height;
     k_u64_t size_bytes;
+    k_u32_t control;
+    k_u32_t tiling_control;
+    bool linear;
+    enum gpu_amd_plane_format format;
+    k_u8_t bytes_per_pixel;
 };
 
 static inline k_u32_t gpu_amd_dcp_offset(k_u8_t pipe)
@@ -175,6 +286,24 @@ static inline k_u32_t gpu_amd_dcp_offset(k_u8_t pipe)
         return 0u;
     }
     return off[pipe];
+}
+
+static inline bool gpu_amd_scanout_offset(k_u64_t register_address, k_u64_t bar0_base,
+                                          k_u64_t vram_size, k_u64_t *offset)
+{
+    if (offset == NULL) {
+        return false;
+    }
+    if (register_address < vram_size) {
+        *offset = register_address;
+        return true;
+    }
+    if (bar0_base != 0u && register_address >= bar0_base &&
+        register_address - bar0_base < vram_size) {
+        *offset = register_address - bar0_base;
+        return true;
+    }
+    return false;
 }
 
 static inline bool gpu_amd_ranges_overlap(k_u64_t a_start, k_u64_t a_size, k_u64_t b_start,
@@ -197,17 +326,33 @@ static inline bool gpu_amd_ranges_overlap(k_u64_t a_start, k_u64_t a_size, k_u64
     return a_start < b_end && b_start < a_end;
 }
 
-static inline k_u64_t gpu_amd_scanout_size(k_u32_t pitch_pixels, k_u32_t y_end)
+static inline bool gpu_amd_plane_is_linear(k_u32_t tiling_control)
+{
+    k_u32_t array_mode =
+        gpu_amd_reg_field(tiling_control, GPU_AMD_UNP_GRPH_CONTROL__GRPH_ARRAY_MODE_MASK,
+                          GPU_AMD_UNP_GRPH_CONTROL__GRPH_ARRAY_MODE_SHIFT);
+    k_u32_t micro_tile =
+        gpu_amd_reg_field(tiling_control, GPU_AMD_UNP_GRPH_CONTROL__GRPH_MICRO_TILE_MODE_MASK,
+                          GPU_AMD_UNP_GRPH_CONTROL__GRPH_MICRO_TILE_MODE_SHIFT);
+
+    /* DC_ARRAY_LINEAR_GENERAL and DC_ARRAY_LINEAR_ALLIGNED are 0 and 1 in
+     * amdgpu's DCE 1.1 programming path. Every tiled mode stays refused. */
+    return array_mode <= 1u && micro_tile == 0u;
+}
+
+static inline k_u64_t gpu_amd_scanout_size(k_u32_t pitch_pixels, k_u32_t y_end, k_u8_t bpp)
 {
     k_u64_t h = (k_u64_t)(y_end & GPU_AMD_GRPH_Y_END__GRPH_Y_END_MASK) + 1ull;
     k_u64_t p = (k_u64_t)(pitch_pixels & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK);
     k_u64_t bytes;
+    k_u64_t reserve_bpp = bpp != 0u ? (k_u64_t)bpp : 4ull;
 
-    if (p == 0u || h == 0u) {
+    if (p == 0u || h == 0u || p > (~(k_u64_t)0u) / h / reserve_bpp) {
         return 0u;
     }
-    /* Conservative: assume 4 bytes/pixel. */
-    bytes = p * h * 4ull;
+    /* An unknown encoding reserves four bytes per pixel, never claims that
+     * encoding is known. Exact users call gpu_amd_frame_bytes() instead. */
+    bytes = p * h * reserve_bpp;
     if (bytes < (1ull * 1024ull * 1024ull)) {
         bytes = 1ull * 1024ull * 1024ull;
     }
@@ -427,10 +572,17 @@ static inline void gpu_amd_vram_mgr_reset(struct gpu_amd_vram_mgr *mgr)
         mgr->scanouts[i].pipe = 0u;
         mgr->scanouts[i].primary = false;
         mgr->scanouts[i].enabled = false;
+        mgr->scanouts[i].register_address = 0u;
         mgr->scanouts[i].address = 0u;
+        mgr->scanouts[i].address_valid = false;
         mgr->scanouts[i].pitch_pixels = 0u;
         mgr->scanouts[i].height = 0u;
         mgr->scanouts[i].size_bytes = 0u;
+        mgr->scanouts[i].control = 0u;
+        mgr->scanouts[i].tiling_control = 0u;
+        mgr->scanouts[i].linear = false;
+        mgr->scanouts[i].format = GPU_AMD_PLANE_UNKNOWN;
+        mgr->scanouts[i].bytes_per_pixel = 0u;
     }
 }
 
@@ -749,22 +901,158 @@ static inline int gpu_amd_vram_free(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
     return rc;
 }
 
-/* Frame size in bytes from GRPH pitch (pixels) and visible height.
- * 4 bytes/pixel is the conservative assumption used by scanout_size. */
-static inline k_u64_t gpu_amd_frame_bytes(k_u32_t pitch_pixels, k_u32_t height)
+/* Exact frame size from the encoding the plane register actually reported. */
+static inline k_u64_t gpu_amd_frame_bytes(k_u32_t pitch_pixels, k_u32_t height, k_u8_t bpp)
 {
     k_u64_t p = (k_u64_t)(pitch_pixels & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK);
     k_u64_t h = (k_u64_t)height;
-    k_u64_t bytes;
+    k_u64_t pixel_bytes = (k_u64_t)bpp;
 
-    if (p == 0u || h == 0u) {
+    if (p == 0u || h == 0u || pixel_bytes == 0u || p > (~(k_u64_t)0u) / h / pixel_bytes) {
         return 0u;
     }
-    bytes = p * h * 4ull;
-    if (bytes / 4ull / p != h) {
-        return 0u;
+    return p * h * pixel_bytes;
+}
+
+/* The port maps device memory in 2 MiB pages. A VRAM allocation is only 64 KiB
+ * aligned, so the mapping starts at the containing page and the surface starts
+ * at the in-page offset. */
+#define GPU_AMD_SURFACE_MAP_ALIGN (2ull * 1024ull * 1024ull)
+
+enum gpu_amd_surface_err {
+    GPU_AMD_SURFACE_OK = 0,
+    GPU_AMD_SURFACE_ERR_BAD_ID = -1,
+    GPU_AMD_SURFACE_ERR_FORMAT = -2,
+    GPU_AMD_SURFACE_ERR_FIT = -3,
+    GPU_AMD_SURFACE_ERR_RANGE = -4,
+    GPU_AMD_SURFACE_ERR_WINDOW = -5
+};
+
+struct gpu_amd_surface_slot {
+    bool mapped;
+    k_u32_t id;
+    k_u64_t map_vaddr;
+    k_u64_t map_paddr;
+    k_u64_t map_bytes;
+    k_u64_t surface_bytes;
+    struct k_fb_surface surface;
+    struct gpu_amd_scanout_region plane;
+};
+
+static inline const char *gpu_amd_surface_err_name(int err)
+{
+    switch (err) {
+    case GPU_AMD_SURFACE_OK:
+        return "ok";
+    case GPU_AMD_SURFACE_ERR_BAD_ID:
+        return "bad buffer id";
+    case GPU_AMD_SURFACE_ERR_FORMAT:
+        return "plane is not linear RGB565";
+    case GPU_AMD_SURFACE_ERR_FIT:
+        return "buffer does not fit the plane";
+    case GPU_AMD_SURFACE_ERR_RANGE:
+        return "buffer outside VRAM/BAR0 or reserved";
+    case GPU_AMD_SURFACE_ERR_WINDOW:
+    default:
+        return "fixed mapping window cannot fit block";
     }
-    return bytes;
+}
+
+static inline void gpu_amd_surface_reset(struct gpu_amd_surface_slot *slot)
+{
+    if (slot != NULL) {
+        *slot = (struct gpu_amd_surface_slot){0};
+    }
+}
+
+static inline int gpu_amd_surface_plan(const struct gpu_amd_vram_block *block,
+                                       const struct gpu_amd_scanout_region *plane, k_u32_t width,
+                                       k_u32_t height, k_u64_t bar0_base, k_u64_t bar0_size,
+                                       k_u64_t vram_size, k_u64_t map_va, k_u64_t window_bytes,
+                                       struct gpu_amd_surface_slot *out)
+{
+    struct gpu_amd_surface_slot plan;
+    k_u64_t aligned_offset;
+    k_u64_t delta;
+    k_u64_t span;
+    k_u64_t frame_bytes;
+    k_u64_t aperture_size;
+
+    if (out == NULL) {
+        return GPU_AMD_SURFACE_ERR_BAD_ID;
+    }
+    gpu_amd_surface_reset(out);
+    if (block == NULL || block->id == 0u || block->size == 0u) {
+        return GPU_AMD_SURFACE_ERR_BAD_ID;
+    }
+    if (plane == NULL || !plane->primary || !plane->enabled || !plane->linear ||
+        plane->format != GPU_AMD_PLANE_RGB565 || plane->bytes_per_pixel != 2u || width == 0u ||
+        height == 0u || height != plane->height || width > plane->pitch_pixels) {
+        return GPU_AMD_SURFACE_ERR_FORMAT;
+    }
+    if (block->offset < GPU_AMD_VRAM_RESERVED_END || block->offset > vram_size ||
+        block->size > vram_size - block->offset) {
+        return GPU_AMD_SURFACE_ERR_RANGE;
+    }
+    aperture_size = bar0_size < vram_size ? bar0_size : vram_size;
+    if (bar0_base == 0u || aperture_size == 0u || block->offset > aperture_size ||
+        block->size > aperture_size - block->offset) {
+        return GPU_AMD_SURFACE_ERR_RANGE;
+    }
+
+    frame_bytes = gpu_amd_frame_bytes(plane->pitch_pixels, height, plane->bytes_per_pixel);
+    if (frame_bytes == 0u || block->size < frame_bytes) {
+        return GPU_AMD_SURFACE_ERR_FIT;
+    }
+
+    aligned_offset = block->offset & ~(GPU_AMD_SURFACE_MAP_ALIGN - 1ull);
+    delta = block->offset - aligned_offset;
+    if (delta > (~(k_u64_t)0u) - block->size) {
+        return GPU_AMD_SURFACE_ERR_RANGE;
+    }
+    span = delta + block->size;
+    if ((map_va & (GPU_AMD_SURFACE_MAP_ALIGN - 1ull)) != 0u || window_bytes < span ||
+        map_va > (~(k_u64_t)0u) - span || bar0_base > (~(k_u64_t)0u) - aligned_offset ||
+        aligned_offset > aperture_size || span > aperture_size - aligned_offset) {
+        return GPU_AMD_SURFACE_ERR_WINDOW;
+    }
+
+    plan.mapped = false;
+    plan.id = block->id;
+    plan.map_vaddr = map_va;
+    plan.map_paddr = bar0_base + aligned_offset;
+    plan.map_bytes = span;
+    plan.surface_bytes = frame_bytes;
+    plan.surface.base = (k_u16_t *)(uintptr_t)(map_va + delta);
+    plan.surface.width = width;
+    plan.surface.height = height;
+    plan.surface.pitch = plane->pitch_pixels;
+    plan.plane = *plane;
+    *out = plan;
+    return GPU_AMD_SURFACE_OK;
+}
+
+static inline bool gpu_amd_surface_matches(const struct gpu_amd_surface_slot *slot,
+                                           const struct k_fb_surface *dst,
+                                           const struct k_fb_surface *src)
+{
+    if (slot == NULL || !slot->mapped || dst == NULL || src == NULL || !slot->plane.linear ||
+        slot->plane.format != GPU_AMD_PLANE_RGB565 || src->base != slot->surface.base ||
+        src->width != slot->surface.width || src->height != slot->surface.height ||
+        src->pitch != slot->surface.pitch || dst->width != src->width ||
+        dst->height != src->height || dst->pitch != src->pitch) {
+        return false;
+    }
+    return true;
+}
+
+enum gpu_amd_present_route { GPU_AMD_PRESENT_RAM = 0, GPU_AMD_PRESENT_VRAM = 1 };
+
+static inline enum gpu_amd_present_route
+gpu_amd_present_select(const struct gpu_amd_surface_slot *slot, const struct k_fb_surface *dst,
+                       const struct k_fb_surface *src)
+{
+    return gpu_amd_surface_matches(slot, dst, src) ? GPU_AMD_PRESENT_VRAM : GPU_AMD_PRESENT_RAM;
 }
 
 /* Find a VRAM offset for a frame-sized block outside the first 16 MiB and

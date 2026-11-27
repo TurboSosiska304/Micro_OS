@@ -402,6 +402,65 @@ static void test_fb_ops_device(void)
     KT_CHECK_INT_EQ(k_fb_ops_device(NULL), NULL);
 }
 
+static const k_u16_t *g_accepted_source;
+
+static int source_switch_present(void *context, const struct k_fb_surface *dst,
+                                 const struct k_fb_surface *src)
+{
+    struct test_device *device = context;
+
+    device->presents++;
+    device->present_dst = dst;
+    device->present_src = src;
+    return src->base == g_accepted_source ? 0 : KERR_NOTSUP;
+}
+
+static void test_blit_present_source_switch(void)
+{
+    struct k_fb_surface destination = test_surface();
+    struct k_fb_surface first = test_surface();
+    struct k_fb_surface second = test_surface();
+    struct k_fb_ops ops;
+    k_u16_t first_pixels[TEST_PITCH * TEST_HEIGHT];
+    k_u16_t second_pixels[TEST_PITCH * TEST_HEIGHT];
+
+    ktest_begin("blit: present refusal is per source and driver errors propagate");
+
+    memset(first_pixels, 0x11, sizeof(first_pixels));
+    memset(second_pixels, 0x22, sizeof(second_pixels));
+    first.base = first_pixels;
+    second.base = second_pixels;
+    device_reset();
+    memset(&ops, 0, sizeof(ops));
+    ops.present = source_switch_present;
+    g_accepted_source = second_pixels;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&ops, &g_device), 0);
+
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &first), 1);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &first), 1);
+    KT_CHECK_INT_EQ(g_device.presents, 1);
+    KT_CHECK(present_matches(first_pixels));
+
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &second), 0);
+    KT_CHECK_INT_EQ(g_device.presents, 2);
+    for (k_size_t index = 0; index < TEST_CELLS; index++) {
+        KT_CHECK_INT_EQ(g_pixels[index], TEST_OLD);
+    }
+
+    device_reset();
+    ops.present = device_present;
+    g_device.present_rc = KERR_IO;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&ops, &g_device), 0);
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &second), KERR_IO);
+    for (k_size_t index = 0; index < TEST_CELLS; index++) {
+        KT_CHECK_INT_EQ(g_pixels[index], TEST_OLD);
+    }
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+}
+
 static void test_blit_present(void)
 {
     struct k_fb_surface destination = test_surface();
@@ -466,5 +525,6 @@ void test_fb_ops(void)
     test_fb_ops_software();
     test_fb_ops_clip();
     test_fb_ops_device();
+    test_blit_present_source_switch();
     test_blit_present();
 }
