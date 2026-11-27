@@ -1,37 +1,37 @@
 #!/usr/bin/env python3
-"""Micro OS — the smoke test of the two-core x86-64 port.
+"""Micro OS — the smoke test of the SMP x86-64 port.
 
-`tools/x86_smoke.py` boots the kernel of one core and reads what it says.
-This one boots the same machine with KERNEL_SMP on and two processors in QEMU
-(ADR 0012), and its question is the one the kernel of many cores has to
-answer: are the cores the firmware reports really started, does each of them
-take its own ticks, and can the scheduler keep a task on one of them without
-ever claiming it on both?
+`tools/x86_smoke.py` boots the kernel and reads what it says. This one boots
+the same machine with KERNEL_SMP on and every processor QEMU gives it (ADR
+0012), and its question is the one the kernel of many cores has to answer:
+are the cores the firmware reports really started, does each of them take its
+own ticks, and can the scheduler keep a task on one of them without ever
+claiming it on both?
 
     tools/x86_smp_smoke.py [--build DIR] [--image PATH] [--timeout SECONDS]
                            [--seconds N] [--verbose]
 
-The boot lines are the first half of the answer: two processors reported by
-the MADT, two in use, and the kernel's own count of the cores it runs. The
-second half is the `smp` command of the shell, which is the report of the
-scheduler:
+The boot lines are the first half of the answer: the processors reported by
+the MADT, every one of them in use, and the kernel's own count of the cores
+it runs. The second half is the `smp` command of the shell, which is the
+report of the scheduler:
 
   * `smp` prints the cores, their APIC ids and their ticks, checks the run
     queues and says which core ran the command;
   * `smp workers 8` puts eight tasks on the machine and prints the core each
-    of them ran on - the proof that both cores take work, and not only the
-    one that boots;
+    of them ran on - the proof that the cores take work, and not only the one
+    that boots;
   * `smp ping` sends an IPI to the other core and reads the count of the
     local APIC timer around it, which is the interrupt path a core of this
     machine needs to be preempted at all.
 
-A second `smp` after the load is the check of the clock: the ticks of the
-core 1 have to be strictly greater than in the first one, or the AP timer is
-not running and the core 1 would only be a label. The queues are consistent
-in both answers, and no line of the transcript says a core did not answer,
-that an exception was raised, that the machine stops, or that the kernel
+A second `smp` after the load is the check of the clock: the ticks of every
+AP have to be strictly greater than in the first one, or an AP timer is not
+running and that core would only be a label. The queues are consistent in
+both answers, and no line of the transcript says a core did not answer, that
+an exception was raised, that the machine stops, or that the kernel
 panicked. The machine also boots `/bin/hello` out of the disk in ring 3 and
-reaches its shell, so a kernel that started two cores and lost the program
+reaches its shell, so a kernel that started the cores and lost the program
 or the console fails here like it does in the smoke of one core.
 
 The commands go out on the prompt, the way the other tools of the port type
@@ -79,6 +79,11 @@ DEFAULT_IMAGE = os.path.join(ROOT, "build-x86", "programs.img")
 # reads as two.
 PROMPT = "microos> "
 
+# The number of processors of the machine of the gate. The image we ship uses
+# every core the firmware reports, so the gate boots the same machine: eight
+# processors, and the kernel has to start all of them.
+MACHINE_SMP = 8
+
 # The commands of the session and what each of them is for. The second `smp`
 # is the one that reads the clock after the workers and the IPI, and its
 # answer is compared with the first.
@@ -87,8 +92,8 @@ COMMANDS = [
     "smp workers 8",
     "smp ping",
     # The floating point state of a task (K9): three tasks compute in double
-    # at once, and with two cores at least one of them shares a core with
-    # another. The state has to travel with the task on either core.
+    # at once, and with many cores at least one of them shares a core with
+    # another. The state has to travel with the task on any core.
     "exec /bin/fpu2",
     "smp",
     # The interrupt controller of the machine and the wake of a core (K8).
@@ -240,7 +245,7 @@ class Monitor:
 
 def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: float,
                 hang: float = 20.0) -> str:
-    """Boot the two-core machine, drive the shell and return the transcript.
+    """Boot the SMP machine, drive the shell and return the transcript.
 
     The output is read while the machine runs; a command goes out only when
     the prompt of the one before is on the console. Two clocks are kept: the
@@ -267,10 +272,10 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
         kernel,
         "-m",
         "256",
-        # The two processors of the gate of ADR 0012. The firmware then lists
-        # both in the MADT of ACPI and the port has a second core to start.
+        # The processors of the gate of ADR 0012. The firmware then lists them
+        # all in the MADT of ACPI and the port has to start every one of them.
         "-smp",
-        "2",
+        str(MACHINE_SMP),
         # No window and the console of the serial port, as `-nographic` gives,
         # and the monitor on a socket of its own: the keyboard of the machine
         # is pressed through it and the shell is read from the serial port.
@@ -380,7 +385,7 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, seconds: f
 
 
 def check(output: str) -> list:
-    """The expectations about the boot and the shell of the two-core machine."""
+    """The expectations about the boot and the shell of the SMP machine."""
     checks = []
 
     def expect(name: str, condition: bool, detail: str = "") -> None:
@@ -392,19 +397,24 @@ def check(output: str) -> list:
 
     # --- the processors the kernel uses (ADR 0012)
     expect(
-        "the firmware lists both processors of the machine",
-        re.search(r"x86-64: 2 cpu\(s\) reported by the firmware", output) is not None,
-        "the MADT of ACPI was not read, or QEMU was not given -smp 2",
+        "the firmware lists the processors of the machine",
+        re.search(rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware", output) is not None,
+        f"the MADT of ACPI was not read, or QEMU was not given -smp {MACHINE_SMP}",
     )
     expect(
-        "the kernel starts both of them",
-        re.search(r"x86-64: 2 cpu\(s\) reported by the firmware, 2 in use", output) is not None,
-        "the port reports two processors but uses fewer",
+        "the kernel starts every core the firmware reports",
+        re.search(
+            rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware, {MACHINE_SMP} in use",
+            output,
+        )
+        is not None,
+        "the port reported the cores but did not start all of them",
     )
     expect(
-        "the scheduler counts the two cores",
-        re.search(r"cpu: 2 core\(s\) of the machine are used by the kernel", output) is not None,
-        "k_sched_init() was given a core count of one",
+        "the scheduler counts the cores",
+        re.search(rf"cpu: {MACHINE_SMP} core\(s\) of the machine are used by the kernel", output)
+        is not None,
+        "k_sched_init() was given the wrong core count",
     )
     # --- the interrupt controller of the machine (ADR 0012, K8)
     #
@@ -454,25 +464,22 @@ def check(output: str) -> list:
     expect(
         "the command names the cores in use",
         re.search(
-            r"smp: 2 core\(s\) in use of 2 reported, apic 0x[0-9a-fA-F]+", first
+            rf"smp: {MACHINE_SMP} core\(s\) in use of {MACHINE_SMP} reported, apic 0x[0-9a-fA-F]+",
+            first,
         )
         is not None,
         first,
     )
-    expect(
-        "the report has the line of the core 0",
-        core_line(0).search(first) is not None,
-        first,
-    )
-    expect(
-        "the report has the line of the core 1",
-        core_line(1).search(first) is not None,
-        first,
-    )
+    for cpu in range(MACHINE_SMP):
+        expect(
+            f"the report has the line of the core {cpu}",
+            core_line(cpu).search(first) is not None,
+            first,
+        )
     expect("the report checks the queues", "smp: queues consistent" in first, first)
     expect(
         "the command says which core ran it",
-        re.search(r"smp: the command ran on cpu [01]", first) is not None,
+        re.search(r"smp: the command ran on cpu \d+", first) is not None,
         first,
     )
 
@@ -483,18 +490,15 @@ def check(output: str) -> list:
         for match in SMP_CPU.finditer(first)
     }
 
-    # --- the workers: both cores take work
+    # --- the workers: every core takes work
     workers = answer(1)
-    expect(
-        "a worker ran on the core 0",
-        re.search(r"smp: worker \d+ on cpu 0", workers) is not None,
-        workers,
-    )
-    expect(
-        "a worker ran on the core 1",
-        re.search(r"smp: worker \d+ on cpu 1", workers) is not None,
-        workers,
-    )
+    worker_cpus = {int(m.group(1)) for m in re.finditer(r"smp: worker \d+ on cpu (\d+)", workers)}
+    for cpu in range(MACHINE_SMP):
+        expect(
+            f"a worker ran on the core {cpu}",
+            cpu in worker_cpus,
+            workers,
+        )
     expect(
         "every worker is done",
         re.search(r"smp: 8 worker\(s\) done", workers) is not None,
@@ -537,14 +541,14 @@ def check(output: str) -> list:
         fpu,
     )
 
-    # --- the clock of the second core after the load
+    # --- the clock of every core after the load
     last = answer(9)
     expect("the second report checks the queues", "smp: queues consistent" in last, last)
     last_ticks = {
         int(match.group(1)): int(match.group(2))
         for match in SMP_CPU.finditer(last)
     }
-    for cpu in (0, 1):
+    for cpu in range(MACHINE_SMP):
         expect(
             f"the core {cpu} answered its ticks both times",
             cpu in first_ticks and cpu in last_ticks,
@@ -582,10 +586,18 @@ def check(output: str) -> list:
         is not None,
         lines,
     )
-    timer_lines = re.search(r"smp: irq 0x20 \(timer\): cpu 0 (\d+) cpu 1 (\d+)", lines)
+    timer_line = re.search(r"smp: irq 0x20 \(timer\):((?: cpu \d+ \d+)+)", lines)
+    timer_counts = {}
+    if timer_line is not None:
+        timer_counts = {
+            int(m.group(1)): int(m.group(2))
+            for m in re.finditer(r"cpu (\d+) (\d+)", timer_line.group(1))
+        }
     expect(
         "the timer arrives on the core 0 and nowhere else",
-        timer_lines is not None and int(timer_lines.group(1)) > 0 and int(timer_lines.group(2)) == 0,
+        timer_counts.get(0, 0) > 0
+        and all(timer_counts.get(cpu, -1) == 0 for cpu in range(1, MACHINE_SMP))
+        and len(timer_counts) == MACHINE_SMP,
         lines,
     )
 
@@ -595,12 +607,14 @@ def check(output: str) -> list:
     # can begin there is the interrupt of this one; the counters of the port
     # say how many did, and the clock is started again before it returns.
     wake = answer(6)
+    wake_target_match = re.search(
+        r"smp: wake: (\d+) task\(s\) of (\d+) started, (\d+) of them on cpu (\d+)", wake
+    )
+    wake_target = int(wake_target_match.group(4)) if wake_target_match is not None else -1
+    wake_on_target = int(wake_target_match.group(3)) if wake_target_match is not None else 0
     expect(
-        "the experiment puts its tasks on both cores",
-        re.search(
-            r"smp: wake: 4 task\(s\) of 4 started, [1-4] of them on cpu 1", wake
-        )
-        is not None,
+        "the experiment puts its tasks on the target core",
+        wake_target_match is not None and wake_target >= 0 and wake_on_target > 0,
         wake,
     )
     wake_pair = re.search(r"smp: wake: the kernel handed (\d+) -> (\d+) task\(s\) to another core", wake)
@@ -609,33 +623,36 @@ def check(output: str) -> list:
         wake_pair is not None and int(wake_pair.group(2)) > int(wake_pair.group(1)),
         wake,
     )
-    ipi_pair = re.search(r"smp: wake: cpu 1 started (\d+) -> (\d+) task\(s\) before its tick", wake)
+    ipi_pair = re.search(
+        rf"smp: wake: cpu {wake_target} started (\d+) -> (\d+) task\(s\) before its tick", wake
+    )
     expect(
         "the other core starts them before its tick",
-        ipi_pair is not None and int(ipi_pair.group(2)) > int(ipi_pair.group(1)),
+        wake_target >= 0 and ipi_pair is not None and int(ipi_pair.group(2)) > int(ipi_pair.group(1)),
         wake,
     )
     tick_pair = re.search(
-        r"smp: wake: the ticks of cpu 1 went (\d+) -> (\d+) with its clock stopped", wake
+        rf"smp: wake: the ticks of cpu {wake_target} went (\d+) -> (\d+) with its clock stopped", wake
     )
     expect(
         "the clock of the other core did not move during the experiment",
-        tick_pair is not None and tick_pair.group(1) == tick_pair.group(2),
+        wake_target >= 0 and tick_pair is not None and tick_pair.group(1) == tick_pair.group(2),
         wake,
     )
     expect(
         "the experiment says the tasks woke before the tick",
-        "smp: wake ok: the tasks of cpu 1 started by the ipi, before its tick" in wake,
+        wake_target >= 0
+        and f"smp: wake ok: the tasks of cpu {wake_target} started by the ipi, before its tick" in wake,
         wake,
     )
     expect(
         "every task of the experiment finished",
-        re.search(r"smp: wake: 4 task\(s\) done", wake) is not None,
+        re.search(r"smp: wake: \d+ task\(s\) done", wake) is not None,
         wake,
     )
     expect(
         "the clock of the other core runs again",
-        "smp: wake: the clock of cpu 1 is running again" in wake,
+        wake_target >= 0 and f"smp: wake: the clock of cpu {wake_target} is running again" in wake,
         wake,
     )
 
@@ -658,15 +675,32 @@ def check(output: str) -> list:
         is not None,
         after_keys,
     )
-    keys = re.search(r"smp: irq 0x21 \(keyboard\): cpu 0 (\d+) cpu 1 (\d+)", after_keys)
+    key_line = re.search(r"smp: irq 0x21 \(keyboard\):((?: cpu \d+ \d+)+)", after_keys)
+    key_counts = {}
+    if key_line is not None:
+        key_counts = {
+            int(m.group(1)): int(m.group(2))
+            for m in re.finditer(r"cpu (\d+) (\d+)", key_line.group(1))
+        }
     expect(
         "the keyboard arrives on the core the line was sent to",
-        keys is not None and int(keys.group(1)) == 0 and int(keys.group(2)) >= 3,
+        key_counts.get(1, 0) >= 3
+        and all(key_counts.get(cpu, -1) == 0 for cpu in range(MACHINE_SMP) if cpu != 1)
+        and len(key_counts) == MACHINE_SMP,
         after_keys,
     )
+    timer_after = re.search(r"smp: irq 0x20 \(timer\):((?: cpu \d+ \d+)+)", after_keys)
+    timer_after_counts = {}
+    if timer_after is not None:
+        timer_after_counts = {
+            int(m.group(1)): int(m.group(2))
+            for m in re.finditer(r"cpu (\d+) (\d+)", timer_after.group(1))
+        }
     expect(
         "the timer stays on the core 0 after the move",
-        re.search(r"smp: irq 0x20 \(timer\): cpu 0 [1-9]\d* cpu 1 0", after_keys) is not None,
+        timer_after_counts.get(0, 0) > 0
+        and all(timer_after_counts.get(cpu, -1) == 0 for cpu in range(1, MACHINE_SMP))
+        and len(timer_after_counts) == MACHINE_SMP,
         after_keys,
     )
 
@@ -674,7 +708,7 @@ def check(output: str) -> list:
 
 
 def main(argv: list) -> int:
-    parser = argparse.ArgumentParser(description="the smoke test of the two-core x86-64 port")
+    parser = argparse.ArgumentParser(description="the smoke test of the SMP x86-64 port")
     parser.add_argument("--build", default=DEFAULT_BUILD, help="the build with KERNEL_SMP on")
     parser.add_argument("--image", default=DEFAULT_IMAGE, help="the image with /bin of the disk")
     parser.add_argument("--timeout", type=float, default=60.0, help="the seconds the machine gets")
@@ -716,7 +750,7 @@ def main(argv: list) -> int:
     checks = check(output)
     failed = [item for item in checks if not item[1]]
 
-    print("Micro OS — the smoke test of the two-core x86-64 port")
+    print(f"Micro OS — the smoke test of the {MACHINE_SMP}-core x86-64 port")
     print("=" * 60)
     for name, ok, detail in checks:
         print(f"  {' ok ' if ok else 'FAIL'}  {name}")

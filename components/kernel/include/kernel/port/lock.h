@@ -22,6 +22,8 @@
 
 void k_port_enter_critical(void);
 void k_port_exit_critical(void);
+/* Nesting depth on the current CPU, 0 when not in a critical section. */
+k_u32_t k_port_critical_depth(void);
 
 /*
  * A recursive mutex. The structure is opaque: the port owns its shape,

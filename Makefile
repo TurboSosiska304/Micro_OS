@@ -108,7 +108,7 @@ help:
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
-	@echo "  make soak-smp   the same session on the two-core image (-smp 2)"
+	@echo "  make soak-smp   the same session on the SMP image (-smp 8)"
 	@echo "  make soak-host  the same ten minutes on the host, two cores, under TSan"
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
@@ -329,13 +329,11 @@ x86-open-build:
 		-DMICRO_OS_REQUIRE_SIGNATURE=OFF $(X86_SIGN_ARGS)
 	cmake --build $(X86_OPEN_BUILD) --target microos64.bin loader32.elf
 
-# The kernel of two cores on the x86-64 machine (ADR 0012). The port reads the
-# processor list of the firmware (the MADT of ACPI) and starts the processor of
-# the boot only: the APs wait for the trampoline that is not written yet, so
-# the kernel says how many cores the machine has and uses one. The build is the
-# half of the gate that can be checked today - the sources of a two-core kernel
-# compile and boot on the machine - and `make x86-smoke` boots the same image
-# with -smp 2 and reads the two numbers.
+# The kernel of the many cores on the x86-64 machine (ADR 0012). The port
+# reads the processor list of the firmware (the MADT of ACPI) and starts every
+# core it has room for, up to KERNEL_CPUS_MAX; the build is SMP by default, so
+# this target is the same image as `x86-build` kept under its own directory for
+# the smoke that names it explicitly.
 X86_SMP_BUILD := build-x86-smp
 
 x86-smp-build:
@@ -345,7 +343,7 @@ x86-smp-build:
 
 x86-smp-run: x86-smp-build x86-disk
 	qemu-system-x86_64 -kernel $(X86_SMP_BUILD)/loader32.elf \
-		-initrd $(X86_SMP_BUILD)/microos64.bin -m 256 -smp 2 -nographic -no-reboot \
+		-initrd $(X86_SMP_BUILD)/microos64.bin -m 256 -smp 8 -nographic -no-reboot \
 		$(X86_DISK_DRIVE)
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
@@ -564,7 +562,7 @@ uefi-run: uefi
 	@test -n "$(UEFI_CODE)" || { echo "uefi-run: no OVMF (install edk2-ovmf)" >&2; exit 2; }
 	@test -f "$(UEFI_VARS)" || { echo "uefi-run: $(UEFI_VARS) is not there" >&2; exit 2; }
 	cp "$(UEFI_VARS)" $(UEFI_BUILD)/vars.fd
-	qemu-system-x86_64 -machine q35 -m 512 -smp 2 \
+	qemu-system-x86_64 -machine q35 -m 512 -smp 8 \
 		-drive if=pflash,format=raw,readonly=on,file=$(UEFI_CODE) \
 		-drive if=pflash,format=raw,file=$(UEFI_BUILD)/vars.fd \
 		-drive file=$(UEFI_IMAGE),format=raw,if=ide,index=0 \
@@ -577,13 +575,11 @@ uefi-run: uefi
 uefi-smoke: uefi
 	python3 tools/uefi_smoke.py --image $(UEFI_IMAGE) --timeout 180
 
-# The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
-# a machine of two processors and has to start both of them, keep a task on
-# one core, take work on the other and read the clock of the AP. The disk is
-# the same image of `x86-disk`; the tool drives the `smp` command of the shell
-# and compares the ticks of the core 1 before and after the load. It is not a
-# part of `make ci`: the two-core image is not green until the kernel lanes of
-# the branch land.
+# The gate of the many cores (ADR 0012): the kernel of `x86-smp-build` boots
+# on a machine of eight processors and has to start every one of them, keep
+# tasks on all cores, take work across them and read the clock of every AP.
+# The disk is the same image of `x86-disk`; the tool drives the `smp` command
+# of the shell and compares the ticks of the APs before and after the load.
 x86-smp-smoke: x86-smp-build x86-disk
 	python3 tools/x86_smp_smoke.py --build $(X86_SMP_BUILD) --image $(X86_PROGRAMS_IMAGE)
 
@@ -947,13 +943,13 @@ soak: soak-image
 		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
 		$(SOAK_ARGS)
 
-# The same session on the kernel of two cores: `--smp` boots the build of
-# `x86-smp-build` with -smp 2 and the load asserts the two-core invariants on
-# top of the ones of 1.0 - the report of `smp`, the ticks of both cores
-# moving, the queues consistent and no exception in any answer. The image is
-# the full volume of the session, made from the current programs of
-# `x86-disk` (the images of the programs do not depend on the kernel), and
-# the boot is the two-core kernel on that image.
+# The same session on the kernel of the many cores: `--smp` boots the build of
+# `x86-smp-build` with -smp 8 and the load asserts the SMP invariants on top of
+# the ones of 1.0 - the report of `smp`, the ticks of every core moving, the
+# queues consistent and no exception in any answer. The image is the full
+# volume of the session, made from the current programs of `x86-disk` (the
+# images of the programs do not depend on the kernel), and the boot is the
+# SMP kernel on that image.
 soak-smp: x86-smp-build x86-disk
 	rm -f $(SOAK_SMP_IMAGE) $(SOAK_SMP_IMAGE).full
 	python3 tools/soak_image.py --build $(X86_BUILD) --image $(SOAK_SMP_IMAGE) \

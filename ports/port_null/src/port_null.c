@@ -180,6 +180,11 @@ void k_port_free(void *ptr)
 
 /* --- locking --- */
 
+k_u32_t k_port_critical_depth(void)
+{
+    return 0u;
+}
+
 void k_port_enter_critical(void) {}
 
 void k_port_exit_critical(void) {}
@@ -248,7 +253,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 15u
+#define PORT_API_MINOR 16u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");

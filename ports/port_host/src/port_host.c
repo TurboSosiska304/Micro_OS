@@ -68,6 +68,7 @@ FILE *port_host_get_sink(void)
 static pthread_mutex_t s_lock;
 static pthread_once_t s_once = PTHREAD_ONCE_INIT;
 static pthread_key_t s_task_key;
+static __thread k_u32_t s_crit_depth;
 
 static void host_once_init(void)
 {
@@ -92,13 +93,22 @@ static void host_unlock(void)
     pthread_mutex_unlock(&s_lock);
 }
 
+k_u32_t k_port_critical_depth(void)
+{
+    return s_crit_depth;
+}
+
 void k_port_enter_critical(void)
 {
     host_lock();
+    s_crit_depth++;
 }
 
 void k_port_exit_critical(void)
 {
+    if (s_crit_depth > 0u) {
+        s_crit_depth--;
+    }
     host_unlock();
 }
 
@@ -369,7 +379,7 @@ k_u32_t k_port_cpu_id(void)
  * for a module of Linux.
  */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 15u
+#define PORT_API_MINOR 16u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_host does not speak the contract of this kernel");

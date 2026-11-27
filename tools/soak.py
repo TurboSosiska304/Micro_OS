@@ -35,13 +35,13 @@ What the load does, in a cycle that repeats until the clock says stop:
     NTP is skipped unless this process can bind UDP 123 (it needs a
     privilege a campaign on a laptop does not have), and the report says so.
 
-`--smp` is the same session on the kernel of two cores (ADR 0012): the
-machine is booted with `-smp 2`, the load has the `smp` command of the shell
-in every cycle, and the session fails if the boot does not start both cores,
+`--smp` is the same session on the kernel of the many cores (ADR 0012): the
+machine is booted with `-smp 8`, the load has the `smp` command of the shell
+in every cycle, and the session fails if the boot does not start every core,
 if a core did not answer, if an answer holds an exception, if `smp` stops
-finding the queues consistent, or if the ticks of either core did not move
-between the first sample and the last. The load itself is the one above: a
-two-core kernel has to run the same commands, not a smaller suite.
+finding the queues consistent, or if the ticks of any core did not move
+between the first sample and the last. The load itself is the one above: an
+SMP kernel has to run the same commands, not a smaller suite.
 
 A session that fails leaves its transcript next to the image; `--keep-logs`
 keeps the transcript of a passing session as well.
@@ -127,19 +127,20 @@ BOOT_EXPECT = [
     "MicroOS shell ready",
 ]
 
-# The same, for the boot of two cores: the firmware describes both and the
-# kernel runs both. A build of KERNEL_SMP that boots one core is the state the
-# branch exists to end.
+# The same, for the boot of the many cores: the firmware describes them and the
+# kernel runs every one of them. A build of KERNEL_SMP that boots fewer cores
+# than the machine has is the state this gate exists to catch.
+SMP_CPUS = 8
 BOOT_EXPECT_SMP = [
-    re.compile(r"x86-64: 2 cpu\(s\) reported by the firmware, 2 in use"),
-    re.compile(r"cpu: 2 core\(s\) of the machine are used by the kernel"),
+    re.compile(rf"x86-64: {SMP_CPUS} cpu\(s\) reported by the firmware, {SMP_CPUS} in use"),
+    re.compile(rf"cpu: {SMP_CPUS} core\(s\) of the machine are used by the kernel"),
 ]
 
 # The report of the `smp` command: the cores, their APIC ids and their ticks.
 # The port prints the APIC id in hexadecimal (`apic 0x1`); the pattern takes
 # the decimal form of the contract (`apic 1`) as well.
 SMP_CPU = re.compile(r"smp: cpu (\d+) apic (?:0x)?[0-9a-fA-F]+ ticks (\d+) current (\S+)")
-SMP_IN_USE = re.compile(r"smp: 2 core\(s\) in use of 2 reported, apic 0x[0-9a-fA-F]+")
+SMP_IN_USE = re.compile(rf"smp: {SMP_CPUS} core\(s\) in use of {SMP_CPUS} reported, apic 0x[0-9a-fA-F]+")
 SMP_QUEUES = "smp: queues consistent"
 
 PS_ROW = re.compile(r"^\s*(\d+)\s+\d+\s+\w+\s+(\S+)\s*$", re.MULTILINE)
@@ -330,8 +331,8 @@ class Load:
         """The commands of the boot: the cores, the full volume, the network."""
         out = []
 
-        # The baseline of the clock of the two cores (ADR 0012): the ticks of
-        # the first sample are compared with the last one of the session.
+        # The baseline of the clock of the cores (ADR 0012): the ticks of the
+        # first sample are compared with the last one of the session.
         if self.smp:
             out.append(Command("smp", [SMP_IN_USE, SMP_QUEUES]))
 
@@ -460,9 +461,9 @@ class Load:
                     ["PROGRAM: argc 3, argv[0] /bin/hello", "the program exited with 0"]),
         ]
 
-        # The report of the two cores every cycle: the queues are checked
-        # while the load runs, and the ticks of every core are sampled for
-        # the verdict at the end of the session.
+        # The report of the cores every cycle: the queues are checked while the
+        # load runs, and the ticks of every core are sampled for the verdict at
+        # the end of the session.
         if self.smp:
             out.append(Command("smp", [SMP_QUEUES]))
 
@@ -763,11 +764,10 @@ class Session:
                 f"({baseline.get('task_names')} -> {final.get('task_names')})",
             )
 
-        # The two cores of ADR 0012: the ticks of each of them have to move
-        # between the first sample of the session and the last one. A core
-        # whose clock stands still is a core the kernel never gave a tick -
-        # the AP timer is not running, and the tasks on it would only be
-        # labels of the queue.
+        # The cores of ADR 0012: the ticks of each of them have to move between
+        # the first sample of the session and the last one. A core whose clock
+        # stands still is a core the kernel never gave a tick - the AP timer is
+        # not running, and the tasks on it would only be labels of the queue.
         smp_report = None
 
         if self.args.smp:
@@ -782,7 +782,7 @@ class Session:
                     "two samples are needed",
                 )
 
-            for cpu in (0, 1):
+            for cpu in range(SMP_CPUS):
                 if cpu not in first or cpu not in last:
                     self.fail("<smp>", f"the report of 'smp' has no line of the core {cpu}")
                 elif last[cpu] <= first[cpu]:
@@ -842,12 +842,10 @@ def report(results: list, args) -> int:
         )
         if result.get("smp") is not None:
             first, last = result["smp"]["first"], result["smp"]["last"]
-            print(
-                "  smp cores     cpu 0 ticks "
-                f"{first.get(0, '?')} -> {last.get(0, '?')}, "
-                f"cpu 1 ticks {first.get(1, '?')} -> {last.get(1, '?')} "
-                f"({result['smp']['samples']} sample(s))"
-            )
+            parts = []
+            for cpu in range(SMP_CPUS):
+                parts.append(f"cpu {cpu} {first.get(cpu, '?')}->{last.get(cpu, '?')}")
+            print(f"  smp cores     ticks {' '.join(parts)} ({result['smp']['samples']} sample(s))")
         print(f"  errors        {len(result['errors'])}")
         print(f"  warnings      {len(result['warnings'])}")
 
@@ -969,7 +967,7 @@ def main(argv: list) -> int:
     parser.add_argument(
         "--smp",
         action="store_true",
-        help="the two-core machine: -smp 2 and the invariants of ADR 0012",
+        help="the SMP machine: -smp 8 and the invariants of ADR 0012",
     )
     parser.add_argument("--verbose", action="store_true")
 
@@ -1038,7 +1036,7 @@ def main(argv: list) -> int:
                 image,
                 net=args.net,
                 hostfwd=services["fwd"],
-                extra_args=["-smp", "2"] if args.smp else None,
+                extra_args=["-smp", "8"] if args.smp else None,
             )
 
             try:
@@ -1101,7 +1099,7 @@ def main(argv: list) -> int:
             f", dns {'on' if services['dns'] else 'skip (this host cannot resolve a name)'}"
         )
     print(line)
-    print("soak: machine " + ("-smp 2, two cores (ADR 0012)" if args.smp else "one core"))
+    print("soak: machine " + ("-smp 8, eight cores (ADR 0012)" if args.smp else "one core"))
 
     return status
 

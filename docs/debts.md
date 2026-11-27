@@ -677,3 +677,29 @@ for those five devices. The expected success is a speed name followed by an
 after value with CCS=1, PED=1, PLS=U0 and a nonzero speed; a remaining failure
 must print the final PED/PLS/PP/speed fields instead of losing the device
 without a diagnosis.
+
+## K27 - The shell that stopped on eight cores
+
+`make soak-smp` sometimes answered `the shell answered nothing in 20 s` after
+25–120 seconds. The BKL was free and no sleeping mutex had been taken under
+it. A live timer sample named the real path: a stage could wait in
+`sys_open -> mfs_stat -> k_port_mutex_lock -> port_x86_64_yield_to_idle()`.
+The mutex was owned by a boot context destroying a dead program's address
+space. Yielding to the waiter's own idle context could not resume the owner
+on another core, so the shell waited for ever.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| A boot context can own a filesystem or cache mutex across a preemption. A task on another core used to yield locally instead of resuming the owner, and the shell then waited for ever. | `ports/port_x86_64/src/{port_x86_64.c,port_x86_64_task.c}` | done | The mutex records the boot owner's core; a remote waiter asks that core to resume its saved boot context through the scheduler IPI. The eight-core soak is the regression gate. |
+| COM1 polled THR without a deadline while `k_port_write()` held the BKL. This was not the K27 spin (the counters stayed zero), but a stopped serial reader could still freeze every core. | `ports/port_x86_64/src/port_x86_64.c` | done | A 100 ms TSC deadline, counted spins before calibration, dropped bytes during an outage, and live RIP/RSP plus counters in `smp`. |
+| The clock of the port was made of the tick of the boot core. When that tick stopped, a sleeper's deadline and the wake that had to reach it stopped with it: the shell slept with a finished child, both sleepers had a deadline one tick in the future, and the ticks of the other seven cores kept moving. | `ports/port_x86_64/src/{port_x86_64.c,port_x86_64_task.c}` | done | The microsecond clock reads the calibrated TSC; a wait that inherited masked interrupts lets the boot timer in for its halt and puts the mask back; a sleep past its deadline dumps every core and past a hard bound returns with a line on COM1. |
+
+The dump is one line per core with the current pid and state, the saved switch
+RIP, the core's ticks and the deadlines of the sleepers of its queue. It is
+timed by the TSC: a clock made of the tick it diagnoses would never reach the
+deadline of its own report.
+
+Five consecutive `make soak-smp SOAK_MINUTES=3` runs are green after the fix,
+with every core's tick moving in every session. The default of
+`KERNEL_SMP` in `ports/port_x86_64/CMakeLists.txt` is now on; the smoke of the
+eight-core image passes 76 checks, and the smoke of the machine passes 431.

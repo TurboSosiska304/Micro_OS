@@ -453,6 +453,7 @@ static void smp_print_unlock(void)
  * core.
  */
 static void smp_report_wake(void);
+static void smp_report_console(void);
 
 static int smp_status(void)
 {
@@ -520,6 +521,7 @@ static int smp_status(void)
     smp_print_unlock();
 
     smp_report_wake();
+    smp_report_console();
 
     return KSHELL_OK;
 }
@@ -579,6 +581,38 @@ static void smp_report_wake(void)
                       (unsigned)cpu, (unsigned)port_x86_64_wake_sent_cpu(cpu),
                       (unsigned)port_x86_64_ipi_received_cpu(cpu),
                       port_x86_64_timer_off(cpu) ? "stopped" : "running");
+    }
+
+    smp_print_unlock();
+}
+
+/* The console is part of the SMP story: a blocked serial reader must show up
+ * as dropped bytes with a live RIP, not as a shell that silently stops. */
+static void smp_report_console(void)
+{
+    struct port_x86_64_com1_stats stats;
+
+    port_x86_64_com1_get_stats(&stats);
+
+    smp_print_lock();
+
+    kshell_printf("smp: console: THR waits %llu, timeouts %llu, dropped %llu\n",
+                  (unsigned long long)stats.thr_waits, (unsigned long long)stats.thr_timeouts,
+                  (unsigned long long)stats.dropped);
+
+    if (stats.thr_timeouts != 0u) {
+        kshell_printf("smp: console last: cpu %u pid %u rip 0x%08x%08x rsp 0x%08x%08x\n",
+                      (unsigned)stats.last_cpu, (unsigned)stats.last_pid,
+                      (unsigned)(stats.last_rip >> 32), (unsigned)(stats.last_rip & 0xFFFFFFFFu),
+                      (unsigned)(stats.last_rsp >> 32), (unsigned)(stats.last_rsp & 0xFFFFFFFFu));
+        kshell_printf("smp: console stack:");
+
+        for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+            kshell_printf(" 0x%08x%08x", (unsigned)(stats.last_stack[i] >> 32),
+                          (unsigned)(stats.last_stack[i] & 0xFFFFFFFFu));
+        }
+
+        kshell_printf("\n");
     }
 
     smp_print_unlock();
@@ -844,7 +878,7 @@ static int smp_irq(int argc, char **argv)
  * The clock is started again before the command returns, whatever the tasks
  * did: a core left without a clock is a machine that stops taking work.
  */
-#define SMP_WAKE_TASKS 4u
+#define SMP_WAKE_TASKS 32u
 #define SMP_WAKE_SLEEP_MS 120u
 #define SMP_WAKE_WAIT_MS 20u
 #define SMP_WAKE_TIMEOUT_MS 5000u
