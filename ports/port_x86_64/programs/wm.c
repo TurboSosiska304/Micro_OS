@@ -229,6 +229,13 @@ struct wm_frames {
 
 static struct wm_frames g_frames;
 
+/* Frame markers on COM1 are diagnostics of a hung present, not a part of the
+ * log a person or the smoke test reads. They are off unless `wm --trace` asks
+ * for them: every printed line competes with the raises, the moves and the
+ * answers of the clients for the same serial port, and a diagnostic may not
+ * drown the output it was added to explain. */
+static int g_frame_trace;
+
 /* The key of the meter of the frames: a person presses it, does a thing and
  * presses it again, and the two lines say what the thing cost. */
 #define WM_KEY_METER K_INPUT_KEY_F12
@@ -1053,7 +1060,7 @@ static void flush_pending(void)
             int present_rc;
             unsigned frame_no = g_frames.frames + 1u;
 
-            if (frame_no <= 32u || (frame_no % 16u) == 0u) {
+            if (g_frame_trace && (frame_no <= 32u || (frame_no % 16u) == 0u)) {
                 char trace[80];
                 int trace_len =
                     snprintf(trace, sizeof(trace), "wm: frame %u present...\n", frame_no);
@@ -1071,7 +1078,7 @@ static void flush_pending(void)
                 g_frames.slowest_present_tsc_ns = present_elapsed;
             }
 
-            if (present_rc != 0 || frame_no <= 32u || (frame_no % 16u) == 0u) {
+            if (present_rc != 0 || (g_frame_trace && (frame_no <= 32u || (frame_no % 16u) == 0u))) {
                 char trace[96];
                 int trace_len =
                     snprintf(trace, sizeof(trace), "wm: frame %u present rc=%d %llu ns\n", frame_no,
@@ -2245,9 +2252,13 @@ int main(int argc, char *const argv[], char *const envp[])
 {
     struct ui_rect bounds;
 
-    (void)argc;
-    (void)argv;
     (void)envp;
+
+    for (int index = 1; index < argc; index++) {
+        if (strcmp(argv[index], "--trace") == 0) {
+            g_frame_trace = 1;
+        }
+    }
 
     say("wm: start\n");
 

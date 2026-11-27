@@ -296,6 +296,13 @@ screenshots around a key: they differ in the row of the key and in the clock and
 in nothing else, which is what "a damaged rectangle and not a frame" means on
 the glass.
 
+The `wm: frame N present...` and `wm: frame N present rc=... ns` lines on COM1
+are diagnostics of a present that hangs on real hardware. They are off unless
+the server starts as `wm --trace`; a refused present still reports its `rc`.
+The markers have to be explicit: the same console carries the raises, the
+moves and the answers of the clients, and a line on every frame drowns the log
+that a person and `make x86-vga-smoke` read.
+
 The compositor owns two RAM surfaces. It paints the damage and the pointer into
 the back surface and calls `uiprog_present` once. A device flip changes the
 drawing target only after the new surface is live; a software device keeps the

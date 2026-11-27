@@ -434,6 +434,8 @@ Owner checklist for the automatic present path:
    expect the copy path rather than a failure.
 2. Start `/bin/wm`. The desktop, pointer, window moves, closes and the clock
    must remain visible with no black frames, corrupted edges or stale cursor.
+   If a present hangs, restart it as `/bin/wm --trace` to put the per-frame COM1
+   markers on; they are off by default so they do not drown the console log.
 3. Exercise damage for at least a minute: move and raise windows, type in the
    editor, move the pointer and press F12 between actions. Compare the serial
    `wm: the first frame took ... ns by TSC`, `wm: the first present took ... ns
