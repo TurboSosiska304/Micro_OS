@@ -140,7 +140,13 @@ static void test_background_stop_bg(void)
         int waited;
         bool stopped = false;
 
-        for (waited = 0; waited < 600; waited++) {
+        /*
+         * The budget is a wall clock of about twenty seconds, not a count of
+         * polls: a build under the sanitizers runs several times slower, and a
+         * test that gives up after three seconds of sanitized time fails on a
+         * machine that is merely slow, not wrong.
+         */
+        for (waited = 0; waited < 4000; waited++) {
             (void)run_capture("jobs", buf, sizeof(buf));
             if (strstr(buf, "Stopped") != NULL) {
                 stopped = true;
