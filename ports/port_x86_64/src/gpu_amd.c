@@ -1644,7 +1644,8 @@ static void amd_surface_report(const char *action, k_u32_t id, bool armed)
         (unsigned)((k_u64_t)(uintptr_t)slot->surface.base >> 32),
         (unsigned)(k_u32_t)(k_u64_t)(uintptr_t)slot->surface.base,
         (unsigned)((buffer != NULL ? buffer->size : slot->map_bytes) / 1024ull),
-        (unsigned)slot->surface.pitch, (unsigned)((k_u64_t)slot->surface.pitch * 2u),
+        (unsigned)slot->surface.pitch,
+        (unsigned)((k_u64_t)slot->surface.pitch * (k_u64_t)slot->plane.bytes_per_pixel),
         (unsigned)(slot->surface_bytes / 1024ull), gpu_amd_plane_format_name(slot->plane.format),
         armed ? "VRAM flip (armed)" : "RAM copy (not armed)");
 }
@@ -1689,8 +1690,10 @@ int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present)
         return 1;
     }
     amd_plane_report("gpu bufmap", plane);
-    if (!port_x86_64_fb_info(&framebuffer) || framebuffer.format != FB_FORMAT_RGB565) {
-        kshell_printf("gpu bufmap: the port framebuffer is not RGB565; CPU surface refused\n");
+    if (!port_x86_64_fb_info(&framebuffer) ||
+        (framebuffer.format != FB_FORMAT_RGB565 && framebuffer.format != FB_FORMAT_XRGB8888)) {
+        kshell_printf("gpu bufmap: unsupported port framebuffer format %u; CPU surface refused\n",
+                      (unsigned)framebuffer.format);
         return 1;
     }
 
@@ -1698,8 +1701,16 @@ int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present)
                               bar0_size, info->vram_bytes, PORT_X86_64_GPU_VRAM_SURFACE_VIRT,
                               PORT_X86_64_GPU_VRAM_SURFACE_BYTES, &plan);
     if (rc != GPU_AMD_SURFACE_OK) {
-        kshell_printf("gpu bufmap: %s (plane %s)\n", gpu_amd_surface_err_name(rc),
-                      gpu_amd_plane_format_name(plane->format));
+        kshell_printf("gpu bufmap: %s (plane %s, %u bpp)\n", gpu_amd_surface_err_name(rc),
+                      gpu_amd_plane_format_name(plane->format), (unsigned)plane->bytes_per_pixel);
+        return 1;
+    }
+    if (plan.surface.format != framebuffer.format) {
+        kshell_printf("gpu bufmap: plane %s (%u bpp) differs from framebuffer format %u; "
+                      "no copy path, RAM copy stays in use\n",
+                      gpu_amd_plane_format_name(plane->format), (unsigned)plane->bytes_per_pixel,
+                      (unsigned)framebuffer.format);
+        kerror("gpu bufmap: plane/framebuffer format mismatch, no VRAM surface");
         return 1;
     }
     if (plan.surface.pitch != framebuffer.pitch) {

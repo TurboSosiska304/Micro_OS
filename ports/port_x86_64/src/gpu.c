@@ -567,9 +567,9 @@ int port_x86_64_gpu_register(void)
                   "releases it; vramdump lists blocks. vramtest [--write] [--yes] verifies a\n"
                   "write/read outside scanout. bufalloc <kib> [--name X] creates a\n"
                   "named VRAM buffer object; buffill [--yes]/bufread/buffree/buflist manage it;\n"
-                  "bufmap <id> [--yes] maps one RGB565 plane at a fixed kernel VA; --yes\n"
-                  "arms VRAM present, without it present keeps the RAM copy. bufunmap <id>\n"
-                  "[--yes] restores scanout before unmapping an active surface.\n"
+                  "bufmap <id> [--yes] maps the primary plane (RGB565/XRGB8888) at a\n"
+                  "fixed kernel VA; --yes arms VRAM present, otherwise present keeps RAM.\n"
+                  "bufunmap <id> [--yes] restores scanout before unmapping an active surface.\n"
                   "bufflip <id> [--yes] [--keep] flips scanout to a buffer. amdflip [--yes]\n"
                   "[--keep] copies the current frame to VRAM and flips. Intel: ggtt-test, flip\n"
                   "[--yes], plane-linear [--yes].\n",

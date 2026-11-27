@@ -11,6 +11,7 @@
 #include "ktest.h"
 #include "tests/tests.h"
 
+#include "kernel/fb.h"
 #include "kernel/kmod.h"
 #include "port_x86_64_gpu.h"
 #include "port_x86_64_gpu_amd.h"
@@ -627,7 +628,7 @@ static void test_surface_refusals(void)
     k_u64_t bar0 = 0x7C00000000ull;
     k_u64_t map_va = 0xFFFFFFFF82000000ull;
 
-    ktest_begin("gpu_amd: surface refuses foreign, short, reserved and non-RGB565 blocks");
+    ktest_begin("gpu_amd: surface plans RGB565/XRGB8888 and refuses foreign blocks");
 
     KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, vram, NULL, 0), GPU_AMD_VRAM_OK);
     KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 64ull * 1024ull, &id, &off, "short"),
@@ -641,15 +642,41 @@ static void test_surface_refusals(void)
                                          4ull * 1024ull * 1024ull, &slot),
                     GPU_AMD_SURFACE_ERR_BAD_ID);
 
-    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 256ull * 1024ull, &id, &off, "wm"),
+    /* A 320x240 XRGB8888 frame is 300 KiB, so the block must be larger than
+     * the one the RGB565 checks above use. */
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 512ull * 1024ull, &id, &off, "wm"),
                     GPU_AMD_VRAM_OK);
     buffer = gpu_amd_vram_find(&mgr, id);
     KT_CHECK(buffer != NULL);
+    /* The 32-bit plane is a real XRGB8888 surface, not a refusal. */
     plane.format = GPU_AMD_PLANE_ARGB8888;
     plane.bytes_per_pixel = 4u;
     KT_CHECK_INT_EQ(gpu_amd_surface_plan(buffer, &plane, 320u, 240u, bar0, vram, vram, map_va,
                                          4ull * 1024ull * 1024ull, &slot),
+                    GPU_AMD_SURFACE_OK);
+    KT_CHECK_INT_EQ(slot.surface.format, FB_FORMAT_XRGB8888);
+    KT_CHECK_INT_EQ(slot.surface_bytes, 320ll * 240ll * 4ll);
+    slot.mapped = true;
+    {
+        struct k_fb_surface same = slot.surface;
+
+        KT_CHECK_INT_EQ(gpu_amd_present_select(&slot, &same, &same), GPU_AMD_PRESENT_VRAM);
+        same.format = FB_FORMAT_RGB565;
+        KT_CHECK_INT_EQ(gpu_amd_present_select(&slot, &same, &same), GPU_AMD_PRESENT_RAM);
+    }
+    gpu_amd_surface_reset(&slot);
+
+    /* The 30-bit family and a tiled plane have no honest CPU surface. */
+    plane.format = GPU_AMD_PLANE_ARGB2101010;
+    KT_CHECK_INT_EQ(gpu_amd_surface_plan(buffer, &plane, 320u, 240u, bar0, vram, vram, map_va,
+                                         4ull * 1024ull * 1024ull, &slot),
                     GPU_AMD_SURFACE_ERR_FORMAT);
+    plane.format = GPU_AMD_PLANE_ARGB8888;
+    plane.linear = false;
+    KT_CHECK_INT_EQ(gpu_amd_surface_plan(buffer, &plane, 320u, 240u, bar0, vram, vram, map_va,
+                                         4ull * 1024ull * 1024ull, &slot),
+                    GPU_AMD_SURFACE_ERR_FORMAT);
+    plane.linear = true;
     plane.format = GPU_AMD_PLANE_RGB565;
     plane.bytes_per_pixel = 2u;
     KT_CHECK_INT_EQ(gpu_amd_surface_plan(buffer, &plane, 320u, 240u, bar0, vram, vram, map_va,

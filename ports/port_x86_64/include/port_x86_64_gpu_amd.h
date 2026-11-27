@@ -28,6 +28,7 @@
 #ifndef MICRO_OS_PORT_X86_64_GPU_AMD_H
 #define MICRO_OS_PORT_X86_64_GPU_AMD_H
 
+#include "kernel/fb.h"
 #include "kernel/fb_ops.h"
 #include "kernel/types.h"
 
@@ -947,7 +948,7 @@ static inline const char *gpu_amd_surface_err_name(int err)
     case GPU_AMD_SURFACE_ERR_BAD_ID:
         return "bad buffer id";
     case GPU_AMD_SURFACE_ERR_FORMAT:
-        return "plane is not linear RGB565";
+        return "plane is not linear RGB565 or XRGB8888";
     case GPU_AMD_SURFACE_ERR_FIT:
         return "buffer does not fit the plane";
     case GPU_AMD_SURFACE_ERR_RANGE:
@@ -985,9 +986,20 @@ static inline int gpu_amd_surface_plan(const struct gpu_amd_vram_block *block,
     if (block == NULL || block->id == 0u || block->size == 0u) {
         return GPU_AMD_SURFACE_ERR_BAD_ID;
     }
-    if (plane == NULL || !plane->primary || !plane->enabled || !plane->linear ||
-        plane->format != GPU_AMD_PLANE_RGB565 || plane->bytes_per_pixel != 2u || width == 0u ||
+    if (plane == NULL || !plane->primary || !plane->enabled || !plane->linear || width == 0u ||
         height == 0u || height != plane->height || width > plane->pitch_pixels) {
+        return GPU_AMD_SURFACE_ERR_FORMAT;
+    }
+    /* The two encodings a CPU can draw without guessing the byte order. The
+     * 30-bit and 64-bit families, indexed colour and tiled planes stay refused.
+     * GRPH_CONTROL does not distinguish ARGB8888 from ABGR8888; the portable
+     * name XRGB8888 is a promise about the byte layout of our own surface,
+     * not a claim about the wire format of the panel. */
+    if (plane->format == GPU_AMD_PLANE_RGB565 && plane->bytes_per_pixel == 2u) {
+        plan.surface.format = FB_FORMAT_RGB565;
+    } else if (plane->format == GPU_AMD_PLANE_ARGB8888 && plane->bytes_per_pixel == 4u) {
+        plan.surface.format = FB_FORMAT_XRGB8888;
+    } else {
         return GPU_AMD_SURFACE_ERR_FORMAT;
     }
     if (block->offset < GPU_AMD_VRAM_RESERVED_END || block->offset > vram_size ||
@@ -1037,10 +1049,11 @@ static inline bool gpu_amd_surface_matches(const struct gpu_amd_surface_slot *sl
                                            const struct k_fb_surface *src)
 {
     if (slot == NULL || !slot->mapped || dst == NULL || src == NULL || !slot->plane.linear ||
-        slot->plane.format != GPU_AMD_PLANE_RGB565 || src->base != slot->surface.base ||
+        (slot->surface.format != FB_FORMAT_RGB565 && slot->surface.format != FB_FORMAT_XRGB8888) ||
+        src->base != slot->surface.base || src->format != slot->surface.format ||
         src->width != slot->surface.width || src->height != slot->surface.height ||
         src->pitch != slot->surface.pitch || dst->width != src->width ||
-        dst->height != src->height || dst->pitch != src->pitch) {
+        dst->height != src->height || dst->pitch != src->pitch || dst->format != src->format) {
         return false;
     }
     return true;
