@@ -129,6 +129,7 @@ struct port_x86_64_bt_state {
 };
 
 void port_x86_64_bt_init(void);
+void port_x86_64_bt_register(void);
 const struct port_x86_64_bt_state *port_x86_64_bt_state(void);
 const char *port_x86_64_bt_kmod_state_name(void);
 
