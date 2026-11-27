@@ -148,6 +148,12 @@ static inline k_u8_t gpu_amd_decode_chansize(k_u32_t arb_ramcfg)
 #define GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK 0x00007fffu
 #define GPU_AMD_GRPH_Y_END__GRPH_Y_END_MASK 0x00003fffu
 
+/* CRTC status (read-only): used to wait for vblank before/after a flip.
+ * Facts from drivers/gpu/drm/amd/include/asic_reg/dce/dce_11_0_d.h and
+ * dce_11_0_sh_mask.h (MIT, Linux v6.12). Code written here. */
+#define GPU_AMD_MMCRTC_STATUS 0x1ba3u
+#define GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK 0x00000001u
+
 /* DCP/CRTC pipe register stride offsets (instances 0-5). */
 #define GPU_AMD_DCE_PIPE_COUNT 6u
 
@@ -705,6 +711,56 @@ static inline int gpu_amd_vram_free(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
 
     rc = gpu_amd_vram_add_free_extent(mgr, offset, size);
     return rc;
+}
+
+/* Frame size in bytes from GRPH pitch (pixels) and visible height.
+ * 4 bytes/pixel is the conservative assumption used by scanout_size. */
+static inline k_u64_t gpu_amd_frame_bytes(k_u32_t pitch_pixels, k_u32_t height)
+{
+    k_u64_t p = (k_u64_t)(pitch_pixels & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK);
+    k_u64_t h = (k_u64_t)height;
+    k_u64_t bytes;
+
+    if (p == 0u || h == 0u) {
+        return 0u;
+    }
+    bytes = p * h * 4ull;
+    if (bytes / 4ull / p != h) {
+        return 0u;
+    }
+    return bytes;
+}
+
+/* Find a VRAM offset for a frame-sized block outside the first 16 MiB and
+ * outside all enabled scanout regions. Returns 0 when no safe place exists. */
+static inline k_u64_t gpu_amd_choose_frame_offset(k_u64_t vram_bytes, k_u64_t frame_bytes,
+                                                  const struct gpu_amd_scanout_region *regions,
+                                                  int count)
+{
+    k_u64_t candidate;
+    k_u64_t step = 4ull * 1024ull * 1024ull;
+    int tries = 0;
+
+    if (frame_bytes == 0u || frame_bytes > vram_bytes) {
+        return 0u;
+    }
+    if (vram_bytes < GPU_AMD_VRAM_TEST_MIN_OFFSET + frame_bytes) {
+        return 0u;
+    }
+
+    candidate = vram_bytes - frame_bytes;
+    candidate &= ~((k_u64_t)4096u - 1ull);
+    for (tries = 0; tries < 64 && candidate >= GPU_AMD_VRAM_TEST_MIN_OFFSET; tries++) {
+        if (!gpu_amd_scanout_overlaps(candidate, frame_bytes, regions, count)) {
+            return candidate;
+        }
+        if (candidate < step) {
+            break;
+        }
+        candidate -= step;
+    }
+
+    return 0u;
 }
 
 #endif /* MICRO_OS_PORT_X86_64_GPU_AMD_H */
