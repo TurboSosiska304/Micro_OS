@@ -112,6 +112,8 @@ int kmod_doctor(void)
                 mod->state = KMOD_OK;
             } else if (rc == 1) {
                 mod->state = KMOD_DEGRADED;
+            } else if (rc == 2) {
+                mod->state = KMOD_SKIP;
             } else {
                 mod->state = KMOD_FAIL;
                 g_problems++;

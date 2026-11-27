@@ -49,6 +49,7 @@ if(NOT ESP_PLATFORM)
         cases/test_input_hid.c
         cases/test_ps2.c
         cases/test_xhci_portsc.c
+        cases/test_bt_hci.c
         cases/test_gpu_amd.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
@@ -122,6 +123,7 @@ if(NOT ESP_PLATFORM)
     add_executable(microos_tests
         src/main.c
         framework/ktest.c
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/bt_hci.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel_ggtt.c"
         ${MICRO_OS_TEST_CASES}
