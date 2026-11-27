@@ -15,6 +15,7 @@ if(NOT ESP_PLATFORM)
         cases/test_port.c
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
+        cases/test_blockdev_fault.c
         cases/test_blockdev_view.c
         cases/test_root.c
         cases/test_volume.c
@@ -123,6 +124,7 @@ if(NOT ESP_PLATFORM)
 
     add_executable(microos_tests
         src/main.c
+        src/blockdev_fault.c
         framework/ktest.c
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/bt_hci.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
@@ -145,6 +147,9 @@ if(NOT ESP_PLATFORM)
     # diagnostics of GCC at -O2 that read every such path as a defect would
     # stop the build of the bundle over a file that names a temporary. The
     # product keeps all of them.
+    # The fault bus is a test instrument, never a production block-device API.
+    target_compile_definitions(microos_tests PRIVATE K_BLOCKDEV_TEST=1)
+
     target_compile_options(microos_tests PRIVATE
         -Wno-format-truncation
         -Wno-stringop-truncation
