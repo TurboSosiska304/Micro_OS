@@ -28,6 +28,7 @@
 #include "port_x86_64.h"
 #include "port_x86_64_task.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/cpu.h"
@@ -988,6 +989,87 @@ bool k_port_task_sleep_cuttable(void)
     return true;
 }
 
+/*
+ * A sleep that outlives its deadline by this much is not a long sleep: it is
+ * a wake that never came or a core that stopped taking its tick. One dump of
+ * the machine goes to COM1 without the console lock, because that lock can be
+ * the very thing the machine is waiting for. The gap keeps one stalled wait
+ * from filling the wire with the same picture every millisecond.
+ */
+#define PORT_SLEEP_STALL_MS 5000u
+#define PORT_SLEEP_DUMP_GAP_MS 10000u
+#define PORT_SLEEP_HARD_MS 30000u
+
+static void sleep_stall_dump(k_u32_t ms, k_u64_t deadline_us)
+{
+    static k_u64_t last_us;
+    struct k_sched_sleeper sleepers[TASK_MAX_TASKS];
+    struct k_cpu *cpu_record;
+    k_size_t count;
+    k_size_t i;
+    k_u32_t cpu;
+    k_u32_t cores;
+    k_u64_t now;
+    char buf[384];
+    int len;
+
+    now = k_port_uptime_us();
+    if (now - last_us < (k_u64_t)PORT_SLEEP_DUMP_GAP_MS * 1000u) {
+        return;
+    }
+    last_us = now;
+
+    count = k_sched_sleepers(sleepers, K_ARRAY_SIZE(sleepers));
+    cores = k_cpu_count();
+    if (cores > KERNEL_CPUS_MAX) {
+        cores = KERNEL_CPUS_MAX;
+    }
+
+    len = snprintf(buf, sizeof(buf),
+                   "\r\n[SLPDBG] sleep of %u ms over its deadline by %llu us, ticks %u, "
+                   "%u sleeper(s)\r\n",
+                   (unsigned)ms, (unsigned long long)(now - deadline_us), (unsigned)k_sched_ticks(),
+                   (unsigned)count);
+    if (len > 0) {
+        port_x86_64_debug_write(buf, (k_size_t)len);
+    }
+
+    /* One line per core: the task on it, the RIP its context saved, the ticks
+     * it took, and the deadlines of the sleepers that belong to its queue. */
+    for (cpu = 0u; cpu < cores; cpu++) {
+        struct port_cpu *port = &g_ports[cpu];
+        struct task *task = (port->current != NULL) ? port->current->task : NULL;
+        k_u64_t rip = 0u;
+
+        if (port->current != NULL && port->current->rsp != 0u) {
+            /* The switch frame returns at the seventh word (switch.S). */
+            rip = *(const k_u64_t *)(uintptr_t)(port->current->rsp + 6u * sizeof(k_u64_t));
+        }
+
+        cpu_record = k_cpu_by_id(cpu);
+        len = snprintf(
+            buf, sizeof(buf), "[SLPDBG] cpu=%u cur=%u:%s/%s rip=0x%016llx ticks=%u/%u wake=%u",
+            (unsigned)cpu, (task != NULL) ? task->pid : 0u, (task != NULL) ? task->name : "<idle>",
+            (task != NULL) ? task_state_name(task->state) : "-", (unsigned long long)rip,
+            (cpu_record != NULL) ? cpu_record->ticks : 0u, g_tick_start[cpu], g_wake_tick[cpu]);
+
+        for (i = 0u; i < count && len >= 0 && (k_size_t)len < sizeof(buf) - 48u; i++) {
+            if (sleepers[i].cpu != cpu) {
+                continue;
+            }
+            len += snprintf(buf + len, sizeof(buf) - (k_size_t)len, " sleep=%u@%u/%s",
+                            (unsigned)sleepers[i].pid, (unsigned)sleepers[i].wake_tick,
+                            task_state_name((task_state_t)sleepers[i].state));
+        }
+
+        if (len < 0) {
+            len = 0;
+        }
+        len += snprintf(buf + len, sizeof(buf) - (k_size_t)len, "\r\n");
+        port_x86_64_debug_write(buf, (k_size_t)len);
+    }
+}
+
 void k_port_task_sleep_ms(k_u32_t ms)
 {
     struct port_task *current = this_cpu()->current;
@@ -1024,6 +1106,29 @@ void k_port_task_sleep_ms(k_u32_t ms)
     ticks = k_sched_ticks();
 
     for (;;) {
+        k_u64_t now = k_port_uptime_us();
+
+        if (now > deadline_us + (k_u64_t)PORT_SLEEP_STALL_MS * 1000u) {
+            sleep_stall_dump(ms, deadline_us);
+        }
+
+        /*
+         * A sleep whose wake disappeared must not own the machine for ever.
+         * The kernel loop above checks its own deadline when this returns and
+         * puts the task back in its queue; the line says a wake was lost.
+         */
+        if (now > deadline_us + (k_u64_t)PORT_SLEEP_HARD_MS * 1000u) {
+            char buf[80];
+            int len = snprintf(buf, sizeof(buf),
+                               "[SLPDBG] pid=%u: sleep of %u ms forced past its wake\r\n",
+                               (unsigned)self->pid, (unsigned)ms);
+
+            if (len > 0) {
+                port_x86_64_debug_write(buf, (k_size_t)len);
+            }
+            return;
+        }
+
         if (sleep_is_over(self, ticks, deadline_us)) {
             return;
         }

@@ -1043,6 +1043,30 @@ k_size_t k_sched_blocked_count(void)
     return task_count_by_state(TASK_STATE_BLOCKED);
 }
 
+k_size_t k_sched_sleepers(struct k_sched_sleeper *out, k_size_t max)
+{
+    k_size_t count;
+    k_size_t i;
+
+    if (out == NULL || max == 0u) {
+        return 0u;
+    }
+
+    sched_lock();
+    count = K_MIN(max, g_sleeping_count);
+    for (i = 0u; i < count; i++) {
+        const struct task *t = g_sleeping[i];
+
+        out[i].pid = (t != NULL) ? t->pid : 0u;
+        out[i].wake_tick = (t != NULL) ? t->wake_tick : 0u;
+        out[i].cpu = (t != NULL) ? task_cpu(t) : 0u;
+        out[i].state = (t != NULL) ? (k_u8_t)t->state : 0u;
+    }
+    sched_unlock();
+
+    return count;
+}
+
 k_size_t k_sched_validate(void)
 {
     k_size_t problems = 0;

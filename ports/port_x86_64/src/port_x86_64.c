@@ -380,6 +380,19 @@ static void com1_write(const char *data, k_size_t len)
  * has to be chosen before the boot. The colours are the exception: the screen
  * reads them and COM1 does not get them.
  */
+/*
+ * A diagnosis of a stopped machine writes to the wire without the big kernel
+ * lock: a wait on that lock is one of the things the dump has to name, so it
+ * cannot be what the dump waits on. The lines are plain text and go through
+ * the escape filter of the terminal, but not through the console lock.
+ */
+void port_x86_64_debug_write(const char *data, k_size_t len)
+{
+    if (data != NULL) {
+        com1_write(data, len);
+    }
+}
+
 void k_port_write(const char *data, k_size_t len)
 {
     if (data == NULL) {
