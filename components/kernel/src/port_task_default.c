@@ -16,12 +16,12 @@
  */
 #include "kernel/port_task.h"
 
-[[gnu::weak]] bool k_port_task_sleep_cuttable(void)
+K_WEAK bool k_port_task_sleep_cuttable(void)
 {
     return false;
 }
 
-[[gnu::weak]] void k_port_task_wake(struct task *t)
+K_WEAK void k_port_task_wake(struct task *t)
 {
     K_UNUSED(t);
 }

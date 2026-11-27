@@ -34,4 +34,19 @@ typedef ptrdiff_t k_ssize_t;
 #define NULL ((void *)0)
 #endif
 
+/*
+ * The attributes of the portable kernel, in the dialect of the compiler: C23
+ * spells them `[[...]]`, and the tools of the host on a distribution of an
+ * older GCC know only `__attribute__`. Both are the same promise.
+ */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 202311L
+#define K_WEAK [[gnu::weak]]
+#define K_FORMAT(archetype, fmt, args) [[gnu::format(archetype, fmt, args)]]
+#define K_NORETURN [[noreturn]]
+#else
+#define K_WEAK __attribute__((weak))
+#define K_FORMAT(archetype, fmt, args) __attribute__((format(archetype, fmt, args)))
+#define K_NORETURN _Noreturn
+#endif
+
 #endif /* MICRO_OS_KERNEL_TYPES_H */

@@ -6,12 +6,8 @@
 
 #include "kernel/types.h"
 
-#if defined(__GNUC__)
-[[noreturn]] void kernel_panic(const char *file, int line, const char *fmt, ...)
-    [[gnu::format(__printf__, 3, 4)]];
-#else
-[[noreturn]] void kernel_panic(const char *file, int line, const char *fmt, ...);
-#endif
+K_NORETURN void kernel_panic(const char *file, int line, const char *fmt, ...)
+    K_FORMAT(__printf__, 3, 4);
 
 #define KERNEL_PANIC(...) kernel_panic(__FILE__, __LINE__, __VA_ARGS__)
 

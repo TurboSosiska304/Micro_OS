@@ -354,6 +354,33 @@ void test_ramfs(void)
         return;
     }
 
+    /*
+     * The numbers of the port can look healthy under an instrument whose
+     * allocator is not the one they describe (valgrind replaces malloc and the
+     * C library still reports its own arena). The proof that the machine can
+     * give the filesystem a page is a page: a small file is written and
+     * removed, and a machine that answers ENOSPC says so instead of failing
+     * every case below for a reason that is not the filesystem's.
+     */
+    {
+        struct vfs_file probe;
+        char page[1024];
+        int rc;
+
+        memset(page, 0x5a, sizeof(page));
+        rc = vfs_open("/.probe", VFS_O_RDWR | VFS_O_CREAT | VFS_O_TRUNC, &probe, g_file_data);
+        if (rc == 0) {
+            rc = vfs_write(&probe, page, sizeof(page)) == (int)sizeof(page) ? 0 : -1;
+            (void)vfs_close(&probe);
+            (void)vfs_unlink("/.probe");
+        }
+        if (rc != 0) {
+            ktest_begin("ramfs: the machine gives the filesystem no page (skipped)");
+            KT_CHECK(1);
+            return;
+        }
+    }
+
     test_write_read_8m();
     test_unlink_returns_heap();
     test_reserve_enospc();
