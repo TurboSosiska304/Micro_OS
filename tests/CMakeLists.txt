@@ -48,6 +48,7 @@ if(NOT ESP_PLATFORM)
         cases/test_input_debounce.c
         cases/test_input_hid.c
         cases/test_ps2.c
+        cases/test_ps2_mouse.c
         cases/test_xhci_portsc.c
         cases/test_bt_hci.c
         cases/test_gpu_amd.c

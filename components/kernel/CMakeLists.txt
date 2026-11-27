@@ -19,6 +19,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/blit.c"
     "src/input.c"
     "src/input_hid.c"
+    "src/input_ps2_mouse.c"
     "src/input_scancode.c"
     "src/input_set1.c"
     "src/kfile.c"

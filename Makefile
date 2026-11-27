@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-shell-smoke x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-shell-smoke x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-mouse-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -648,6 +648,11 @@ bench: x86-build build
 # `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build x86-disk
 	python3 tools/x86_vga_smoke.py --image $(X86_PROGRAMS_IMAGE)
+
+# The PS/2 mouse: move the pointer through the QEMU monitor and confirm the
+# cursor moved in the screendump.
+x86-mouse-smoke: x86-build x86-disk
+	python3 tools/x86_mouse_smoke.py --image $(X86_PROGRAMS_IMAGE) --loader $(X86_BUILD)/loader32.elf --kernel $(X86_BUILD)/microos64.bin
 
 # The keyboard of the USB (ADR 0040): the machine of this run has no PS/2
 # controller at all (`-machine pc,i8042=off`) and the only keyboard on it is a
