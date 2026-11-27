@@ -2224,10 +2224,22 @@ void *memcpy(void *dst, const void *src, k_size_t size)
 {
     k_u8_t *to = (k_u8_t *)dst;
     const k_u8_t *from = (const k_u8_t *)src;
-    k_size_t i;
 
-    for (i = 0; i < size; i++) {
-        to[i] = from[i];
+    while (size > 0u && (((uintptr_t)to) & 7u) != 0u) {
+        *to++ = *from++;
+        size--;
+    }
+
+    while (size >= 8u) {
+        __builtin_memcpy(to, from, 8u);
+        to += 8u;
+        from += 8u;
+        size -= 8u;
+    }
+
+    while (size > 0u) {
+        *to++ = *from++;
+        size--;
     }
 
     return dst;
@@ -2236,10 +2248,27 @@ void *memcpy(void *dst, const void *src, k_size_t size)
 void *memset(void *dst, int value, k_size_t size)
 {
     k_u8_t *to = (k_u8_t *)dst;
-    k_size_t i;
+    k_u8_t byte = (k_u8_t)value;
+    k_u64_t word = (k_u64_t)byte;
 
-    for (i = 0; i < size; i++) {
-        to[i] = (k_u8_t)value;
+    word |= word << 8;
+    word |= word << 16;
+    word |= word << 32;
+
+    while (size > 0u && (((uintptr_t)to) & 7u) != 0u) {
+        *to++ = byte;
+        size--;
+    }
+
+    while (size >= 8u) {
+        __builtin_memcpy(to, &word, 8u);
+        to += 8u;
+        size -= 8u;
+    }
+
+    while (size > 0u) {
+        *to++ = byte;
+        size--;
     }
 
     return dst;
@@ -2249,16 +2278,37 @@ void *memmove(void *dst, const void *src, k_size_t size)
 {
     k_u8_t *to = (k_u8_t *)dst;
     const k_u8_t *from = (const k_u8_t *)src;
-    k_size_t i;
 
-    if (to < from) {
-        for (i = 0; i < size; i++) {
-            to[i] = from[i];
-        }
-    } else {
-        for (i = size; i > 0; i--) {
-            to[i - 1] = from[i - 1];
-        }
+    if (to == from || size == 0u) {
+        return dst;
+    }
+
+    if (to < from || to >= from + size) {
+        return memcpy(dst, src, size);
+    }
+
+    to += size;
+    from += size;
+
+    while (size > 0u && (((uintptr_t)to) & 7u) != 0u) {
+        to--;
+        from--;
+        *to = *from;
+        size--;
+    }
+
+    while (size >= 8u) {
+        to -= 8u;
+        from -= 8u;
+        size -= 8u;
+        __builtin_memcpy(to, from, 8u);
+    }
+
+    while (size > 0u) {
+        to--;
+        from--;
+        *to = *from;
+        size--;
     }
 
     return dst;
