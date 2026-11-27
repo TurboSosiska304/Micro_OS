@@ -19,6 +19,7 @@ if(NOT ESP_PLATFORM)
         cases/test_blockdev_view.c
         cases/test_root.c
         cases/test_volume.c
+        cases/test_install.c
         cases/test_power.c
         cases/test_render.c
         cases/test_boot.c
