@@ -20,11 +20,11 @@ install are an owner decision recorded in the questions at the end.
 
 ## 1. What "install" means for this machine
 
-The target is one partition of 5-10 GiB on an NVMe disk that already holds
-another operating system. The other system has its own partitions, its own boot
-loader and, on a UEFI machine, its own EFI System Partition. The installer is a
-guest on that disk: it may change only what the person names, and it must leave
-every other byte as it found it.
+The target is a region of 5-10 GiB that the owner leaves **unpartitioned** on an
+NVMe disk that already holds another operating system. The other system has its
+own partitions, its own boot loader and, on a UEFI machine, its own EFI System
+Partition. The installer is a guest on that disk: it appends one partition entry
+in that gap, formats that partition, and leaves every other byte as it found it.
 
 The install is complete when all of these are true:
 
@@ -49,20 +49,18 @@ NVMe volume is the root that `k_root_mount()` mounts as a normal block device.
 
 These are not conveniences; they are the safety contract of the installer.
 
-1. **Named target only.** Every write goes to the partition the person named by
-   device and partition path, for example `/dev/nvme0p1`. The installer never
-   writes to a whole-disk node except the single GPT entry it adds or modifies,
-   and that entry write is bounded to the partition table area.
-2. **No whole-disk format.** `mkfs`, `mfs_format` and partition-table creation
-   run only on the named partition or on a newly created partition table entry.
-   The installer refuses `nvme0`, `sda`, or any node that is not a partition when
-   a partition is required.
+1. **One appended entry, in a gap it verified.** Every write goes either to that
+   new partition or to the two GPT copies. The installer never moves, resizes or
+   deletes an entry, and the table write is bounded to the table area.
+2. **No whole-disk format.** `mkfs` and `mfs_format` run only on the partition
+   the installer created and verified; it is the only partition it ever formats.
 3. **No silent ESP rewrite.** On UEFI, the installer may write only
    `\EFI\MICROOS\` (or the agreed vendor directory) inside an existing ESP. It
    must not replace `\EFI\BOOT\BOOTX64.EFI`, must not delete another vendor
    directory, and must not change BootOrder without recording the previous value
-   and showing the exact change. The default is "copy files into ESP, do not
-   change NVRAM"; NVRAM changes are an explicit step.
+   and showing the exact change. The NVRAM entry is always a separate question
+   with no default answer; `--nvram=yes|no` is required when nobody is there to
+   answer it.
 4. **The other OS stays bootable.** Before any write, the installer records the
    current partition table, ESP directory listing relevant to boot, and NVRAM
    boot entries it can read. After the install it prints the command or menu
@@ -92,40 +90,45 @@ MicroFS, ext2 and FAT32.
 | Fit for 5-10 GiB | small-volume format | good fit | exchange/ESP only |
 | ADR 0041 identity | native "ours" | writable by rule, not "ours" | poor trusted-root fit |
 
-### Recommendation
+### The choice of the owner
 
-**Default root: ext2. Fallback/experimental: MicroFS v4. FAT32 is not a root.**
+**The installer offers both ext2 and MicroFS v4 and asks; ext2 is the default
+answer. FAT32 is not a root.**
 
-Ext2 is the right default for a 5-10 GiB installed root on NVMe. The kernel
-already mounts it, writes it, checks it, and repairs it. Its on-disk format is
-stable, sized for this volume class, and readable by common boot loaders. The
-cost is explicit: ext2 has no journal, so a power cut can lose the last write
-and `fsck` is the recovery path. The plan accepts that cost for the first disk
-install and makes `fsync`/write barriers and the journal question visible in
-the non-goals and follow-up work.
+The owner decided that the filesystem is a decision of the person installing,
+not of the build: the installer presents the two candidates with their cost in
+one line each, and the interactive answer defaults to ext2. A non-interactive
+install names the filesystem explicitly (`--fs=ext2` or `--fs=mfs`) and there
+is no silent default there - a script that forgets the flag is a script that
+must be fixed, not one that gets ext2 by luck.
 
-MicroFS v4 is attractive because ADR 0047 gives it a metadata journal and the
-"whole or absent" file promise. It remains an option for small installs, but it
-is not the default for 5-10 GiB NVMe roots in this release: its 1024-byte block
-format, image tooling, and boot-loader story are tuned to small system volumes,
-not to a general installed disk. A MicroFS install path may be kept behind an
-explicit `--fs=mfs` once measured.
+Ext2 is the default because the kernel already mounts it, writes it, checks it,
+and repairs it; its on-disk format is stable, sized for this volume class, and
+readable by common boot loaders. The cost is explicit: no journal, so a power
+cut can lose the last write and `fsck` is the recovery path.
+
+MicroFS v4 is a first-class choice because ADR 0047 gives it a metadata journal
+and the "whole or absent" file promise. What it costs is stated where it is
+chosen: its 1024-byte block format, image tooling, and boot-loader story are
+tuned to small system volumes, and a 5-10 GiB volume on it has not been
+measured yet - the installer therefore warns on a volume above the measured
+size and says that a first install of that shape is a test, not a daily root.
 
 FAT32 is rejected as `/`. It cannot represent owners, groups, modes, or the Unix
 metadata the user/session model expects. It remains the right filesystem for the
 ESP and for exchange volumes.
 
-The plan therefore treats "installed root filesystem" as a parameter with ext2
-default, records the choice in `/etc/fstab` or an equivalent boot/config record,
-and requires `k_root_mount()` to identify the installed volume by bytes, not by
-a hard-coded device name.
+The plan therefore treats "installed root filesystem" as a parameter with no
+hidden value, records the choice in `/etc/fstab` or an equivalent boot/config
+record, and requires `k_root_mount()` to identify the installed volume by bytes,
+not by a hard-coded device name.
 
 ## 3. Boot
 
 The installer must make the machine boot Micro OS without damaging the boot path
-of the existing OS. UEFI and BIOS are different contracts; UEFI is the primary
-target for this release because the target machines named by the owner are NVMe
-laptops/PCs.
+of the existing OS. **UEFI is the only boot path of this release** - the owner
+decided that a foreign MBR is not worth touching for the first install, so BIOS
+is a non-goal (section 7) and not a constrained mode.
 
 ### UEFI
 
@@ -148,11 +151,15 @@ Rules:
   removable-media/fallback contract and may be owned by another OS or firmware
   policy.
 * The installer never deletes or renames another vendor directory under `\EFI\`.
-* NVRAM Boot#### creation is separate from file copy. The default mode copies
-  files and prints the firmware command to add a boot entry. An explicit
-  `--boot-entry` mode may create a Micro OS entry with `efibootmgr`-equivalent
-  logic, but it must save the old BootOrder, append the new entry, and never
-  remove existing entries.
+* **The NVRAM entry is always asked, never assumed.** The installer copies the
+  files, then asks a separate yes/no question with the detected entries and the
+  current `BootOrder` printed above it: "add a Micro OS entry at the front of
+  the boot order?". There is no default answer in the prompt and no flag that
+  turns the question off; a non-interactive install must say `--nvram=yes` or
+  `--nvram=no`, and saying neither is an error. When the answer is yes, the
+  installer saves the old `BootOrder` to a file on the target and in the log,
+  appends the new entry, and never removes an existing one. When the answer is
+  no, it prints the exact firmware command or menu path that would add it later.
 * Secure Boot is out of scope for this release unless the loader and kernel are
   signed by a key the firmware trusts. The plan reports this as a preflight
   failure, not as a silent fallback.
@@ -164,25 +171,12 @@ ESP volume.
 
 ### BIOS
 
-BIOS install is possible only as a constrained path. A classic MBR disk cannot be
-safely shared with an unknown foreign boot layout by writing boot code into
-sector 0. The installer therefore does not write the MBR bootstrap on a disk
-that already contains a foreign boot sector unless the owner explicitly selects
-an advanced mode and the backup/restore path is proven.
-
-The safe BIOS options are:
-
-* install Micro OS as a second boot entry in an existing boot manager, if one is
-  detected and supported;
-* install the loader into the Micro OS partition's boot area/VBR only when the
-  partition is booted by an existing chainloader and the MBR is untouched;
-* for the first release, prefer UEFI and mark BIOS-on-shared-disk as "manual,
-  advanced, not default".
-
-If limine is used for BIOS, `limine bios-install` is allowed only on a disk
-image or on a disk explicitly designated as Micro OS-owned in a destructive mode
-that this plan does not grant by default. Dual-boot BIOS on a foreign MBR is not
-a release gate.
+Not in this release. A classic MBR disk cannot be safely shared with an unknown
+foreign boot layout by writing boot code into sector 0, and the owner chose the
+clean contract over a constrained mode: the installer refuses to start on a
+machine that did not boot it through UEFI, prints why, and changes nothing. A
+BIOS path returns only with its own plan and its own gate on a disk image whose
+MBR it owns entirely.
 
 ## 4. The steps of the installer
 
@@ -190,7 +184,7 @@ The installer is a shell command, `install`, or a small user program with the
 same contract. It runs from the live ISO/stick. It does not run from the target
 disk.
 
-### 4.1 Discover
+### 4.2 Discover
 
 * Enumerate block devices and partitions: `nvme0`, `nvme0p1`, ..., `ahci0`,
   `usb0`, `boot0`. Use the kernel blockdev/partition view, not a hand-rolled
@@ -201,52 +195,69 @@ disk.
 * Read UEFI boot entries when available; otherwise report "boot entries not
   readable".
 
-### 4.2 Select
+### 4.3 Select
 
-* Require a target partition name. The installer accepts no default target.
-* Require a confirmation word that includes the target name, for example
-  `INSTALL nvme0p3`. `--yes` is not enough without the named target; a
-  non-interactive mode requires both `--target nvme0p3 --yes --confirm nvme0p3`.
-* Refuse dangerous targets:
-  - the whole disk;
-  - the ESP;
-  - a partition currently mounted as `/` or carrying the live medium;
-  - a partition whose type/label/filesystem identifies it as a foreign system
-    root unless the owner passes an explicit override flag that is off by
-    default and prints a red warning;
-  - a partition smaller than the minimum size or larger than the requested
-    policy without acknowledgement.
+* Require the disk and the size. The target is `--disk nvme0 --size 8G`; there is
+  no default disk and no "pick the biggest one" behaviour, because both target
+  machines have a foreign system on the same NVMe.
+* Require a confirmation line typed by hand that repeats both, for example
+  `INSTALL nvme0 8G`. `--yes` alone is not a confirmation; a non-interactive
+  install must pass `--confirm "INSTALL nvme0 8G"` literally.
+* Refuse dangerous disks:
+  - the disk that carries the running live medium or any mounted filesystem of
+    the running system;
+  - a disk whose GPT is damaged, whose backup copy is missing, or that carries a
+    hybrid MBR;
+  - a disk without an ESP, or whose ESP has less free space than the boot files
+    need;
+  - a disk with no gap of the requested size, or whose largest gap is smaller
+    than 5 GiB;
+  - a disk that another installer or partitioning tool has touched in this boot
+    (detected by comparing the table read at discovery with the one read again
+    at prepare).
+* An install onto an existing partition is **not** offered in this release. The
+  installer only writes into space that no entry claims, which removes the
+  question "is this partition free enough to erase" from the program entirely.
 
-### 4.3 Plan
+### 4.4 Plan
 
 Produce a dry-run plan before any write:
 
 ```
-target: nvme0p3 (8 GiB, GPT type ..., currently ext4, label "data")
-action: format as ext2, mount as /, install Micro OS 2.3
-boot:   copy \EFI\MICROOS\BOOTX64.EFI to ESP nvme0p1, no NVRAM change
+disk:   nvme0 (476.9 GiB, GPT, 4 entries, ESP nvme0p1 512 MiB, 104 MiB free)
+space:  gap at sector 1000215216, 8.0 GiB free, aligned, unclaimed by any entry
+action: append entry "MICROOS_ROOT" (Linux data GUID) of 8.0 GiB,
+        format as ext2, mount as /, install Micro OS 2.3
+boot:   copy \EFI\MICROOS\BOOTX64.EFI to ESP nvme0p1; the NVRAM entry is asked
+        after the copy
 source: /boot/kernel, /boot/loader, /bin, /etc, /lib if present
-risk:   nvme0p3 will be erased; nvme0p1 ESP will gain \EFI\MICROOS\
+risk:   8.0 GiB of unpartitioned space becomes a partition; nvme0p1 gains
+        \EFI\MICROOS\; no existing entry is modified
 ```
 
 The plan is machine-readable in a log and human-readable on the console. A dry
 run exits after printing it.
 
-### 4.4 Prepare
+### 4.5 Prepare
 
-* Re-read the partition table and verify the target still matches the plan
-  (size, UUID, type, device path). If it changed, abort.
-* Unmount the target if mounted.
-* Check free space in ESP for the boot files.
+* Re-read the partition table and verify the gap still matches the plan (start
+  sector, free length, both GPT copies, no new entry). If anything moved, abort:
+  the disk changed under the plan, and the plan is what the person confirmed.
+* Save both GPT copies and a hash of the table without the new entry.
+* Check free space in the ESP for the boot files.
 * Check that the source image contains every required artifact and that their
   SHA-256 manifest is present and signed.
 
-### 4.5 Format and copy
+### 4.6 The partition, the filesystem and the copy
 
-* Create the filesystem on the named partition. The default is
-  `mkfs.ext2`-equivalent logic in the installer tool path, or a host-built image
-  written as a filesystem only when safe and exact; prefer making the filesystem
-  on the target and copying files so the partition UUID and size are correct.
+* Append the entry to both GPT copies, flush, re-read, and verify: the new entry
+  is there, and every other entry is byte-identical to the saved table. On a
+  mismatch, restore the saved copies and stop before anything is formatted.
+* Create the filesystem on the new partition. The installer makes it on the
+  target rather than writing a host-built image, so the partition UUID and the
+  size are the real ones; the choice of ext2 or MicroFS v4 is the one made in
+  section 2. A failure leaves the entry in place and says so - removing it is a
+  separate, explicit step, not a silent rollback of the table.
 * Mount it at a temporary mount point, for example `/mnt/target`.
 * Copy the system tree:
   - kernel and boot artifacts;
@@ -258,16 +269,17 @@ run exits after printing it.
 * Write an install record: `/etc/install` or `/var/lib/microos/install` with
   version, source hash, target UUID, date, and boot mode.
 
-### 4.6 Boot loader
+### 4.7 Boot loader
 
 * Mount the ESP read-write.
 * Copy boot files into `\EFI\MICROOS\`.
 * Sync the ESP.
-* If NVRAM update was requested, create the entry and print old/new BootOrder.
-* If BIOS mode was explicitly selected and safe, install the selected stage into
-  the agreed location and record the previous bytes for rollback.
+* Ask the NVRAM question (section 3), then either create the entry and print
+  the old and the new `BootOrder`, or print the path that would add it.
+* BIOS is not an option here: an install that did not start through UEFI never
+  reaches this step.
 
-### 4.7 Verify
+### 4.8 Verify
 
 * Sync the target filesystem.
 * Run `fsck` in read-only mode on the installed volume.
@@ -276,7 +288,7 @@ run exits after printing it.
 * Print the result: installed, verified, boot entry state, and how to boot the
   old OS.
 
-### 4.8 Finish
+### 4.9 Finish
 
 * Unmount target and ESP.
 * Offer reboot only after an explicit confirmation. The default is to return to
@@ -290,8 +302,10 @@ system.
 ### Before any write
 
 * Dry-run by default.
-* Print the full plan and require the target name as confirmation.
-* Read and save the GPT/MBR entries relevant to the target and ESP.
+* Print the full plan and require the disk and the size, typed by hand, as the
+  confirmation.
+* Read and save both GPT copies before the entry is appended, and a copy of the
+  ESP directory state.
 * Save the ESP Micro OS directory state if it exists.
 * Save NVRAM boot order if it will be changed.
 * Verify source manifest signatures/hashes. Unsigned or mismatched source
@@ -299,7 +313,7 @@ system.
 
 ### During writes
 
-* Format only the named target partition.
+* Append one GPT entry in a verified gap; format only that new partition.
 * Write ESP files only under `\EFI\MICROOS\`.
 * Sync after each critical stage: partition table change, filesystem create,
   file copy, boot file rename, NVRAM update.
@@ -347,20 +361,24 @@ green.
 Create an 8 GiB raw disk image:
 
 1. `qemu-img create -f raw disk.img 8G`.
-2. Write a GPT with an ESP and a blank target partition, or a GPT with an
-   existing foreign partition and free space for Micro OS.
+2. Write a GPT with an ESP, one foreign partition with known content, and an
+   unpartitioned gap of 5 GiB - the shape of the owner's disk.
 3. Boot the Micro OS ISO in QEMU with the disk attached.
-4. Run `install --dry-run`; verify no writes.
-5. Run `install --target ... --yes --confirm ...`; verify only the named
-   partition and `\EFI\MICROOS\` changed.
+4. Run `install --dry-run --disk nvme0 --size 5G --fs ext2`; verify no writes.
+5. Run `install --disk nvme0 --size 5G --fs ext2 --confirm "INSTALL nvme0 5G"`;
+   verify that one entry was appended, that the foreign entry is byte-identical,
+   and that `\EFI\MICROOS\` is the only new thing in the ESP. Run the gate twice:
+   once answering the NVRAM question yes, once no.
 6. Shut down, boot QEMU from the installed disk (OVMF, no ISO).
 7. Run an `x86-smoke`-like installed check: root mounted read-write, `/bin`
    present, `fsck` clean, `uname`, file write/read survives reboot, network not
    required.
 
-The gate compares SHA-256 of untouched partitions before and after install. It
-also boots a disk that contains a fake foreign ESP entry and proves it still
-exists.
+The gate compares SHA-256 of untouched partitions before and after install, and
+a hash of the partition table minus the appended entry. It also boots a disk
+that contains a fake foreign ESP entry and proves it still exists. A damaged
+backup GPT, a gap that is too small, and a disk with no ESP are three refusals;
+the gate has a case for each.
 
 ### Owner NVMe checklist
 
@@ -371,8 +389,8 @@ Only after the QEMU gate:
    NVMe device, ESP, and target partition by size and UUID.
 3. **Dry-run**: run installer dry-run and read the plan aloud; abort on any
    unexpected target.
-4. **Install**: install only to the named 5-10 GiB partition; keep NVRAM change
-   explicit.
+4. **Install**: name the disk and the size, read the gap the installer found,
+   and answer the NVRAM question yourself.
 5. **Verify boot**: boot Micro OS; then reboot into firmware menu and boot the
    previous OS.
 6. **Return path**: record the exact firmware menu entry and, if NVRAM changed,
@@ -387,25 +405,29 @@ Only after the QEMU gate:
 * No graphical installer.
 * No unattended install over the network.
 * No secure-boot key enrollment.
-* No unsafe BIOS MBR overwrite on a disk that already boots another OS.
-* No resize of foreign partitions in the default path; partition creation is
-  allowed only in explicitly free space and after the same dry-run/confirm gate.
+* No BIOS at all: the installer refuses a machine that did not boot it through
+  UEFI, because a foreign MBR is not worth touching for the first install.
+* No resize or move of a foreign partition, ever. The only table change is one
+  appended entry in space no entry claims.
+* No install onto an existing partition: only into unpartitioned space, so the
+  installer never has to judge whether a partition "looks free".
 * No support for installing from an already installed Micro OS root in this
   first cut; the live ISO/stick is the supported source.
 
-## 8. Questions for the owner
+## 8. The decisions of the owner
 
-1. **Release identity**: should this be 2.3 with a new name/plan, or should it
-   take a different number because 2.3 is already "Pompeii" in
-   `docs/release-names.md`?
-2. **Default filesystem**: ext2 by default for 5-10 GiB NVMe, with MicroFS v4 as
-   an explicit option? Or do you want MicroFS first because of the journal?
-3. **Boot loader policy**: copy `\EFI\MICROOS\BOOTX64.EFI` only, or also create an
-   NVRAM Boot#### entry by default?
-4. **BIOS scope**: UEFI-only for the first release, or do you want a constrained
-   BIOS path for old PCs?
-5. **Partitioning**: may the installer create a new partition in free space, or
-   must the owner create the 5-10 GiB partition beforehand?
+The five questions are answered, and the answer is the contract above.
+
+1. **Release identity**: this is **2.3 "Pompeii"**, and the install on a disk is
+   its main theme; the fault injection that already landed is part of the same
+   release.
+2. **Filesystem**: the installer **offers ext2 and MicroFS v4 and asks**; ext2 is
+   the default answer, and a non-interactive install must name one.
+3. **Boot entry**: the NVRAM entry is **always asked** - no default answer, no
+   flag that skips the question silently.
+4. **BIOS**: **UEFI only** in this release.
+5. **Partitioning**: the owner leaves an **unpartitioned region of 5-10 GiB**; the
+   installer creates the partition itself, in that gap, and formats only it.
 
 ## 9. Work lanes
 
@@ -415,15 +437,24 @@ no lane may claim "works on my NVMe" as evidence.
 * **L0 Spec** (docs, 1d): freeze the ADR - target rules, ESP rules, fs default,
   boot-entry policy, non-goals. Gate: ADR reviewed; owner answers the five questions.
 * **L1 Inventory** (kernel, 2d): stable partition inventory - GPT/MBR, type, size,
-  ESP flag, filesystem guess, mount state. Gate: host tests; QEMU mixed disk listed.
-* **L2 Dry-run** (installer, 2d): `install --dry-run` validates target, refuses
-  dangerous cases, prints the plan, writes nothing. Gate: no sector writes in tests.
-* **L3 Format** (fs/tools, 3d): create the root fs, `/etc/volumes`, install record.
-  Gate: volume mounts; `fsck` clean; required tree present.
+  ESP flag, filesystem guess, mount state, **free gaps with alignment**. Gate:
+  host tests; QEMU mixed disk listed with its gaps.
+* **L2 Dry-run** (installer, 2d): `install --dry-run --disk --size [--fs]`
+  validates the gap, refuses the dangerous cases, prints the plan, writes nothing.
+  Gate: no sector writes in tests; every refusal has a test.
+* **L2b GPT append** (kernel/tools, 2d): append one entry to both GPT copies, CRC
+  both, verify the untouched entries by hash, restore the saved copies on a
+  mismatch. Gate: host tests on synthetic tables (valid, damaged backup, hybrid
+  MBR, gap too small, gap unaligned); QEMU: foreign entries identical before and
+  after.
+* **L3 Format** (fs/tools, 3d): create the root fs (ext2 and MicroFS v4), the
+  `/etc/volumes`, install record. Gate: both volumes mount; `fsck`/`mfs_check`
+  clean; required tree present.
 * **L4 Copy** (installer, 2d): copy tree with manifest, SHA-256, sync, read-only
   verify. Gate: QEMU install passes; corrupted copy fails.
-* **L5 UEFI boot** (boot, 3d): mount ESP, copy `\EFI\MICROOS\`, optional NVRAM entry;
-  never touch foreign boot files. Gate: OVMF boots; foreign ESP unchanged.
+* **L5 UEFI boot** (boot, 3d): mount ESP, copy `\EFI\MICROOS\`, ask the NVRAM
+  question; never touch foreign boot files. Gate: OVMF boots with the entry the
+  question added and without it; foreign ESP byte-identical.
 * **L6 Root boot** (kernel, 3d): boot the installed disk as a normal writable root,
   without regressing live ISO/USB boot. Gate: rw root; file survives reboot.
 * **L7 QEMU gate** (qa, 2d): `x86-install-smoke` - 8 GiB disk, install, boot,
@@ -435,7 +466,7 @@ no lane may claim "works on my NVMe" as evidence.
 
 The estimate is in focused engineering lanes, not calendar promises:
 
-* L0-L2: 1 lane-week - contract, inventory, dry-run planner.
+* L0-L2b: 1-2 lane-weeks - contract, inventory with gaps, dry-run, GPT append.
 * L3-L4: 1-2 lane-weeks - filesystem creation, copy, manifests, fsck.
 * L5-L6: 1-2 lane-weeks - UEFI boot install and installed-root boot selection.
 * L7-L8: 1 lane-week - QEMU gate, docs, owner checklist.
