@@ -767,6 +767,7 @@ static bool gpu_intel_present_is_live(const struct gpu_intel_info *info, k_u32_t
 
 static bool gpu_intel_present_restore(const struct gpu_intel_info *info)
 {
+    k_logfile_flush();
     if (!gpu_intel_wait_frame(info) ||
         !gpu_intel_plane_restore(info, info->plane_control, info->plane_stride,
                                  info->plane_surface) ||
@@ -834,6 +835,7 @@ static int gpu_intel_present(void *context, const struct k_fb_surface *dst,
 
     gpu_intel_present_flush(src);
     display_touched = true;
+    k_logfile_flush();
     if (!gpu_intel_plane_program(info, info->plane_control, info->plane_stride, target_surface) ||
         !gpu_intel_wait_frame(info) || !gpu_intel_present_is_live(info, target_surface)) {
         goto fail;
@@ -906,6 +908,11 @@ static struct {
     k_u32_t old_control;
     k_u32_t old_stride;
     k_u32_t old_surface;
+    k_u64_t old_fb_phys;
+    k_u32_t old_fb_pte_start;
+    k_u32_t old_fb_pte_count;
+    k_u8_t old_fb_tiling;
+    bool old_fb_contiguous;
 } s_linear;
 
 static void gpu_intel_detile_x(const k_u8_t *src, k_u8_t *dst, k_u32_t width, k_u32_t height,
@@ -933,6 +940,203 @@ static void gpu_intel_detile_x(const k_u8_t *src, k_u8_t *dst, k_u32_t width, k_
     }
 }
 
+
+static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
+{
+    k_u32_t live_offset;
+    bool ok = true;
+
+    if (!s_linear.active) {
+        return true;
+    }
+
+    if (s_flip.reserved && gpu_intel_present_release(info) != 0) {
+        kerror("gpu: display enable: could not release the present backend before rollback");
+        ok = false;
+    }
+
+    k_logfile_flush();
+
+    live_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURFLIVE_BASE);
+
+    if (!gpu_intel_plane_restore(info, s_linear.old_control, s_linear.old_stride,
+                                 s_linear.old_surface) ||
+        !gpu_intel_wait_frame(info) || !gpu_intel_wait_frame(info) ||
+        (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) !=
+            s_linear.old_surface) {
+        kerror("gpu: display enable: original plane is not live after rollback");
+        return false;
+    }
+
+    if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &s_linear.run,
+                               s_linear.saved_gtt) != GPU_INTEL_GGTT_OK) {
+        kerror("gpu: display enable: could not restore GGTT after plane rollback");
+        ok = false;
+    }
+
+    info->plane_control = s_linear.old_control;
+    info->plane_stride = s_linear.old_stride;
+    info->plane_surface = s_linear.old_surface;
+    info->framebuffer.surface = s_linear.old_surface;
+    info->framebuffer.phys = s_linear.old_fb_phys;
+    info->framebuffer.pte_start = s_linear.old_fb_pte_start;
+    info->framebuffer.pte_count = s_linear.old_fb_pte_count;
+    info->framebuffer.tiling = s_linear.old_fb_tiling;
+    info->framebuffer.contiguous = s_linear.old_fb_contiguous;
+
+    if (s_linear.allocation != NULL) {
+        kmm_free(s_linear.allocation);
+    }
+
+    memset(&s_linear, 0, sizeof(s_linear));
+    k_fb_ops_register(NULL, NULL);
+    port_x86_64_fb_set_format(info->framebuffer.format == GPU_INTEL_FORMAT_XRGB_8888
+                                  ? FB_FORMAT_XRGB8888
+                                  : FB_FORMAT_RGB565,
+                              (k_u8_t)(info->framebuffer.bpp * 8u));
+
+    if (ok) {
+        kinfo("gpu: plane-linear: restored original plane 0x%08x",
+              (unsigned)info->plane_surface);
+    }
+
+    return ok;
+}
+
+static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
+{
+    struct k_fb_surface screen;
+    struct k_fb_surface src;
+    void *allocation = NULL;
+    k_u8_t *page = NULL;
+    k_size_t bytes;
+    k_u8_t pixel_bytes;
+    int rc;
+
+    if (info->common.probe_result != GPU_PROBE_OK || !info->display_ready ||
+        !info->framebuffer_known || info->panel_pipe == GPU_INTEL_PANEL_PIPE_UNKNOWN ||
+        s_gtt_entries == NULL) {
+        kshell_printf("gpu: display enable needs an active, readable Intel display\n");
+        return -1;
+    }
+    if (!gpu_intel_flip_laptop(info)) {
+        kshell_printf("gpu: display enable is limited to the measured ThinkPad 17aa:225c\n");
+        return -1;
+    }
+
+    if (!confirmed) {
+        if (info->framebuffer.tiling == GPU_INTEL_TILE_LINEAR) {
+            kshell_printf("gpu: display enable dry-run: plane is already linear %s, %ux%u\n",
+                          gpu_intel_format_name(info->framebuffer.format),
+                          (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
+        } else {
+            kshell_printf("gpu: display enable dry-run: would run plane-linear %s %s -> linear, "
+                          "then verify k_blit_present returns device\n",
+                          gpu_intel_format_name(info->framebuffer.format),
+                          gpu_intel_tiling_name(info->framebuffer.tiling));
+        }
+        kshell_printf("gpu: display enable dry-run: nothing written; use gpu display enable --yes\n");
+        kshell_printf("gpu: owner checklist: if the laptop shows a black screen, reboot restores "
+                      "the firmware plane\n");
+        return 0;
+    }
+
+    if (info->framebuffer.tiling != GPU_INTEL_TILE_LINEAR) {
+        rc = gpu_intel_plane_linear(info, true);
+        if (rc != 0) {
+            kshell_printf("gpu: display enable: plane-linear failed; plane not changed to linear\n");
+            return -1;
+        }
+    }
+
+    if (!gpu_intel_present_ready(info)) {
+        const char *reason = "present backend is not ready for this plane";
+
+        if ((info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) != 0u) {
+            reason = "plane has render decompression enabled";
+        } else if ((info->plane_control & 3u) != 0u) {
+            reason = "plane rotation is not identity";
+        } else if (info->framebuffer.tiling != GPU_INTEL_TILE_LINEAR) {
+            reason = "plane is not linear";
+        } else if (info->framebuffer.format != GPU_INTEL_FORMAT_RGB_565 &&
+                   info->framebuffer.format != GPU_INTEL_FORMAT_XRGB_8888) {
+            reason = "plane format is not RGB565/XRGB8888";
+        }
+        kshell_printf("gpu: display enable: %s\n", reason);
+        if (s_linear.active) {
+            k_logfile_flush();
+            if (!gpu_intel_plane_linear_restore(info)) {
+                kerror("gpu: display enable: rollback failed; reboot restores the firmware plane");
+                kshell_printf("gpu: display enable: rollback failed; reboot restores the firmware "
+                              "plane\n");
+            } else {
+                kshell_printf("gpu: display enable: plane restored to original %s %s\n",
+                              gpu_intel_format_name(info->framebuffer.format),
+                              gpu_intel_tiling_name(info->framebuffer.tiling));
+            }
+        }
+        return -1;
+    }
+
+    if (!port_x86_64_fb_surface(&screen)) {
+        kshell_printf("gpu: display enable: no framebuffer surface to verify present\n");
+        if (s_linear.active) {
+            k_logfile_flush();
+            (void)gpu_intel_plane_linear_restore(info);
+        }
+        return -1;
+    }
+
+    pixel_bytes = fb_pixel_bytes(screen.format);
+    bytes = (k_size_t)screen.pitch * (k_size_t)screen.height * (k_size_t)pixel_bytes;
+    allocation = kmm_alloc(bytes + GPU_INTEL_GTT_PAGE_SIZE - 1u, KMM_PRIORITY_KERNEL);
+    if (allocation == NULL) {
+        kshell_printf("gpu: display enable: no RAM for present verification buffer\n");
+        if (s_linear.active) {
+            k_logfile_flush();
+            (void)gpu_intel_plane_linear_restore(info);
+        }
+        return -1;
+    }
+
+    page = (k_u8_t *)(((uintptr_t)allocation + GPU_INTEL_GTT_PAGE_SIZE - 1u) &
+                      ~(uintptr_t)(GPU_INTEL_GTT_PAGE_SIZE - 1u));
+    memcpy(page, (const void *)(uintptr_t)screen.base, bytes);
+
+    src = screen;
+    src.base = (k_u16_t *)(void *)page;
+
+    rc = k_blit_present(&screen, &src);
+    if (rc != 0) {
+        const char *why = (rc == 1) ? "k_blit_present returned kernel copy"
+                                    : "k_blit_present returned an error";
+
+        kerror("gpu: display enable: present verification failed: %s (rc=%d)", why, rc);
+        kshell_printf("gpu: display enable: %s (rc=%d); restoring plane\n", why, rc);
+        k_logfile_flush();
+        if (s_linear.active) {
+            if (!gpu_intel_plane_linear_restore(info)) {
+                kerror("gpu: display enable: rollback failed; reboot restores the firmware plane");
+                kshell_printf("gpu: display enable: rollback failed; reboot restores the firmware "
+                              "plane\n");
+            } else {
+                kshell_printf("gpu: display enable: plane restored\n");
+            }
+        } else {
+            kshell_printf("gpu: display enable: plane was already linear; reboot restores the "
+                          "firmware plane if the screen is wrong\n");
+        }
+        /* Keep allocation alive: the present backend may still hold GGTT mappings. */
+        (void)allocation;
+        return -1;
+    }
+
+    kshell_printf("gpu: display enable: present verified (device path, rc=0)\n");
+    kshell_printf("gpu: owner checklist: if the laptop shows a black screen, reboot restores the "
+                  "firmware plane\n");
+    /* The verification buffer remains mapped as a present slot; keep it alive. */
+    return 0;
+}
 static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed)
 {
     struct gpu_intel_gtt_range excluded[16];
@@ -1117,6 +1321,11 @@ static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed)
     s_linear.old_control = control;
     s_linear.old_stride = stride;
     s_linear.old_surface = surface;
+    s_linear.old_fb_phys = info->framebuffer.phys;
+    s_linear.old_fb_pte_start = info->framebuffer.pte_start;
+    s_linear.old_fb_pte_count = info->framebuffer.pte_count;
+    s_linear.old_fb_tiling = info->framebuffer.tiling;
+    s_linear.old_fb_contiguous = info->framebuffer.contiguous;
 
     info->plane_control = new_control;
     info->plane_stride = new_stride;
@@ -1300,6 +1509,7 @@ static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
         goto out;
     }
     display_touched = true;
+    k_logfile_flush();
     if (!gpu_intel_plane_program(info, control, stride, new_surface)) {
         kshell_printf("gpu: flip plane registers did not read back\n");
         goto out;
@@ -1323,6 +1533,7 @@ static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
         kshell_printf("gpu: flip timed out before restore\n");
         goto out;
     }
+    k_logfile_flush();
     plane_restored = gpu_intel_plane_restore(info, control, stride, surface);
     if (!plane_restored) {
         kerror("gpu: flip could not restore the original plane; retrying rollback");
@@ -1572,6 +1783,18 @@ int gpu_intel_command(int argc, char **argv)
         return gpu_intel_plane_linear(&g_gpu_intel, argc == 3) == 0 ? KSHELL_OK : KSHELL_ERROR;
     }
 
-    kshell_printf("usage: gpu [info|ggtt-test|flip [--yes]|plane-linear [--yes]]\n");
+    if ((argc == 3 && strcmp(argv[1], "display") == 0 && strcmp(argv[2], "enable") == 0) ||
+        (argc == 4 && strcmp(argv[1], "display") == 0 && strcmp(argv[2], "enable") == 0 &&
+         strcmp(argv[3], "--yes") == 0)) {
+        if (g_gpu_intel.common.probe_result != GPU_PROBE_OK) {
+            kshell_printf("gpu: display enable refused: probe result %d\n",
+                          (int)g_gpu_intel.common.probe_result);
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_display_enable(&g_gpu_intel, argc == 4) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
+    kshell_printf(
+        "usage: gpu [info|ggtt-test|flip [--yes]|plane-linear [--yes]|display enable [--yes]]\n");
     return KSHELL_USAGE;
 }
