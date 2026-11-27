@@ -54,6 +54,12 @@ was not a defect:
   `while pgrep -x qemu-system-x86 >/dev/null; do sleep 20; done`, and
   `pgrep -x qemu-system-aar` for the AArch64 machine. `release_gate.sh` waits
   for a load average of 2 for the whole run; a lane waits for the emulator.
+* **a desk smoke needs a load under one, not only a free emulator.** The
+  keyboard checks of `x86-vga-smoke` inject a key and read the screen; under the
+  load of another lane's soak the guest misses keys and one bad block cascades
+  into twenty failures of `edit` and `fm` that do not exist on a quiet machine.
+  A lane that sees a crowd of failures in one program checks the load before it
+  reads the code, and waits.
 * **`pgrep -f qemu-system` is not that check.** The pattern matches the command
   line of the shell that runs it, so the loop answers "busy" forever and a lane
   waits twenty minutes for a machine that is empty. `pgrep -x` matches the name
