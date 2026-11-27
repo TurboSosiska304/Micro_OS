@@ -22,6 +22,7 @@ if(NOT ESP_PLATFORM)
         cases/test_port_dma.c
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
+        cases/test_blockdev_fault.c
         cases/test_blockdev_view.c
         cases/test_root.c
         cases/test_volume.c
@@ -35,6 +36,7 @@ if(NOT ESP_PLATFORM)
         cases/test_mfs.c
         cases/test_mfs_format.c
         cases/test_mfs_journal.c
+        cases/test_mfs_fault.c
         cases/test_mfs_persistence.c
         cases/test_mfs_repair.c
         cases/test_mfs_many.c
@@ -55,6 +57,7 @@ if(NOT ESP_PLATFORM)
         cases/test_input_debounce.c
         cases/test_input_hid.c
         cases/test_ps2.c
+        cases/test_ps2_mouse.c
         cases/test_xhci_portsc.c
         cases/test_bt_hci.c
         cases/test_gpu_amd.c
@@ -130,6 +133,7 @@ if(NOT ESP_PLATFORM)
 
     add_executable(microos_tests
         src/main.c
+        src/blockdev_fault.c
         framework/ktest.c
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/bt_hci.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
@@ -159,6 +163,9 @@ if(NOT ESP_PLATFORM)
     # diagnostics of GCC at -O2 that read every such path as a defect would
     # stop the build of the bundle over a file that names a temporary. The
     # product keeps all of them.
+    # The fault bus is a test instrument, never a production block-device API.
+    target_compile_definitions(microos_tests PRIVATE K_BLOCKDEV_TEST=1)
+
     target_compile_options(microos_tests PRIVATE
         -Wno-format-truncation
         -Wno-stringop-truncation
@@ -614,6 +621,12 @@ if(NOT ESP_PLATFORM)
             "${CMAKE_SOURCE_DIR}/components/ramfs/src/ramfs_vfs.c"
         )
     endif()
+
+    # The PS/2 mouse decoder is x86-only and lives in ports/port_x86_64; the
+    # host test build still compiles it so test_ps2_mouse keeps its symbols.
+    target_sources(microos_kernel PRIVATE
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/input_ps2_mouse.c"
+    )
 
     set(MICRO_OS_TEST_LIBS
         mkfs_mfs_image

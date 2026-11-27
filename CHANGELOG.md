@@ -10,6 +10,41 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [2.2.0] - 2026-11-27
+
+### The release
+
+- 2.2.0 "Eternal Peace": the machine after the thaw. The journal keeps its
+  promises on a medium that fails, the shell runs work in the background, the
+  hand moves a cursor, the GPU gets buffers of its own, and a fault bus proves
+  that a disk that lies does not take the volume with it.
+
+### Added
+
+- The MicroFS journal writes with barriers and the medium is `fsync`'d: a durable
+  write order, `fsync` for the file, and the recovery that follows the log instead
+  of guessing. The fault-injection sweep fixed the defects it found on the way,
+  including an inode and its bitmap committed in different transactions.
+- The shell runs lists, redirections and job control: `;`, `&&`, `||`, pipes in
+  the background, `jobs`, `fg`, `bg`, and stop/continue for a foreground group.
+- A PS/2 AUX IntelliMouse: the byte parser, the wheel, and a testable mouse path
+  with an x86 smoke gate.
+- A Bluetooth HCI control slice over USB: command and connection events, and
+  `bt reset/name/scan` for the radio that is present.
+- AMD VRAM buffer objects: `bufalloc`, `buffill`, `bufread`, `buffree`,
+  `buflist`, and `bufflip` over the BAR0 aperture.
+- Intel `gpu plane-linear`: an XRGB8888 linear plane path for the flip backend,
+  alongside the existing RGB565 path.
+
+### Fixed
+
+- Deterministic block-device fault injection (`blockdev_fault`) and MicroFS fault
+  sweeps: failed cache boxes are forgotten, corrupt slot images keep strict
+  replay, and a disk fault does not silently corrupt the volume.
+- xHCI and USB smoke coverage kept in step with the BT and input work (66 checks).
+- `kshell` jobs test waits for the stopped state, so the ASan gate does not race
+  the scheduler.
+
 ## [2.1.0] - 2026-11-27
 
 ### The release

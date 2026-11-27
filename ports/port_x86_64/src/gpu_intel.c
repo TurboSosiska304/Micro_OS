@@ -27,9 +27,11 @@
 #include "kernel/fb_ops.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kshell/kshell.h"
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
+#include "port_x86_64_screen.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -308,6 +310,17 @@ static bool gpu_intel_read_framebuffer(struct gpu_intel_info *info)
 
     width = (plane_size & 0xFFFFu) + 1u;
     height = (plane_size >> 16) + 1u;
+
+    {
+        struct gpu_intel_plane_ctl ctl = gpu_intel_plane_ctl_decode(info->plane_control);
+
+        kinfo("gpu: plane: %s, %s, %ux%u, stride 0x%x", gpu_intel_format_name(ctl.format),
+              gpu_intel_tiling_name(ctl.tiling), (unsigned)width, (unsigned)height,
+              (unsigned)info->plane_stride);
+        kinfo("gpu: plane regs: CTL 0x%08x STRIDE 0x%08x SIZE 0x%08x SURF 0x%08x",
+              (unsigned)info->plane_control, (unsigned)info->plane_stride, (unsigned)plane_size,
+              (unsigned)info->plane_surface);
+    }
     if (width != info->common.panel_width || height != info->common.panel_height) {
         return false;
     }
@@ -597,21 +610,25 @@ static bool gpu_intel_present_ready(const struct gpu_intel_info *info)
            gpu_intel_flip_laptop(info) &&
            (info->plane_surface & ~GPU_INTEL_PLANE_SURFACE_MASK) == 0u &&
            (info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) == 0u &&
-           (info->plane_control & 3u) == 0u && info->framebuffer.bpp == 2u &&
-           info->framebuffer.format == GPU_INTEL_FORMAT_RGB_565 &&
-           info->framebuffer.tiling == GPU_INTEL_TILE_LINEAR;
+           (info->plane_control & 3u) == 0u && info->framebuffer.tiling == GPU_INTEL_TILE_LINEAR &&
+           ((info->framebuffer.format == GPU_INTEL_FORMAT_RGB_565 && info->framebuffer.bpp == 2u) ||
+            (info->framebuffer.format == GPU_INTEL_FORMAT_XRGB_8888 &&
+             info->framebuffer.bpp == 4u));
 }
 
 static bool gpu_intel_present_compatible(const struct gpu_intel_info *info,
                                          const struct k_fb_surface *dst,
                                          const struct k_fb_surface *src)
 {
+    k_u8_t expected = info->framebuffer.format == GPU_INTEL_FORMAT_XRGB_8888 ? FB_FORMAT_XRGB8888
+                                                                             : FB_FORMAT_RGB565;
+
     return info->common.probe_result == GPU_PROBE_OK && gpu_intel_present_ready(info) &&
            dst != NULL && src != NULL && dst->width == info->framebuffer.width &&
            dst->height == info->framebuffer.height && src->width == dst->width &&
            src->height == dst->height &&
-           (k_u64_t)dst->pitch * FB_PIXEL_BYTES == info->framebuffer.pitch &&
-           src->pitch == dst->pitch;
+           (k_u64_t)dst->pitch * (k_u64_t)info->framebuffer.bpp == info->framebuffer.pitch &&
+           src->pitch == dst->pitch && dst->format == expected && src->format == expected;
 }
 
 /* Reserve two guarded runs before the first flip. Both surfaces stay mapped
@@ -728,8 +745,9 @@ fail:
  * the visible cache lines write-back before the plane is allowed to fetch. */
 static void gpu_intel_present_flush(const struct k_fb_surface *src)
 {
-    const k_u8_t *base = (const k_u8_t *)src->base;
-    k_size_t bytes = (k_size_t)src->pitch * (k_size_t)src->height * FB_PIXEL_BYTES;
+    const k_u8_t *base = (const k_u8_t *)(const void *)src->base;
+    k_size_t bytes =
+        (k_size_t)src->pitch * (k_size_t)src->height * (k_size_t)fb_pixel_bytes(src->format);
     k_size_t offset;
 
     for (offset = 0u; offset < bytes; offset += GPU_INTEL_CACHE_LINE) {
@@ -883,6 +901,279 @@ static const struct k_fb_ops s_gpu_intel_present_ops = {
     .present = gpu_intel_present,
     .present_release = gpu_intel_present_release,
 };
+
+static struct {
+    bool active;
+    void *allocation;
+    k_u8_t *page;
+    k_u64_t physical;
+    struct gpu_intel_gtt_run run;
+    k_u64_t saved_gtt;
+    k_u32_t old_control;
+    k_u32_t old_stride;
+    k_u32_t old_surface;
+} s_linear;
+
+static void gpu_intel_detile_x(const k_u8_t *src, k_u8_t *dst, k_u32_t width, k_u32_t height,
+                               k_u32_t pitch, k_u8_t bpp)
+{
+    k_u32_t tile_stride = pitch / 512u;
+    k_u32_t y;
+
+    for (y = 0u; y < height; y++) {
+        k_u32_t x;
+
+        for (x = 0u; x < width; x++) {
+            k_u32_t byte_x = x * (k_u32_t)bpp;
+            k_u32_t tile_x = byte_x / 512u;
+            k_u32_t tile_y = y / 8u;
+            k_u32_t in_x = byte_x % 512u;
+            k_u32_t in_y = y % 8u;
+            k_size_t src_off =
+                ((k_size_t)tile_y * (k_size_t)tile_stride + (k_size_t)tile_x) * 4096u +
+                (k_size_t)in_y * 512u + (k_size_t)in_x;
+            k_size_t dst_off = (k_size_t)y * (k_size_t)pitch + (k_size_t)byte_x;
+
+            memcpy(dst + dst_off, src + src_off, bpp);
+        }
+    }
+}
+
+static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    k_size_t excluded_count = 0u;
+    struct gpu_intel_plane_ctl ctl;
+    k_u32_t control_offset;
+    k_u32_t stride_offset;
+    k_u32_t surface_offset;
+    k_u32_t live_offset;
+    k_u32_t control;
+    k_u32_t stride;
+    k_u32_t surface;
+    k_u32_t new_control;
+    k_u32_t new_stride;
+    k_u32_t new_surface;
+    k_u32_t plane_size;
+    k_u32_t width;
+    k_u32_t height;
+    k_u64_t bytes;
+    void *allocation = NULL;
+    k_u8_t *page = NULL;
+    k_u64_t physical = 0u;
+    volatile k_u8_t *source = NULL;
+    bool run_installed = false;
+    bool display_touched = false;
+    bool ok = false;
+    bool keep_buffer = false;
+    enum gpu_intel_ggtt_result rc;
+
+    if (info->common.probe_result != GPU_PROBE_OK || !info->display_ready ||
+        !info->framebuffer_known || info->panel_pipe == GPU_INTEL_PANEL_PIPE_UNKNOWN ||
+        s_gtt_entries == NULL) {
+        kshell_printf("gpu: plane-linear needs an active, readable Intel display\n");
+        return -1;
+    }
+    if (!gpu_intel_flip_laptop(info)) {
+        kshell_printf("gpu: plane-linear is limited to the measured ThinkPad 17aa:225c\n");
+        return -1;
+    }
+    if ((info->plane_surface & ~GPU_INTEL_PLANE_SURFACE_MASK) != 0u ||
+        (info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) != 0u ||
+        (info->plane_control & 3u) != 0u) {
+        kshell_printf("gpu: plane-linear refuses surface flags, compression or rotation\n");
+        return -1;
+    }
+
+    control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+    live_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURFLIVE_BASE);
+
+    control = gpu_intel_mmio_read(control_offset);
+    stride = gpu_intel_mmio_read(stride_offset);
+    surface = gpu_intel_mmio_read(surface_offset);
+    plane_size =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SIZE_BASE));
+    if (control != info->plane_control || stride != info->plane_stride ||
+        surface != info->plane_surface) {
+        kshell_printf("gpu: the display changed after the probe; run gpu info again\n");
+        return -1;
+    }
+
+    ctl = gpu_intel_plane_ctl_decode(control);
+    width = (plane_size & 0xFFFFu) + 1u;
+    height = (plane_size >> 16) + 1u;
+    if (!ctl.valid || width != info->framebuffer.width || height != info->framebuffer.height) {
+        kshell_printf("gpu: plane-linear cannot decode the current plane\n");
+        return -1;
+    }
+
+    new_control = (control & ~GPU_INTEL_PLANE_TILE_MASK) | ((k_u32_t)GPU_INTEL_TILE_LINEAR << 10);
+    new_stride = (info->framebuffer.pitch / 64u) & GPU_INTEL_PLANE_STRIDE_MASK;
+
+    kshell_printf("gpu: plane-linear %s: %s %s -> %s linear, %ux%u, ctl 0x%08x -> 0x%08x, stride "
+                  "0x%x -> 0x%x\n",
+                  confirmed ? "plan" : "dry-run", gpu_intel_format_name(ctl.format),
+                  gpu_intel_tiling_name(ctl.tiling), gpu_intel_format_name(ctl.format),
+                  (unsigned)width, (unsigned)height, (unsigned)control, (unsigned)new_control,
+                  (unsigned)stride, (unsigned)new_stride);
+
+    if (ctl.tiling == GPU_INTEL_TILE_LINEAR) {
+        kshell_printf("gpu: plane is already linear; no register write needed\n");
+        return 0;
+    }
+    if (ctl.tiling != GPU_INTEL_TILE_X) {
+        kshell_printf("gpu: plane-linear supports X-tiled sources only\n");
+        return -1;
+    }
+    if ((info->framebuffer.pitch % 64u) != 0u ||
+        (info->framebuffer.pitch / 64u) > GPU_INTEL_PLANE_STRIDE_MASK) {
+        kshell_printf("gpu: plane-linear cannot express the linear stride\n");
+        return -1;
+    }
+
+    if (!confirmed) {
+        kshell_printf("gpu: plane-linear dry-run: nothing written; use gpu plane-linear --yes\n");
+        return 0;
+    }
+
+    if (!gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        kshell_printf("gpu: plane-linear cannot exclude live display surfaces\n");
+        return -1;
+    }
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->framebuffer.pte_count, excluded, excluded_count,
+                                  &s_linear.run);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: no guarded GGTT run for %u pages (rc=%d)\n",
+                      (unsigned)info->framebuffer.pte_count, (int)rc);
+        return -1;
+    }
+    new_surface = s_linear.run.start * GPU_INTEL_GTT_PAGE_SIZE;
+
+    bytes = (k_u64_t)info->framebuffer.bytes;
+    allocation = kmm_alloc((k_size_t)bytes + GPU_INTEL_GTT_PAGE_SIZE - 1u, KMM_PRIORITY_KERNEL);
+    if (allocation == NULL) {
+        kshell_printf("gpu: plane-linear has no RAM for %u bytes\n",
+                      (unsigned)info->framebuffer.bytes);
+        goto out;
+    }
+    page = (k_u8_t *)(((uintptr_t)allocation + GPU_INTEL_GTT_PAGE_SIZE - 1u) &
+                      ~(uintptr_t)(GPU_INTEL_GTT_PAGE_SIZE - 1u));
+    physical = port_x86_64_bus_phys(page);
+    if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u) {
+        kshell_printf("gpu: plane-linear RAM has no aligned physical address\n");
+        goto out;
+    }
+    {
+        k_u32_t i;
+        for (i = 0u; i < info->framebuffer.pte_count; i++) {
+            if (port_x86_64_bus_phys(page + i * GPU_INTEL_GTT_PAGE_SIZE) !=
+                physical + i * GPU_INTEL_GTT_PAGE_SIZE) {
+                kshell_printf("gpu: plane-linear RAM is not physically contiguous\n");
+                goto out;
+            }
+        }
+    }
+
+    source = gpu_intel_map_aperture(info->framebuffer.surface, info->framebuffer.bytes);
+    if (source == NULL) {
+        kshell_printf("gpu: plane-linear cannot map the source aperture\n");
+        goto out;
+    }
+    memset(page, 0, info->framebuffer.bytes);
+    gpu_intel_detile_x((const k_u8_t *)source, page, width, height, info->framebuffer.pitch,
+                       ctl.bpp);
+
+    rc = gpu_intel_ggtt_borrow(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &s_linear.run,
+                               physical, &s_linear.saved_gtt);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: plane-linear GGTT install failed (rc=%d)\n", (int)rc);
+        goto out;
+    }
+    run_installed = true;
+
+    kinfo("gpu: plane-linear: writing PLANE_CTL 0x%08x -> 0x%08x, SURF 0x%08x -> 0x%08x",
+          (unsigned)control, (unsigned)new_control, (unsigned)surface, (unsigned)new_surface);
+    k_logfile_flush();
+
+    if (!gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: plane-linear timed out waiting for vblank\n");
+        goto out;
+    }
+    display_touched = true;
+    if (!gpu_intel_plane_program(info, new_control, new_stride, new_surface)) {
+        kshell_printf("gpu: plane-linear registers did not read back\n");
+        goto out;
+    }
+    if (!gpu_intel_wait_frame(info) || !gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: plane-linear timed out waiting for scanout\n");
+        goto out;
+    }
+    if ((gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != new_surface) {
+        kshell_printf("gpu: plane-linear SURFLIVE is not the new surface\n");
+        goto out;
+    }
+
+    s_linear.active = true;
+    s_linear.allocation = allocation;
+    s_linear.page = page;
+    s_linear.physical = physical;
+    s_linear.old_control = control;
+    s_linear.old_stride = stride;
+    s_linear.old_surface = surface;
+
+    info->plane_control = new_control;
+    info->plane_stride = new_stride;
+    info->plane_surface = new_surface;
+    info->framebuffer.tiling = GPU_INTEL_TILE_LINEAR;
+    info->framebuffer.surface = new_surface;
+    info->framebuffer.phys = physical;
+    info->framebuffer.pte_start = s_linear.run.start;
+    info->framebuffer.pte_count = s_linear.run.count;
+    info->framebuffer.contiguous = true;
+
+    port_x86_64_fb_set_format(ctl.format == GPU_INTEL_FORMAT_RGB_565 ? FB_FORMAT_RGB565
+                                                                     : FB_FORMAT_XRGB8888,
+                              ctl.bpp * 8u);
+    if (gpu_intel_present_ready(info)) {
+        k_fb_ops_register(&s_gpu_intel_present_ops, info);
+        kinfo("gpu: Intel page-flip backend ready (%ux%u linear %s)",
+              (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height,
+              gpu_intel_format_name(ctl.format));
+    }
+
+    kshell_printf("gpu: plane-linear active: linear %s, SURF 0x%08x, SURFLIVE 0x%08x\n",
+                  gpu_intel_format_name(ctl.format), (unsigned)new_surface,
+                  (unsigned)(gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK));
+    ok = true;
+
+out:
+    if (!ok && display_touched) {
+        if (!gpu_intel_plane_restore(info, control, stride, surface) ||
+            !gpu_intel_wait_frame(info) ||
+            (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != surface) {
+            kerror(
+                "gpu: plane-linear rollback is not live; keeping new GGTT mapping and RAM alive");
+            keep_buffer = true;
+            run_installed = false;
+        } else {
+            kinfo("gpu: plane-linear: restored original plane");
+        }
+    }
+    if (!ok && run_installed) {
+        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &s_linear.run,
+                                   s_linear.saved_gtt) != GPU_INTEL_GGTT_OK) {
+            kerror("gpu: plane-linear could not restore GGTT; keeping RAM alive");
+            keep_buffer = true;
+        }
+    }
+    if (!ok && allocation != NULL && !keep_buffer) {
+        kmm_free(allocation);
+    }
+    return ok ? 0 : -1;
+}
 
 static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
 {
@@ -1246,7 +1537,7 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
     }
 
     if (gpu_intel_present_ready(info)) {
-        k_fb_ops_register(&s_gpu_intel_present_ops, &g_gpu_intel);
+        k_fb_ops_register(&s_gpu_intel_present_ops, info);
         kinfo("gpu: Intel page-flip backend ready (%ux%u linear RGB565)",
               (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
     }
@@ -1275,6 +1566,16 @@ int gpu_intel_command(int argc, char **argv)
         return gpu_intel_flip(&g_gpu_intel, argc == 3) == 0 ? KSHELL_OK : KSHELL_ERROR;
     }
 
-    kshell_printf("usage: gpu [info|ggtt-test|flip [--yes]]\n");
+    if ((argc == 2 && strcmp(argv[1], "plane-linear") == 0) ||
+        (argc == 3 && strcmp(argv[1], "plane-linear") == 0 && strcmp(argv[2], "--yes") == 0)) {
+        if (g_gpu_intel.common.probe_result != GPU_PROBE_OK) {
+            kshell_printf("gpu: plane-linear refused: probe result %d\n",
+                          (int)g_gpu_intel.common.probe_result);
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_plane_linear(&g_gpu_intel, argc == 3) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
+    kshell_printf("usage: gpu [info|ggtt-test|flip [--yes]|plane-linear [--yes]]\n");
     return KSHELL_USAGE;
 }

@@ -17,6 +17,7 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/fb.h"
 
 static const struct k_fb_ops *g_ops;
 static void *g_context;
@@ -84,10 +85,10 @@ static bool clip(const struct k_fb_surface *surface, const struct k_fb_rect *rec
     return true;
 }
 
-/* The software fill: a word of four pixels at a time, so a rectangle of
- * one colour does not cost a store a pixel. */
+/* The software fill: a word of pixels at a time. RGB565 writes 16-bit
+ * values, XRGB8888 writes 32-bit values in the same picture layout. */
 static int software_fill(const struct k_fb_surface *surface, const struct k_fb_rect *rect,
-                         k_u16_t pixel)
+                         k_u32_t pixel)
 {
     struct k_fb_rect part;
     k_i32_t row;
@@ -96,18 +97,51 @@ static int software_fill(const struct k_fb_surface *surface, const struct k_fb_r
         return 0;
     }
 
+    if (surface->format == FB_FORMAT_XRGB8888) {
+        k_u32_t *base = (k_u32_t *)(void *)surface->base;
+
+        for (row = 0; row < part.h; row++) {
+            k_u32_t *line =
+                base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
+            k_i32_t column = 0;
+            k_i32_t count = part.w;
+            k_u64_t word = ((k_u64_t)pixel << 32) | (k_u64_t)pixel;
+
+            while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
+                line[column] = pixel;
+                column++;
+                count--;
+            }
+
+            while (count >= 2) {
+                __builtin_memcpy(line + column, &word, sizeof(word));
+                column += 2;
+                count -= 2;
+            }
+
+            while (count > 0) {
+                line[column] = pixel;
+                column++;
+                count--;
+            }
+        }
+
+        return 0;
+    }
+
     for (row = 0; row < part.h; row++) {
         k_u16_t *line =
             surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
         k_i32_t column = 0;
         k_i32_t count = part.w;
-        k_u64_t word = (k_u64_t)pixel;
+        k_u16_t px = (k_u16_t)pixel;
+        k_u64_t word = (k_u64_t)px;
 
         word |= word << 16;
         word |= word << 32;
 
         while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
-            line[column] = pixel;
+            line[column] = px;
             column++;
             count--;
         }
@@ -119,7 +153,7 @@ static int software_fill(const struct k_fb_surface *surface, const struct k_fb_r
         }
 
         while (count > 0) {
-            line[column] = pixel;
+            line[column] = px;
             column++;
             count--;
         }
@@ -137,18 +171,18 @@ int k_fb_fill(const struct k_fb_surface *surface, const struct k_fb_rect *rect, 
         return g_ops->fill(context, rect, pixel);
     }
 
-    return software_fill(surface, rect, (k_u16_t)pixel);
+    return software_fill(surface, rect, pixel);
 }
 
 /* The software blit: the rectangle of the source, a line at a time. */
 static int software_blit(const struct k_fb_surface *surface, const struct k_fb_rect *dst,
                          const void *src, k_u32_t src_pitch, k_u32_t src_x, k_u32_t src_y)
 {
-    const k_u16_t *pixels = (const k_u16_t *)src;
     struct k_fb_rect part;
+    k_u8_t pixel_bytes;
     k_i32_t row;
 
-    if (pixels == NULL || src_pitch == 0u) {
+    if (src == NULL || src_pitch == 0u) {
         return KERR_INVAL;
     }
 
@@ -162,13 +196,18 @@ static int software_blit(const struct k_fb_surface *surface, const struct k_fb_r
         return KERR_INVAL;
     }
 
-    for (row = 0; row < part.h; row++) {
-        const k_u16_t *source = pixels + (k_size_t)(src_y + row) * (k_size_t)src_pitch +
-                                (k_size_t)src_x + (k_size_t)(part.x - dst->x);
-        k_u16_t *line =
-            surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
+    pixel_bytes = fb_pixel_bytes(surface->format);
 
-        memcpy(line, source, (k_size_t)part.w * sizeof(k_u16_t));
+    for (row = 0; row < part.h; row++) {
+        const k_u8_t *source =
+            (const k_u8_t *)src + ((k_size_t)(src_y + row) * (k_size_t)src_pitch + (k_size_t)src_x +
+                                   (k_size_t)(part.x - dst->x)) *
+                                      (k_size_t)pixel_bytes;
+        k_u8_t *line = (k_u8_t *)(void *)surface->base +
+                       ((k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x) *
+                           (k_size_t)pixel_bytes;
+
+        memcpy(line, source, (k_size_t)part.w * (k_size_t)pixel_bytes);
     }
 
     return 0;

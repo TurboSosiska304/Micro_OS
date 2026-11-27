@@ -40,6 +40,7 @@
 #include "config/config.h"
 #include "config/session.h"
 #include "kshell/kshell.h"
+#include "port_x86_64_bt.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_gpu.h"
 #include "port_x86_64_input.h"
@@ -376,6 +377,7 @@ static void init_task(void *arg)
     if (kshell_init() != KSHELL_OK) {
         kwarn("x86-64: not every command of the shell is registered");
     }
+    port_x86_64_bt_register();
 
     /*
      * The colours of the log of the session, from the first prompt: a warning

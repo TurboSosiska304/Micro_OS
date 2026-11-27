@@ -12,6 +12,7 @@
 #include "gpu_intel.h"
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
+#include "port_x86_64_screen.h"
 
 #include <string.h>
 
@@ -174,6 +175,13 @@ void reset_gpu_pci_stub(void)
     s_device = 0u;
     s_revision = 0u;
     s_ticks = 0u;
+}
+
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp);
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp)
+{
+    (void)format;
+    (void)bpp;
 }
 
 static void test_laptop_identity(void)

@@ -52,6 +52,7 @@ struct k_fb_surface {
     k_u32_t width;  /* the pixels of a line of the picture */
     k_u32_t height; /* the lines of the picture */
     k_u32_t pitch;  /* the pixels from one line to the next, padding included */
+    k_u8_t format;  /* FB_FORMAT_*; 0 means RGB565 */
 };
 
 /*

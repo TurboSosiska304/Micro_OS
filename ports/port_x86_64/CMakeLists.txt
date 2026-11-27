@@ -142,6 +142,9 @@ add_compile_options(
 )
 
 file(GLOB KERNEL_SOURCES "${KERNEL_DIR}/src/*.c")
+# The PS/2 mouse decoder is x86-only; it lives in the port, not in the
+# portable kernel, so the ESP32 DRAM budget does not pay for it.
+list(APPEND KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/input_ps2_mouse.c")
 
 # The shell is the kernel's own interpreter: the port supplies the console
 # under it and nothing else, so the commands are the same as on the board.
@@ -383,6 +386,7 @@ set(USERLAND_CFLAGS
     ${MICRO_OS_PORT_C_DIALECT} -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
+    -DMICROOS_USERLAND
 )
 set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
