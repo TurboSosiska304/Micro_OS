@@ -110,6 +110,9 @@ static int fill_strips(struct uiprog *program, int x, int y, int w, int h, k_u16
     return 0;
 }
 
+static int program_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color);
+static int program_blit(struct uiprog *program, int x, int y, int w, int h, const k_u16_t *pixels);
+
 /* The two calls of the target of `ui/draw.h` on the screen of the machine. */
 static int target_fill(void *context, const struct ui_rect *rect, k_u16_t color)
 {
@@ -117,7 +120,7 @@ static int target_fill(void *context, const struct ui_rect *rect, k_u16_t color)
         return -1;
     }
 
-    return fill_strips(context, rect->x, rect->y, rect->w, rect->h, color);
+    return program_fill(context, rect->x, rect->y, rect->w, rect->h, color);
 }
 
 static int target_blit(void *context, const struct ui_rect *rect, const k_u16_t *pixels)
@@ -126,11 +129,74 @@ static int target_blit(void *context, const struct ui_rect *rect, const k_u16_t 
         return -1;
     }
 
-    return blit_strips(context, rect->x, rect->y, rect->w, rect->h, pixels);
+    return program_blit(context, rect->x, rect->y, rect->w, rect->h, pixels);
+}
+
+/* A rectangle in the RAM backbuffer: no device, no header, one row at a time. */
+static int backbuffer_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color)
+{
+    int pitch = (int)program->info.width;
+    int row;
+
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > pitch || y + h > (int)program->info.height) {
+        return -1;
+    }
+
+    for (row = 0; row < h; row++) {
+        k_u16_t *line = program->backbuffer + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
+        int column = 0;
+        k_u64_t word = (k_u64_t)color;
+        int count = w;
+
+        word |= word << 16;
+        word |= word << 32;
+
+        while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
+            line[column] = color;
+            column++;
+            count--;
+        }
+        while (count >= 4) {
+            __builtin_memcpy(line + column, &word, sizeof(word));
+            column += 4;
+            count -= 4;
+        }
+        while (count > 0) {
+            line[column] = color;
+            column++;
+            count--;
+        }
+    }
+
+    return 0;
+}
+
+static int backbuffer_blit(struct uiprog *program, int x, int y, int w, int h,
+                           const k_u16_t *pixels)
+{
+    int pitch = (int)program->info.width;
+    int row;
+    size_t row_bytes;
+
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > pitch || y + h > (int)program->info.height ||
+        pixels == NULL) {
+        return -1;
+    }
+
+    row_bytes = (size_t)w * sizeof(k_u16_t);
+    for (row = 0; row < h; row++) {
+        k_u16_t *dst = program->backbuffer + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
+        const k_u16_t *src = pixels + (size_t)row * (size_t)w;
+
+        memcpy(dst, src, row_bytes);
+    }
+
+    return 0;
 }
 
 /* A rectangle of the program: the window of the desktop when there is one,
- * the device of the port otherwise. */
+ * the RAM backbuffer when the screen composes before the present, the device
+ * otherwise. */
 static int program_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color)
 {
     if (program->desktop) {
@@ -142,6 +208,10 @@ static int program_fill(struct uiprog *program, int x, int y, int w, int h, k_u1
         rect.h = h;
 
         return wm_client_fill(&program->client, &rect, color);
+    }
+
+    if (program->backbuffer != NULL) {
+        return backbuffer_fill(program, x, y, w, h, color);
     }
 
     return fill_strips(program, x, y, w, h, color);
@@ -158,6 +228,10 @@ static int program_blit(struct uiprog *program, int x, int y, int w, int h, cons
         rect.h = h;
 
         return wm_client_blit(&program->client, &rect, pixels);
+    }
+
+    if (program->backbuffer != NULL) {
+        return backbuffer_blit(program, x, y, w, h, pixels);
     }
 
     return blit_strips(program, x, y, w, h, pixels);
@@ -467,6 +541,12 @@ void uiprog_close(struct uiprog *program)
         return;
     }
 
+    if (program->backbuffer != NULL) {
+        (void)munmap(program->backbuffer, program->backbuffer_size);
+        program->backbuffer = NULL;
+        program->backbuffer_size = 0u;
+    }
+
     if (program->input >= 0) {
         (void)close(program->input);
         program->input = -1;
@@ -753,7 +833,7 @@ void uiprog_clear(struct uiprog *program, k_u16_t color)
         return;
     }
 
-    (void)fill_strips(program, 0, 0, (int)program->info.width, (int)program->info.height, color);
+    (void)program_fill(program, 0, 0, (int)program->info.width, (int)program->info.height, color);
 }
 
 struct wm_client *uiprog_window(struct uiprog *program)
@@ -805,4 +885,111 @@ bool uiprog_pointer(const struct uiprog *program, int *x, int *y, bool *pressed)
     }
 
     return true;
+}
+
+int uiprog_enable_backbuffer(struct uiprog *program)
+{
+    size_t bytes;
+    size_t size;
+    void *mapping;
+
+    if (program == NULL || program->desktop || program->fb < 0) {
+        return -1;
+    }
+
+    if (program->backbuffer != NULL) {
+        return 0;
+    }
+
+    bytes = (size_t)program->info.width * (size_t)program->info.height * FB_PIXEL_BYTES;
+    size = (bytes + KSYS_PAGE_SIZE - 1u) / KSYS_PAGE_SIZE * KSYS_PAGE_SIZE;
+
+    mapping =
+        mmap(NULL, size, KSYS_PROT_READ | KSYS_PROT_WRITE, KSYS_MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (mapping == MAP_FAILED) {
+        return -1;
+    }
+
+    memset(mapping, 0, size);
+    program->backbuffer = (k_u16_t *)mapping;
+    program->backbuffer_size = size;
+
+    return 0;
+}
+
+static int present_rect(struct uiprog *program, int x, int y, int w, int h)
+{
+    struct fb_rect header;
+    size_t row_bytes;
+    int rows;
+    int row;
+    int pitch = (int)program->info.width;
+
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    if (x < 0 || y < 0 || x + w > (int)program->info.width || y + h > (int)program->info.height) {
+        return -1;
+    }
+
+    row_bytes = (size_t)w * FB_PIXEL_BYTES;
+    rows = (int)((KSYS_MAX_IO - sizeof(header)) / row_bytes);
+    if (rows < 1) {
+        return -1;
+    }
+
+    for (row = 0; row < h; row += rows) {
+        int take = h - row < rows ? h - row : rows;
+        int line;
+
+        header.x = (k_u16_t)x;
+        header.y = (k_u16_t)(y + row);
+        header.w = (k_u16_t)w;
+        header.h = (k_u16_t)take;
+
+        memcpy(program->transfer, &header, sizeof(header));
+
+        for (line = 0; line < take; line++) {
+            const k_u16_t *src =
+                program->backbuffer + (k_size_t)(y + row + line) * (k_size_t)pitch + (k_size_t)x;
+            unsigned char *dst = program->transfer + sizeof(header) + (size_t)line * row_bytes;
+
+            memcpy(dst, src, row_bytes);
+        }
+
+        if (write(program->fb, program->transfer, sizeof(header) + (size_t)take * row_bytes) !=
+            (long)(sizeof(header) + (size_t)take * row_bytes)) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int uiprog_present(struct uiprog *program, const struct ui_rect *rects, int count)
+{
+    int index;
+
+    if (program == NULL) {
+        return -1;
+    }
+    if (program->desktop || program->backbuffer == NULL) {
+        return 0;
+    }
+    if (rects == NULL || count <= 0) {
+        return 0;
+    }
+
+    for (index = 0; index < count; index++) {
+        const struct ui_rect *rect = &rects[index];
+
+        if (rect->w <= 0 || rect->h <= 0) {
+            continue;
+        }
+        if (present_rect(program, rect->x, rect->y, rect->w, rect->h) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
 }
