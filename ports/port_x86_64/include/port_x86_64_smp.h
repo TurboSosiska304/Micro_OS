@@ -73,6 +73,6 @@ int port_x86_64_smp_register(void);
  * The first C of an application processor (src/smp.c). The trampoline of the
  * port jumps here with the number of the core in RDI; it never returns.
  */
-[[noreturn]] void port_x86_64_ap_entry(k_u32_t cpu);
+K_NORETURN void port_x86_64_ap_entry(k_u32_t cpu);
 
 #endif /* MICRO_OS_PORT_X86_64_SMP_H */

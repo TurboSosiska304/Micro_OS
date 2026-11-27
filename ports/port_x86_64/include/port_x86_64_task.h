@@ -52,7 +52,7 @@ void port_x86_64_task_set_space(k_u64_t cr3);
  * CR2 and checked that the fault came from ring 0.
  */
 bool port_x86_64_task_guard_fault(k_u64_t address);
-[[noreturn]] void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip);
+K_NORETURN void port_x86_64_task_stack_fault(k_u64_t address, k_u64_t vector, k_u64_t rip);
 
 /* Is the task that runs now a program of ring 3? */
 bool port_x86_64_task_is_user(void);
@@ -99,7 +99,7 @@ void port_x86_64_ap_sched_init(k_u32_t cpu, k_u64_t stack_top);
  * resumes into, and it never returns; the interrupts are on in it, because
  * the timer of the core is what ends the wait.
  */
-[[noreturn]] void port_x86_64_ap_idle(void);
+K_NORETURN void port_x86_64_ap_idle(void);
 
 /*
  * Say whether the local APIC timer of a core started. A core without a clock
@@ -114,7 +114,7 @@ void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready);
  * task was started) and the context of an application processor are both this
  * loop, and it is what the port returns to when the last task of a core ends.
  */
-[[noreturn]] void port_x86_64_idle(void);
+K_NORETURN void port_x86_64_idle(void);
 
 /*
  * Give the CPU to the boot context of the core (the idle loop of the core 0)

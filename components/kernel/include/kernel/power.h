@@ -74,9 +74,9 @@ int k_power_shutdown(enum k_power_action action, bool force);
 int k_power_sync(void);
 
 /* Restart the board. Does not return. */
-[[noreturn]] void k_reboot(void);
+K_NORETURN void k_reboot(void);
 
 /* Stop the CPU forever. Does not return. */
-[[noreturn]] void k_halt(void);
+K_NORETURN void k_halt(void);
 
 #endif /* MICRO_OS_KERNEL_POWER_H */
