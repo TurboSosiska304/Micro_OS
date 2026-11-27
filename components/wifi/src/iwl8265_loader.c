@@ -11,6 +11,7 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/port.h"
 
 /* CSR/HBUS offsets in BAR0. */
 #define IWL_CSR_INT 0x008u
@@ -207,13 +208,23 @@ static int wait_dma_done(const struct wifi_iwl8265_load_ops *ops, const char *wh
 }
 
 static int load_chunk(const struct wifi_iwl8265_load_ops *ops, k_u32_t destination,
-                      const k_u8_t *data, k_u32_t length)
+                      const k_u8_t *data, k_u32_t length, k_u8_t *bounce, k_u64_t bounce_phys)
 {
     k_u64_t physical = ops->dma_phys(ops->context, data);
     k_u32_t high;
 
-    if (physical == 0u || (physical & 0xFFFu) != 0u || length == 0u || length > IWL_DMA_CHUNK_MAX) {
+    if (length == 0u || length > IWL_DMA_CHUNK_MAX) {
         return -1;
+    }
+    if (physical == 0u || (physical & 0xFFFu) != 0u) {
+        if (bounce == NULL || bounce_phys == 0u || (bounce_phys & 0xFFFu) != 0u) {
+            return -1;
+        }
+        memcpy(bounce, data, length);
+        physical = ops->dma_phys(ops->context, bounce);
+        if (physical == 0u || (physical & 0xFFFu) != 0u) {
+            return -1;
+        }
     }
     high = (k_u32_t)(physical >> 28) & 0xFu;
 
@@ -234,7 +245,8 @@ static int load_chunk(const struct wifi_iwl8265_load_ops *ops, k_u32_t destinati
 }
 
 static int load_section(const struct wifi_iwl8265_load_ops *ops,
-                        const struct wifi_iwl8265_fw_section *section)
+                        const struct wifi_iwl8265_fw_section *section, k_u8_t *bounce,
+                        k_u64_t bounce_phys)
 {
     k_u32_t done = 0u;
 
@@ -245,7 +257,7 @@ static int load_section(const struct wifi_iwl8265_load_ops *ops,
         if (amount > IWL_DMA_CHUNK_MAX) {
             amount = IWL_DMA_CHUNK_MAX;
         }
-        if (load_chunk(ops, destination, section->data + done, amount) != 0) {
+        if (load_chunk(ops, destination, section->data + done, amount, bounce, bounce_phys) != 0) {
             return -1;
         }
         done += amount;
@@ -330,16 +342,20 @@ static int split_image(const struct wifi_iwl8265_fw *firmware, struct image_bloc
 static int allocate_dma(const struct wifi_iwl8265_load_ops *ops, k_size_t size, k_size_t alignment,
                         void **buffer, k_u64_t *physical)
 {
-    if (size == 0u || alignment == 0u || (alignment & (alignment - 1u)) != 0u ||
-        ops->alloc == NULL || ops->free == NULL || ops->dma_phys == NULL) {
+    if (size == 0u || alignment == 0u || (alignment & (alignment - 1u)) != 0u || ops == NULL ||
+        ops->dma_phys == NULL) {
         return -1;
     }
-    *buffer = ops->alloc(ops->context, size, alignment, physical);
-    if (*buffer == NULL || *physical == 0u || (*physical & (alignment - 1u)) != 0u ||
-        ops->dma_phys(ops->context, *buffer) != *physical) {
-        if (*buffer != NULL) {
-            ops->free(ops->context, *buffer, size);
-        }
+
+    *buffer = k_port_dma_alloc(size, alignment);
+    if (*buffer == NULL) {
+        *physical = 0u;
+        return -1;
+    }
+
+    *physical = ops->dma_phys(ops->context, *buffer);
+    if (*physical == 0u || (*physical & (alignment - 1u)) != 0u) {
+        k_port_dma_free(*buffer);
         *buffer = NULL;
         *physical = 0u;
         return -1;
@@ -400,7 +416,7 @@ static int build_context(const struct wifi_iwl8265_load_ops *ops, const struct i
      * zero unless explicitly represented by the parsed image. */
     for (i = 0u; i < image->paging_count; i++) {
         if (i >= 64u) {
-            ops->free(ops->context, context, size);
+            k_port_dma_free(context);
             return -1;
         }
         put_le64(context + layout.offset_dram + 1024u + i * 8u,
@@ -412,8 +428,9 @@ static int build_context(const struct wifi_iwl8265_load_ops *ops, const struct i
     return 0;
 }
 
-static int wait_alive(const struct wifi_iwl8265_load_ops *ops, const k_u8_t *rx, k_size_t rx_size,
-                      k_u32_t *read_index, struct wifi_iwl8265_alive *alive)
+static int wait_alive(const struct wifi_iwl8265_load_ops *ops, const k_u8_t *rbd_ring,
+                      const k_u8_t *rx, k_size_t rx_size, k_u32_t *read_index,
+                      struct wifi_iwl8265_alive *alive)
 {
     k_u64_t start = ops->now_ms(ops->context);
 
@@ -425,18 +442,18 @@ static int wait_alive(const struct wifi_iwl8265_load_ops *ops, const k_u8_t *rx,
             return -1;
         }
         if (index != *read_index) {
-            k_u32_t rbd = get_le32(rx + ((k_size_t)(*read_index & 255u) * 8u));
-            k_u32_t buffer_offset = rbd >> 8u;
+            k_u32_t rbd = get_le32(rbd_ring + ((k_size_t)(*read_index & 255u) * 8u));
             const k_u8_t *packet;
             k_u32_t length;
 
-            if ((rbd & 1u) == 0u || buffer_offset > rx_size - 4u) {
+            if ((rbd & 1u) == 0u) {
                 kerror("wifi: invalid RX descriptor 0x%08x", (unsigned)rbd);
                 return -1;
             }
-            packet = rx + buffer_offset;
+            /* Single-buffer loader: ALIVE is written at the start of rx. */
+            packet = rx;
             length = get_le32(packet) & 0x3FFFu;
-            if (length > rx_size - buffer_offset || length < 12u) {
+            if (length > rx_size || length < 12u) {
                 kerror("wifi: invalid RX packet length %u", (unsigned)length);
                 return -1;
             }
@@ -479,11 +496,13 @@ int wifi_iwl8265_load(const struct wifi_iwl8265_fw *firmware,
     k_u8_t *used = NULL;
     k_u8_t *status = NULL;
     k_u8_t *chunk = NULL;
+    k_u8_t *bounce = NULL;
     k_u8_t *context = NULL;
     k_u64_t rbd_phys = 0u;
     k_u64_t used_phys = 0u;
     k_u64_t status_phys = 0u;
     k_u64_t chunk_phys = 0u;
+    k_u64_t bounce_phys = 0u;
     k_u64_t context_phys = 0u;
     k_size_t i;
     k_u32_t value;
@@ -504,7 +523,8 @@ int wifi_iwl8265_load(const struct wifi_iwl8265_fw *firmware,
     if (allocate_dma(ops, 256u * 8u, 256u, (void **)&rbd, &rbd_phys) != 0 ||
         allocate_dma(ops, 256u * 8u, 256u, (void **)&used, &used_phys) != 0 ||
         allocate_dma(ops, 32u, 16u, (void **)&status, &status_phys) != 0 ||
-        allocate_dma(ops, IWL_DMA_CHUNK_MAX, 4096u, (void **)&chunk, &chunk_phys) != 0) {
+        allocate_dma(ops, IWL_DMA_CHUNK_MAX, 4096u, (void **)&chunk, &chunk_phys) != 0 ||
+        allocate_dma(ops, IWL_DMA_CHUNK_MAX, 4096u, (void **)&bounce, &bounce_phys) != 0) {
         goto out;
     }
 
@@ -599,7 +619,7 @@ int wifi_iwl8265_load(const struct wifi_iwl8265_fw *firmware,
             section->kind == WIFI_IWL8265_SECTION_INIT || section->length == 0u) {
             continue;
         }
-        if (load_section(ops, section) != 0) {
+        if (load_section(ops, section, bounce, bounce_phys) != 0) {
             goto out;
         }
         bit = (i & 15u) < 15u ? (1u << (i & 15u)) : 0u;
@@ -624,24 +644,27 @@ int wifi_iwl8265_load(const struct wifi_iwl8265_fw *firmware,
     ops->write64(ops->context, IWL_CSR_CTXT_INFO_BA, context_phys);
     ops->write(ops->context, IWL_CSR_INT_MASK, IWL_CSR_INT_FH_TX);
 
-    result = wait_alive(ops, chunk, IWL_DMA_CHUNK_MAX, &read_index, alive);
+    result = wait_alive(ops, rbd, chunk, IWL_DMA_CHUNK_MAX, &read_index, alive);
 
 out:
     ops->write(ops->context, IWL_CSR_INT_MASK, 0u);
-    if (context != NULL && context_phys != 0u && ops->free != NULL) {
-        ops->free(ops->context, context, WIFI_IWL8265_CONTEXT_BYTES);
+    if (context != NULL) {
+        k_port_dma_free(context);
+    }
+    if (bounce != NULL) {
+        k_port_dma_free(bounce);
     }
     if (chunk != NULL) {
-        ops->free(ops->context, chunk, IWL_DMA_CHUNK_MAX);
+        k_port_dma_free(chunk);
     }
     if (status != NULL) {
-        ops->free(ops->context, status, 32u);
+        k_port_dma_free(status);
     }
     if (used != NULL) {
-        ops->free(ops->context, used, 256u * 8u);
+        k_port_dma_free(used);
     }
     if (rbd != NULL) {
-        ops->free(ops->context, rbd, 256u * 8u);
+        k_port_dma_free(rbd);
     }
     return result;
 }

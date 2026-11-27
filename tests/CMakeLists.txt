@@ -13,11 +13,13 @@ if(NOT ESP_PLATFORM)
         cases/test_wifi_8265_regs.c
         cases/test_wifi_8265_power.c
         cases/test_wifi_8265_attach.c
+        cases/test_wifi_8265_virtual.c
         cases/test_board.c
         cases/test_log.c
         cases/test_logfile.c
         cases/test_ansi.c
         cases/test_port.c
+        cases/test_port_dma.c
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
         cases/test_blockdev_view.c

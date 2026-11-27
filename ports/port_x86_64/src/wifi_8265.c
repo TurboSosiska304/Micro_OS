@@ -91,11 +91,21 @@ static void wifi_8265_reason(const char *text)
     g_state.reason[i] = '\0';
 }
 
+static void wifi_8265_set_phase(enum wifi_8265_phase phase, const char *reason)
+{
+    g_state.phase = phase;
+    wifi_8265_reason(reason);
+    if (reason != NULL && reason[0] != '\0') {
+        klog(K_LOG_LEVEL_INFO, "wifi: state %s: %s", wifi_8265_phase_name(phase), reason);
+    } else {
+        klog(K_LOG_LEVEL_INFO, "wifi: state %s", wifi_8265_phase_name(phase));
+    }
+}
+
 static int wifi_8265_fail(int error, const char *reason)
 {
-    g_state.phase = WIFI_8265_PHASE_FAILED;
     g_state.error = error;
-    wifi_8265_reason(reason);
+    wifi_8265_set_phase(WIFI_8265_PHASE_FAILED, reason);
     return error;
 }
 
@@ -351,9 +361,8 @@ int wifi_8265_attach(void)
     iwl8265_csr_write(IWL8265_CSR_INT, 0xFFFFFFFFu);
     iwl8265_csr_write(IWL8265_CSR_FH_INT_STATUS, 0xFFFFFFFFu);
 
-    g_state.phase = WIFI_8265_PHASE_ATTACHED;
     g_state.error = KERR_NONE;
-
+    wifi_8265_set_phase(WIFI_8265_PHASE_ATTACHED, "PCI function mapped");
     kinfo("wifi: Intel 8265 (%04x:%04x rev %02x) at %02x:%02x.%x, CSR_HW_REV 0x%08x",
           (unsigned)g_state.vendor, (unsigned)g_state.device, (unsigned)g_state.revision,
           (unsigned)g_state.bus, (unsigned)g_state.slot, (unsigned)g_state.function,
@@ -442,8 +451,7 @@ int wifi_8265_power_up(void)
 
     g_state.hw_if_config = hw_config;
     g_state.gp_cntrl = gp;
-    g_state.phase = WIFI_8265_PHASE_POWERED;
     g_state.error = KERR_NONE;
-    g_state.reason[0] = '\0';
+    wifi_8265_set_phase(WIFI_8265_PHASE_POWER_UP, "MAC clock ready");
     return 0;
 }

@@ -144,21 +144,25 @@ void test_wifi_8265_regs(void)
 
     /* The phase names are the ones the shell prints, and a failed step
      * leaves the card in FAILED instead of moving it to the next phase. */
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_NONE), "none");
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_ATTACHED), "attached");
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_POWERED), "powered");
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_FIRMWARE_READY), "firmware-ready");
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_ALIVE), "alive");
-    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_FAILED), "failed");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_DOWN), "DOWN");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_ATTACHED), "ATTACHED");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_POWER_UP), "POWER_UP");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_FW_LOADING), "FW_LOADING");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_ALIVE), "ALIVE");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_READY), "READY");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_FAILED), "FAILED");
+    KT_CHECK_STR_EQ(wifi_8265_phase_name(WIFI_8265_PHASE_SKIP), "SKIP");
 
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_NONE, true), WIFI_8265_PHASE_ATTACHED);
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_ATTACHED, true), WIFI_8265_PHASE_POWERED);
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_POWERED, true),
-                    WIFI_8265_PHASE_FIRMWARE_READY);
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_FIRMWARE_READY, true),
-                    WIFI_8265_PHASE_ALIVE);
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_NONE, false), WIFI_8265_PHASE_FAILED);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_DOWN, true), WIFI_8265_PHASE_ATTACHED);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_ATTACHED, true),
+                    WIFI_8265_PHASE_POWER_UP);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_POWER_UP, true),
+                    WIFI_8265_PHASE_FW_LOADING);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_FW_LOADING, true), WIFI_8265_PHASE_ALIVE);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_ALIVE, true), WIFI_8265_PHASE_READY);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_DOWN, false), WIFI_8265_PHASE_FAILED);
     KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_ATTACHED, false), WIFI_8265_PHASE_FAILED);
     KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_FAILED, true), WIFI_8265_PHASE_FAILED);
-    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_ALIVE, true), WIFI_8265_PHASE_ALIVE);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_READY, true), WIFI_8265_PHASE_READY);
+    KT_CHECK_INT_EQ(wifi_8265_phase_after(WIFI_8265_PHASE_SKIP, true), WIFI_8265_PHASE_SKIP);
 }

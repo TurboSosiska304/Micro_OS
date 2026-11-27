@@ -1,4 +1,4 @@
-# Micro OS — the contract of the platform port, 1.15, as it was recorded.
+# Micro OS — the contract of the platform port, 1.16, as it was recorded.
 #
 # This file is the golden record of kernel/port/*.h: the functions a machine
 # has to implement to be a port of this kernel. `make integrity` compares it
@@ -23,8 +23,8 @@
 #     one call that moved it without a header above (the cut of a sleep,
 #     ADR 0046) is a call of that substrate.
 #
-# Eleven headers, 59 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
-# mem 6, mm 11, net 8, power 3, time 2.
+# Eleven headers, 61 functions: console 5, cpu 2, exec 8, info 4, kv 5, lock 6,
+# mem 8, mm 11, net 8, power 3, time 2.
 #
 # The two calls of kernel/port/cpu.h carry a weak default in the portable
 # kernel (components/kernel/src/cpu_default.c): a port that predates them is
@@ -33,7 +33,7 @@
 # override the default for them and does not fail a port that does not. The
 # wake of a core (ADR 0034) is the third of them: a port without a wake-up
 # interrupt of its own leaves the task to the next tick of the core.
-api 1 15
+api 1 16
 
 # kernel/port/console.h — the bytes in and out
 k_port_write kernel/port/console.h
@@ -102,6 +102,8 @@ k_port_mm_phys kernel/port/mm.h
 k_port_mm_unmap kernel/port/mm.h
 k_port_alloc kernel/port/mem.h
 k_port_free kernel/port/mem.h
+k_port_dma_alloc kernel/port/mem.h
+k_port_dma_free kernel/port/mem.h
 
 # kernel/port/net.h — TCP and UDP, a request and an answer
 k_port_net_connect kernel/port/net.h

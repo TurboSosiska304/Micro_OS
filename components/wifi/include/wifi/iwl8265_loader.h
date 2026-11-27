@@ -40,8 +40,6 @@ struct wifi_iwl8265_load_ops {
     void (*write_prph)(void *context, k_u32_t offset, k_u32_t value);
     k_u64_t (*dma_phys)(void *context, const void *buffer);
     k_u64_t (*now_ms)(void *context);
-    void *(*alloc)(void *context, k_size_t size, k_size_t alignment, k_u64_t *phys);
-    void (*free)(void *context, void *buffer, k_size_t size);
 };
 
 /*

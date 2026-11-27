@@ -73,6 +73,24 @@ static const char *wifi_detail(void)
     return g_wifi_info;
 }
 
+static void wifi_state_set(enum wifi_8265_phase phase, const char *reason)
+{
+    struct wifi_8265_state *live = (struct wifi_8265_state *)wifi_8265_state();
+    k_size_t i;
+
+    live->phase = phase;
+    live->reason[0] = '\0';
+    if (reason != NULL) {
+        for (i = 0u; i + 1u < sizeof(live->reason) && reason[i] != '\0'; i++) {
+            live->reason[i] = reason[i];
+        }
+        live->reason[i] = '\0';
+        klog(K_LOG_LEVEL_INFO, "wifi: state %s: %s", wifi_8265_phase_name(phase), reason);
+    } else {
+        klog(K_LOG_LEVEL_INFO, "wifi: state %s", wifi_8265_phase_name(phase));
+    }
+}
+
 static int wifi_mod_init(void)
 {
     const struct wifi_8265_state *state;
@@ -85,6 +103,7 @@ static int wifi_mod_init(void)
 
     state = wifi_8265_state();
     if (!state->present) {
+        wifi_state_set(WIFI_8265_PHASE_SKIP, "no Intel 8265 found");
         wifi_set_kmod(KMOD_SKIP, "no Intel 8265 found");
         return 0;
     }
@@ -168,21 +187,6 @@ static int wifi_read_firmware(void)
 
 /* --- x86-64 operations for the portable loader ------------------------------- */
 
-static void *wifi_dma_alloc(void *context, k_size_t size, k_size_t alignment, k_u64_t *phys)
-{
-    (void)context;
-    (void)alignment;
-    *phys = 0u;
-    return kmm_alloc(size, KMM_PRIORITY_KERNEL);
-}
-
-static void wifi_dma_free(void *context, void *buffer, k_size_t size)
-{
-    (void)context;
-    (void)size;
-    kmm_free(buffer);
-}
-
 static k_u32_t wifi_loader_read_prph(void *context, k_u32_t offset)
 {
     (void)context;
@@ -237,8 +241,6 @@ static const struct wifi_iwl8265_load_ops g_load_ops = {
     wifi_loader_write_prph,
     wifi_loader_phys,
     wifi_loader_now,
-    wifi_dma_alloc,
-    wifi_dma_free,
 };
 
 static void wifi_print_info(void)
@@ -257,8 +259,9 @@ static void wifi_print_info(void)
     kshell_printf("wifi: firmware API %u build %u, %s\n",
                   g_firmware_parsed ? (unsigned)g_firmware.api : 0u,
                   g_firmware_parsed ? (unsigned)g_firmware.build : 0u, version);
-    kshell_printf("wifi: phase %s, module %s, %s\n", wifi_8265_phase_name(state->phase),
-                  kmod_state_name(g_wifi_status), g_wifi_info);
+    kshell_printf("wifi: state %s, module %s, %s\n", wifi_8265_phase_name(state->phase),
+                  kmod_state_name(g_wifi_status),
+                  state->reason[0] != '\0' ? state->reason : g_wifi_info);
 }
 
 static int wifi_start(bool confirmed)
@@ -275,7 +278,7 @@ static int wifi_start(bool confirmed)
                       "use wifi start --yes\n");
         return KSHELL_OK;
     }
-    if (state->phase == WIFI_8265_PHASE_ALIVE) {
+    if (state->phase == WIFI_8265_PHASE_ALIVE || state->phase == WIFI_8265_PHASE_READY) {
         kshell_printf("wifi: firmware is already alive\n");
         return KSHELL_OK;
     }
@@ -286,35 +289,35 @@ static int wifi_start(bool confirmed)
 
     rc = wifi_read_firmware();
     if (rc == 2) {
+        wifi_state_set(WIFI_8265_PHASE_SKIP, "firmware missing or unsupported");
+        wifi_set_kmod(KMOD_SKIP, "no iwlwifi-8265-22..36.ucode file");
         kshell_printf("wifi: skipped: install iwlwifi-8265-36.ucode (API 22..36) in "
                       "/etc/firmware\n");
         return KSHELL_OK;
     }
     if (rc != 0) {
+        wifi_state_set(WIFI_8265_PHASE_FAILED, g_firmware_error);
         kshell_printf("wifi: %s\n", g_firmware_error);
         return KSHELL_ERROR;
     }
 
-    if (state->phase != WIFI_8265_PHASE_POWERED) {
+    if (state->phase != WIFI_8265_PHASE_POWER_UP) {
         kshell_printf("wifi: card phase is %s, cannot load firmware\n",
                       wifi_8265_phase_name(state->phase));
         return KSHELL_ERROR;
     }
 
+    wifi_state_set(WIFI_8265_PHASE_FW_LOADING, "loading ucode");
     rc = wifi_iwl8265_load(&g_firmware, &g_load_ops, &g_alive);
     if (rc != 0) {
+        wifi_state_set(WIFI_8265_PHASE_FAILED, "firmware load or ALIVE failed");
         wifi_set_kmod(KMOD_FAIL, "firmware load or ALIVE failed");
         kshell_printf("wifi: firmware load failed; see the timeout/error line above\n");
         return KSHELL_ERROR;
     }
 
-    /* The transport owns this snapshot; no radio operation is exposed yet. */
-    {
-        struct wifi_8265_state *live = (struct wifi_8265_state *)wifi_8265_state();
-        live->phase = WIFI_8265_PHASE_ALIVE;
-        live->error = KERR_NONE;
-        live->reason[0] = '\0';
-    }
+    wifi_state_set(WIFI_8265_PHASE_ALIVE, "alive notification received");
+    wifi_state_set(WIFI_8265_PHASE_READY, "transport ready, no radio backend");
     wifi_set_kmod(KMOD_DEGRADED, "firmware alive; no scan/association backend");
     kshell_printf("wifi: ALIVE status 0x%04x, LMAC %u.%u, UMAC %u.%u, SCD 0x%08x\n",
                   (unsigned)g_alive.status, (unsigned)g_alive.lmac_major,

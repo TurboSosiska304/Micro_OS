@@ -35,15 +35,22 @@ Facts from drivers/net/wireless/intel/iwlwifi/... (GPL-2.0, Linux v6.12); code w
  */
 #define PORT_X86_64_WIFI_VIRT (PORT_X86_64_KERNEL_BASE + 0x3D000000ull)
 
-/* The steps a probe goes through, in the order the card answers them. */
+/* The steps the driver goes through, in the order the card answers them. */
 enum wifi_8265_phase {
-    WIFI_8265_PHASE_NONE = 0,
-    WIFI_8265_PHASE_ATTACHED,
-    WIFI_8265_PHASE_POWERED,
-    WIFI_8265_PHASE_FIRMWARE_READY,
-    WIFI_8265_PHASE_ALIVE,
-    WIFI_8265_PHASE_FAILED
+    WIFI_8265_PHASE_DOWN = 0,
+    WIFI_8265_PHASE_ATTACHED,   /* PCI function found and BAR0 mapped */
+    WIFI_8265_PHASE_POWER_UP,   /* clocks and ownership taken */
+    WIFI_8265_PHASE_FW_LOADING, /* firmware DMA in progress */
+    WIFI_8265_PHASE_ALIVE,      /* ALIVE notification received */
+    WIFI_8265_PHASE_READY,      /* transport is ready for the next stage */
+    WIFI_8265_PHASE_FAILED,
+    WIFI_8265_PHASE_SKIP, /* no card or no firmware, not an error */
 };
+
+/* Compatibility names kept for the stage 1 code and tests. */
+#define WIFI_8265_PHASE_NONE WIFI_8265_PHASE_DOWN
+#define WIFI_8265_PHASE_POWERED WIFI_8265_PHASE_POWER_UP
+#define WIFI_8265_PHASE_FIRMWARE_READY WIFI_8265_PHASE_FW_LOADING
 
 /*
  * What this port knows of the card. The EEPROM/OTP words are status and
@@ -72,34 +79,37 @@ struct wifi_8265_state {
     char reason[96];
 };
 
-/* The state of the card: never NULL, and NONE on a machine without one. */
+/* The state of the card: never NULL, and DOWN on a machine without one. */
 const struct wifi_8265_state *wifi_8265_state(void);
 
 /* A name for the phase, for the shell and the log; never NULL. */
 static inline const char *wifi_8265_phase_name(enum wifi_8265_phase phase)
 {
     switch (phase) {
-    case WIFI_8265_PHASE_NONE:
-        return "none";
+    case WIFI_8265_PHASE_DOWN:
+        return "DOWN";
     case WIFI_8265_PHASE_ATTACHED:
-        return "attached";
-    case WIFI_8265_PHASE_POWERED:
-        return "powered";
-    case WIFI_8265_PHASE_FIRMWARE_READY:
-        return "firmware-ready";
+        return "ATTACHED";
+    case WIFI_8265_PHASE_POWER_UP:
+        return "POWER_UP";
+    case WIFI_8265_PHASE_FW_LOADING:
+        return "FW_LOADING";
     case WIFI_8265_PHASE_ALIVE:
-        return "alive";
+        return "ALIVE";
+    case WIFI_8265_PHASE_READY:
+        return "READY";
     case WIFI_8265_PHASE_FAILED:
-        return "failed";
+        return "FAILED";
+    case WIFI_8265_PHASE_SKIP:
+        return "SKIP";
     default:
-        return "unknown";
+        return "UNKNOWN";
     }
 }
 
 /*
  * The step to the next phase when a step of the probe succeeds, or FAILED
- * when it does not. FAILED and ALIVE are terminal: a failed card is not
- * retried by a transition, and a live card has no next step to take.
+ * when it does not. Terminal states stay where they are.
  */
 static inline enum wifi_8265_phase wifi_8265_phase_after(enum wifi_8265_phase phase, bool ok)
 {
@@ -108,14 +118,16 @@ static inline enum wifi_8265_phase wifi_8265_phase_after(enum wifi_8265_phase ph
     }
 
     switch (phase) {
-    case WIFI_8265_PHASE_NONE:
+    case WIFI_8265_PHASE_DOWN:
         return WIFI_8265_PHASE_ATTACHED;
     case WIFI_8265_PHASE_ATTACHED:
-        return WIFI_8265_PHASE_POWERED;
-    case WIFI_8265_PHASE_POWERED:
-        return WIFI_8265_PHASE_FIRMWARE_READY;
-    case WIFI_8265_PHASE_FIRMWARE_READY:
+        return WIFI_8265_PHASE_POWER_UP;
+    case WIFI_8265_PHASE_POWER_UP:
+        return WIFI_8265_PHASE_FW_LOADING;
+    case WIFI_8265_PHASE_FW_LOADING:
         return WIFI_8265_PHASE_ALIVE;
+    case WIFI_8265_PHASE_ALIVE:
+        return WIFI_8265_PHASE_READY;
     default:
         return phase;
     }

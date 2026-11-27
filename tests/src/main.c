@@ -29,11 +29,13 @@ static void run_tests(void *arg)
     test_wifi_8265_regs();
     test_wifi_8265_power();
     test_wifi_8265_attach();
+    test_wifi_8265_virtual();
     test_board();
     test_log();
     test_logfile();
     test_ansi();
     test_port();
+    test_port_dma();
     test_blockdev();
     test_blockdev_cache();
     test_blockdev_view();

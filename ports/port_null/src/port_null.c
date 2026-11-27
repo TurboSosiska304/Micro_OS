@@ -178,6 +178,18 @@ void k_port_free(void *ptr)
     K_UNUSED(ptr);
 }
 
+void *k_port_dma_alloc(k_size_t size, k_size_t align)
+{
+    K_UNUSED(size);
+    K_UNUSED(align);
+    return NULL;
+}
+
+void k_port_dma_free(void *ptr)
+{
+    K_UNUSED(ptr);
+}
+
 /* --- locking --- */
 
 void k_port_enter_critical(void) {}
@@ -248,7 +260,7 @@ const char *k_port_arch(void)
 
 /* The contract this port was written for. */
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 15u
+#define PORT_API_MINOR 16u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_null does not speak the contract of this kernel");
