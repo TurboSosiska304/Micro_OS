@@ -466,78 +466,88 @@ static int do_vram_write_test(k_u64_t bar0_base, k_u64_t test_offset)
     volatile k_u32_t *p;
     k_u32_t saved[GPU_AMD_VRAM_TEST_BYTES / 4u];
     k_u32_t i;
+    k_u32_t bad_index = 0u;
+    k_u32_t bad_got = 0u;
+    k_u32_t bad_expect = 0u;
     bool ok = true;
+    bool restored = true;
 
     pages = port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + test_offset,
                                         (k_size_t)GPU_AMD_VRAM_TEST_BYTES);
     if (pages == 0u) {
-        kshell_printf("gpu vramtest: could not map BAR0+0x%x\n", (unsigned)test_offset);
+        kshell_printf("gpu vramtest: FAIL map BAR0+0x%x\n", (unsigned)test_offset);
+        kerror("gpu vramtest: map failed at 0x%x", (unsigned)test_offset);
         return 1;
     }
 
     p = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
 
-    /* Read original contents. */
+    /* Read original contents before touching anything. */
     for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
         saved[i] = p[i];
     }
 
-    kinfo("gpu vramtest: offset 0x%x size %u, saved first=0x%08x", (unsigned)test_offset,
-          (unsigned)GPU_AMD_VRAM_TEST_BYTES, (unsigned)saved[0]);
-    kshell_printf("gpu vramtest: offset 0x%x size %u\n", (unsigned)test_offset,
-                  (unsigned)GPU_AMD_VRAM_TEST_BYTES);
-    kshell_printf("  before: first=0x%08x last=0x%08x\n", (unsigned)saved[0],
-                  (unsigned)saved[(GPU_AMD_VRAM_TEST_BYTES / 4u) - 1u]);
+    /* The marker goes to the log before the first store, so a machine that
+     * hangs on a write still says what it was doing. */
+    kinfo("gpu vramtest: writing BAR0+0x%x, %u bytes", (unsigned)test_offset,
+          (unsigned)GPU_AMD_VRAM_TEST_BYTES);
+    k_logfile_flush();
 
-    /* Write pattern: 0xA5000000 | index. */
+    /* Write pattern: 0xA5000000 ^ index. */
     for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
         p[i] = 0xA5000000u ^ i;
     }
 
-    /* Read back and verify. */
+    /* Read back and verify; keep the first failure for the result line. */
     for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
         k_u32_t expect = 0xA5000000u ^ i;
         k_u32_t got = p[i];
+
         if (got != expect) {
-            kshell_printf("  mismatch at +%u: got 0x%08x expect 0x%08x\n", (unsigned)(i * 4u),
-                          (unsigned)got, (unsigned)expect);
+            if (ok) {
+                bad_index = i;
+                bad_got = got;
+                bad_expect = expect;
+            }
             kerror("gpu vramtest: mismatch at +%u got 0x%08x expect 0x%08x", (unsigned)(i * 4u),
                    (unsigned)got, (unsigned)expect);
             ok = false;
+        }
+    }
+
+    /* Restore original contents even when the pattern did not stick. */
+    for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
+        p[i] = saved[i];
+    }
+    for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
+        if (p[i] != saved[i]) {
+            kerror("gpu vramtest: restore mismatch at +%u", (unsigned)(i * 4u));
+            restored = false;
             break;
         }
     }
 
-    if (ok) {
-        kshell_printf("  write/read: OK\n");
-        kinfo("gpu vramtest: write/read ok");
-    } else {
-        kshell_printf("  write/read: FAILED, restoring original contents\n");
-        kerror("gpu vramtest: write/read failed, restoring");
+    if (!ok) {
+        kshell_printf("gpu vramtest: FAIL addr=BAR0+0x%x offset=+%u expected=0x%08x"
+                      " got=0x%08x restore=%s\n",
+                      (unsigned)test_offset, (unsigned)(bad_index * 4u), (unsigned)bad_expect,
+                      (unsigned)bad_got, restored ? "ok" : "FAILED");
+        return 1;
+    }
+    if (!restored) {
+        kshell_printf("gpu vramtest: FAIL addr=BAR0+0x%x write/read ok, restore FAILED\n",
+                      (unsigned)test_offset);
+        kerror("gpu vramtest: restore failed after a good write/read");
+        return 1;
     }
 
-    /* Restore original contents. */
-    for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
-        p[i] = saved[i];
-    }
-
-    /* Verify restore. */
-    for (i = 0; i < (GPU_AMD_VRAM_TEST_BYTES / 4u); i++) {
-        k_u32_t got = p[i];
-        if (got != saved[i]) {
-            kshell_printf("  restore mismatch at +%u: got 0x%08x expect 0x%08x\n",
-                          (unsigned)(i * 4u), (unsigned)got, (unsigned)saved[i]);
-            kerror("gpu vramtest: restore mismatch at +%u", (unsigned)(i * 4u));
-            return 1;
-        }
-    }
-
-    kshell_printf("  restored: OK\n");
-    kinfo("gpu vramtest: restored ok");
-    return ok ? 0 : 1;
+    kinfo("gpu vramtest: write/read ok at 0x%x, restored", (unsigned)test_offset);
+    kshell_printf("gpu vramtest: PASS addr=BAR0+0x%x size=%u write/read ok, original restored\n",
+                  (unsigned)test_offset, (unsigned)GPU_AMD_VRAM_TEST_BYTES);
+    return 0;
 }
 
-int port_x86_64_gpu_amd_vramtest(bool do_write)
+int port_x86_64_gpu_amd_vramtest(bool do_write, bool confirmed)
 {
     const struct gpu_info *info = port_x86_64_gpu_info();
     struct gpu_amd_scanout_region regions[12];
@@ -611,7 +621,12 @@ int port_x86_64_gpu_amd_vramtest(bool do_write)
                   (unsigned)test_offset);
 
     if (!do_write) {
-        kshell_printf("gpu vramtest: read-only check complete; pass --write to run write test\n");
+        kshell_printf("gpu vramtest: read-only check complete; pass --write --yes to write\n");
+        return 0;
+    }
+    if (!confirmed) {
+        kshell_printf("gpu vramtest: dry-run, candidate BAR0+0x%x; pass --yes to write\n",
+                      (unsigned)test_offset);
         return 0;
     }
 
@@ -823,7 +838,7 @@ static k_u32_t gpu_amd_vram_pattern(k_u32_t pattern, k_u64_t block_offset, k_u64
     return pattern ^ (k_u32_t)(block_offset >> 12) ^ (k_u32_t)word_index;
 }
 
-int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern)
+int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern, bool confirmed)
 {
     struct gpu_amd_vram_block *b;
     k_u64_t bar0_base = 0u;
@@ -854,7 +869,16 @@ int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern)
         kshell_printf("gpu vramfill: block outside BAR0 aperture\n");
         return 1;
     }
+    if (!confirmed) {
+        kshell_printf("gpu vramfill: dry-run id=%u pattern=0x%08x; pass --yes to write\n",
+                      (unsigned)id, (unsigned)pattern);
+        return 0;
+    }
 
+    /* The marker precedes the stores so a hang is distinguishable from a slow
+     * fill in the log. */
+    kinfo("gpu vramfill: writing id=%u pattern=0x%08x", (unsigned)id, (unsigned)pattern);
+    k_logfile_flush();
     for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
         volatile k_u32_t *p;
         k_u64_t chunk = b->size - off;
@@ -1060,7 +1084,7 @@ int port_x86_64_gpu_amd_bufalloc(k_u64_t size_kib, const char *name)
     return 0;
 }
 
-int port_x86_64_gpu_amd_buffill(k_u32_t id)
+int port_x86_64_gpu_amd_buffill(k_u32_t id, bool confirmed)
 {
     struct gpu_amd_vram_block *b;
     k_u64_t bar0_base = 0u;
@@ -1094,6 +1118,13 @@ int port_x86_64_gpu_amd_buffill(k_u32_t id)
     }
 
     pattern = gpu_amd_buf_default_pattern(id);
+    if (!confirmed) {
+        kshell_printf("gpu buffill: dry-run id=%u pattern=0x%08x; pass --yes to write\n",
+                      (unsigned)id, (unsigned)pattern);
+        return 0;
+    }
+    kinfo("gpu buffill: writing id=%u pattern=0x%08x", (unsigned)id, (unsigned)pattern);
+    k_logfile_flush();
     for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
         volatile k_u32_t *p;
         k_u64_t chunk = b->size - off;
@@ -1972,6 +2003,10 @@ int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep)
                       (unsigned)(frame_bytes / 1024ull));
         return 1;
     }
+
+    kinfo("gpu: amdflip: copying frame into BAR0+0x%x%08x", (unsigned)(frame_offset >> 32),
+          (unsigned)(k_u32_t)frame_offset);
+    k_logfile_flush();
 
     /* The scanout reader normalized the source to a BAR0 offset. */
     {

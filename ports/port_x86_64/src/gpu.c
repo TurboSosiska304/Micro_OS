@@ -256,16 +256,16 @@ static const struct kmod g_gpu_mod = {
     .detail = gpu_mod_detail,
 };
 
-int port_x86_64_gpu_amd_vramtest(bool do_write);
+int port_x86_64_gpu_amd_vramtest(bool do_write, bool confirmed);
 int port_x86_64_gpu_amd_vrammap(void);
 int port_x86_64_gpu_amd_vramalloc(k_u64_t size_kib);
-int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern);
+int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern, bool confirmed);
 int port_x86_64_gpu_amd_vramread(k_u32_t id);
 int port_x86_64_gpu_amd_vramfree(k_u32_t id);
 int port_x86_64_gpu_amd_vramdump(void);
 int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep);
 int port_x86_64_gpu_amd_bufalloc(k_u64_t size_kib, const char *name);
-int port_x86_64_gpu_amd_buffill(k_u32_t id);
+int port_x86_64_gpu_amd_buffill(k_u32_t id, bool confirmed);
 int port_x86_64_gpu_amd_bufread(k_u32_t id);
 int port_x86_64_gpu_amd_buffree(k_u32_t id);
 int port_x86_64_gpu_amd_buflist(void);
@@ -324,13 +324,24 @@ static int cmd_gpu(int argc, char **argv)
 
     if (argc >= 2 && strcmp(argv[1], "vramtest") == 0) {
         bool do_write = false;
-        if (argc >= 3 && strcmp(argv[2], "--write") == 0) {
-            do_write = true;
-        } else if (argc >= 3) {
-            kshell_printf("usage: gpu vramtest [--write]\n");
+        bool confirmed = false;
+        int j;
+
+        for (j = 2; j < argc; j++) {
+            if (strcmp(argv[j], "--write") == 0) {
+                do_write = true;
+            } else if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu vramtest [--write] [--yes]\n");
+                return 1;
+            }
+        }
+        if (confirmed && !do_write) {
+            kshell_printf("gpu vramtest: --yes requires --write\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_vramtest(do_write);
+        return port_x86_64_gpu_amd_vramtest(do_write, confirmed);
     }
 
     if (argc == 2 && strcmp(argv[1], "vrammap") == 0) {
@@ -346,15 +357,26 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_vramalloc(kib);
     }
 
-    if (argc == 4 && strcmp(argv[1], "vramfill") == 0) {
+    if (argc >= 4 && strcmp(argv[1], "vramfill") == 0) {
         k_u64_t id = 0u;
         k_u64_t pat = 0u;
+        bool confirmed = false;
+        int j;
+
         if (!gpu_parse_u64(argv[2], &id) || !gpu_parse_u64(argv[3], &pat) || id > 0xFFFFFFFFu ||
             pat > 0xFFFFFFFFu) {
-            kshell_printf("usage: gpu vramfill <id> <pattern>\n");
+            kshell_printf("usage: gpu vramfill <id> <pattern> [--yes]\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_vramfill((k_u32_t)id, (k_u32_t)pat);
+        for (j = 4; j < argc; j++) {
+            if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu vramfill <id> <pattern> [--yes]\n");
+                return 1;
+            }
+        }
+        return port_x86_64_gpu_amd_vramfill((k_u32_t)id, (k_u32_t)pat, confirmed);
     }
 
     if (argc == 3 && strcmp(argv[1], "vramread") == 0) {
@@ -399,13 +421,24 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_bufalloc(kib, name);
     }
 
-    if (argc == 3 && strcmp(argv[1], "buffill") == 0) {
+    if (argc >= 3 && strcmp(argv[1], "buffill") == 0) {
         k_u64_t id = 0u;
+        bool confirmed = false;
+        int j;
+
         if (!gpu_parse_u64(argv[2], &id) || id > 0xFFFFFFFFu) {
-            kshell_printf("usage: gpu buffill <id>\n");
+            kshell_printf("usage: gpu buffill <id> [--yes]\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_buffill((k_u32_t)id);
+        for (j = 3; j < argc; j++) {
+            if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu buffill <id> [--yes]\n");
+                return 1;
+            }
+        }
+        return port_x86_64_gpu_amd_buffill((k_u32_t)id, confirmed);
     }
 
     if (argc == 3 && strcmp(argv[1], "bufread") == 0) {
@@ -511,11 +544,12 @@ static int cmd_gpu(int argc, char **argv)
         return gpu_intel_command(argc, argv);
     }
 
-    kshell_printf("usage: gpu [info|vramtest [--write]|vrammap|vramalloc <kib>|vramfill <id> <pat>|"
-                  "vramread <id>|vramfree <id>|vramdump|bufalloc <kib> [--name X]|buffill <id>|"
-                  "bufread <id>|buffree <id>|buflist|bufmap <id> [--yes]|bufunmap <id> [--yes]|"
-                  "bufflip <id> [--yes] [--keep]|amdflip [--yes] [--keep]|"
-                  "ggtt-test|flip [--yes]|plane-linear [--yes]\n");
+    kshell_printf(
+        "usage: gpu [info|vramtest [--write] [--yes]|vrammap|vramalloc <kib>|"
+        "vramfill <id> <pat> [--yes]|vramread <id>|vramfree <id>|vramdump|"
+        "bufalloc <kib> [--name X]|buffill <id> [--yes]|bufread <id>|buffree <id>|buflist|"
+        "bufmap <id> [--yes]|bufunmap <id> [--yes]|bufflip <id> [--yes] [--keep]|"
+        "amdflip [--yes] [--keep]|ggtt-test|flip [--yes]|plane-linear [--yes]\n");
     return KSHELL_USAGE;
 }
 
@@ -529,9 +563,10 @@ int port_x86_64_gpu_register(void)
                  "plane-linear]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
                   "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a raw block;\n"
-                  "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
-                  "releases it; vramdump lists blocks. bufalloc <kib> [--name X] creates a\n"
-                  "named VRAM buffer object; buffill/bufread/buffree/buflist manage it;\n"
+                  "vramfill <id> <pat> [--yes] fills it; vramread <id> verifies; vramfree <id>\n"
+                  "releases it; vramdump lists blocks. vramtest [--write] [--yes] verifies a\n"
+                  "write/read outside scanout. bufalloc <kib> [--name X] creates a\n"
+                  "named VRAM buffer object; buffill [--yes]/bufread/buffree/buflist manage it;\n"
                   "bufmap <id> [--yes] maps one RGB565 plane at a fixed kernel VA; --yes\n"
                   "arms VRAM present, without it present keeps the RAM copy. bufunmap <id>\n"
                   "[--yes] restores scanout before unmapping an active surface.\n"
