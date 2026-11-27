@@ -250,9 +250,10 @@ static void test_shared(void)
     KT_CHECK_INT_EQ(buf[0], 0x22);
     KT_CHECK_INT_EQ(vfs_close(&file), 0);
 
-    /* task t will finish; give it a chance */
-    for (int i = 0; i < 100; i++) {
-        k_sched_yield();
+    if (t != NULL) {
+        int status = -1;
+        KT_CHECK_INT_EQ(task_wait(t->pid, &status, 2000), 0);
+        KT_CHECK_INT_EQ(task_reap(t->pid), 0);
     }
 
     teardown();

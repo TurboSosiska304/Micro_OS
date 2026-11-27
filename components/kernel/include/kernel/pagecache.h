@@ -8,8 +8,8 @@
  *
  * The cache is a bounded pool: when it is full the least recently used
  * clean page is dropped, and a dirty one is written back before it leaves.
- * The size is PAGECACHE_MAX_BYTES, 2 MiB by default - enough for the 32 MiB
- * machine and small enough for the board.
+ * The size is PAGECACHE_MAX_BYTES, 128 KiB by default so the host test heap is
+ * not starved; a 32 MiB machine raises it through the build config.
  */
 #ifndef MICRO_OS_KERNEL_PAGECACHE_H
 #define MICRO_OS_KERNEL_PAGECACHE_H
@@ -20,7 +20,7 @@
 #define PAGECACHE_PAGE_SIZE 4096u
 
 #ifndef PAGECACHE_MAX_BYTES
-#define PAGECACHE_MAX_BYTES (2u * 1024u * 1024u)
+#define PAGECACHE_MAX_BYTES (128u * 1024u)
 #endif
 
 struct pagecache_stats {
@@ -79,6 +79,12 @@ void pagecache_invalidate_fs(void *fs_key);
  * the new end are dropped, and a partial last page is zeroed past the end.
  */
 void pagecache_truncate(void *fs_key, k_u32_t inode, k_u64_t new_size);
+
+/*
+ * Return the file size known to the cache: the on-disk size, or the end of
+ * the furthest cached page when dirty writes have extended the file.
+ */
+k_u64_t pagecache_inode_size(void *fs_key, k_u32_t inode, k_u64_t disk_size);
 
 void pagecache_get_stats(struct pagecache_stats *out);
 

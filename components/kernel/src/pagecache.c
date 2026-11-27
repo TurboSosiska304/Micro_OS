@@ -729,6 +729,33 @@ void pagecache_truncate(void *fs_key, k_u32_t inode, k_u64_t new_size)
     k_mutex_unlock(&g_lock);
 }
 
+k_u64_t pagecache_inode_size(void *fs_key, k_u32_t inode, k_u64_t disk_size)
+{
+    struct pagecache_page *p;
+    k_u64_t size = disk_size;
+
+    if (k_mutex_lock(&g_lock) != 0) {
+        return disk_size;
+    }
+
+    if (!g_ready) {
+        k_mutex_unlock(&g_lock);
+        return disk_size;
+    }
+
+    for (p = g_lru_head.lru_next; p != &g_lru_head; p = p->lru_next) {
+        if (p->fs_key == fs_key && p->inode == inode) {
+            k_u64_t end = (k_u64_t)p->page_index * PC_PAGE_SIZE + p->valid;
+            if (end > size) {
+                size = end;
+            }
+        }
+    }
+
+    k_mutex_unlock(&g_lock);
+    return size;
+}
+
 void pagecache_get_stats(struct pagecache_stats *out)
 {
     if (out == NULL) {
@@ -768,6 +795,9 @@ void pagecache_drop_all(void)
     p = g_lru_head.lru_next;
     while (p != &g_lru_head) {
         next = p->lru_next;
+        if ((p->flags & PC_DIRTY) != 0u) {
+            (void)page_writeback(p);
+        }
         page_detach(p);
         page_free(p);
         p = next;
@@ -785,6 +815,9 @@ static void pagecache_reset_locked(void)
         p = g_lru_head.lru_next;
         while (p != &g_lru_head) {
             next = p->lru_next;
+            if ((p->flags & PC_DIRTY) != 0u) {
+                (void)page_writeback(p);
+            }
             page_detach(p);
             page_free(p);
             p = next;

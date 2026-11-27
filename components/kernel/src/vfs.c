@@ -779,6 +779,10 @@ static int stat_raw(const char *path, struct vfs_stat *out)
     memset(out, 0, sizeof(*out));
 
     rc = m->ops->stat(m->ctx, path, out);
+    if (rc == 0) {
+        void *fs_key = (m->ctx != NULL) ? m->ctx : (void *)m->ops;
+        out->size = pagecache_inode_size(fs_key, out->inode, out->size);
+    }
 
     return rc;
 }
@@ -806,6 +810,10 @@ static int statx_raw(const char *path, struct vfs_statx *out)
 
     if (m->ops->statx != NULL) {
         rc = m->ops->statx(m->ctx, path, out);
+        if (rc == 0) {
+            void *fs_key = (m->ctx != NULL) ? m->ctx : (void *)m->ops;
+            out->size = pagecache_inode_size(fs_key, out->inode, out->size);
+        }
         return rc;
     }
 
@@ -825,6 +833,10 @@ static int statx_raw(const char *path, struct vfs_statx *out)
         out->group = (k_u16_t)info.group;
         out->mtime = 0;
         out->ctime = 0;
+        {
+            void *fs_key = (m->ctx != NULL) ? m->ctx : (void *)m->ops;
+            out->size = pagecache_inode_size(fs_key, out->inode, out->size);
+        }
         return 0;
     }
 
@@ -1081,10 +1093,19 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
         (void)m->ops->chgrp(m->ctx, path, caller_gid());
     }
 
+    if (out->ops != NULL && out->ops->readpage != NULL &&
+        (flags & VFS_O_DIRECTORY) == 0) {
+        out->size = pagecache_inode_size(pagecache_fs_key(out), out->inode, out->size);
+    }
+
     if ((flags & VFS_O_TRUNC) != 0 && (flags & VFS_O_DIRECTORY) == 0) {
         pagecache_truncate(pagecache_fs_key(out), out->inode, 0);
         out->size = 0;
         out->offset = 0;
+    }
+
+    if ((flags & VFS_O_APPEND) != 0) {
+        out->offset = out->size;
     }
 
     return rc;
@@ -1116,6 +1137,40 @@ int vfs_read(struct vfs_file *file, void *buf, k_size_t size)
     return rc;
 }
 
+static bool file_mount_ro(const struct vfs_file *file)
+{
+    k_size_t i;
+
+    for (i = 0; i < g_count; i++) {
+        if (g_mounts[i].ops == file->ops && g_mounts[i].ctx == file->fs) {
+            if (g_mounts[i].rw) {
+                return false;
+            }
+            /* A gated mount may still allow writes at the blockdev level;
+             * the direct path below gives the immediate error/success. */
+            if (k_blockdev_gated(g_mounts[i].dev)) {
+                return false;
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool file_mount_gated_ro(const struct vfs_file *file)
+{
+    k_size_t i;
+
+    for (i = 0; i < g_count; i++) {
+        if (g_mounts[i].ops == file->ops && g_mounts[i].ctx == file->fs) {
+            return !g_mounts[i].rw && k_blockdev_gated(g_mounts[i].dev);
+        }
+    }
+
+    return false;
+}
+
 int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
 {
     int rc;
@@ -1129,7 +1184,28 @@ int vfs_write(struct vfs_file *file, const void *buf, k_size_t size)
         return KERR_ISDIR;
     }
 
+    if (file_mount_ro(file)) {
+        return KERR_ROFS;
+    }
+
     if (file->ops->readpage != NULL && file->ops->writepage != NULL) {
+        /*
+         * A gated mount that is not yet marked rw in the VFS may still
+         * accept writes at the blockdev level. Pagecache would defer the
+         * I/O and hide an immediate refusal, so fall back to the direct
+         * write and keep the cache coherent.
+         */
+        if (file_mount_gated_ro(file)) {
+            if (file->ops->write == NULL) {
+                return KERR_NOTSUP;
+            }
+            rc = file->ops->write(file->fs, file, buf, size);
+            if (rc > 0) {
+                pagecache_invalidate(pagecache_fs_key(file), file->inode);
+            }
+            return rc;
+        }
+
         if ((file->flags & VFS_O_APPEND) != 0) {
             file->offset = file->size;
         }
