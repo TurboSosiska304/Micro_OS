@@ -73,6 +73,7 @@ static void run_tests(void *arg)
     test_input_debounce();
     test_input_hid();
     test_ps2();
+    test_ps2_mouse();
     test_xhci_portsc();
     test_bt_hci();
     test_gpu_amd();
