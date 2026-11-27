@@ -664,6 +664,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 #endif
 
+    if (port_x86_64_install_register() != 0) {
+        kwarn("x86-64: the install command is not registered");
+    }
+
     /*
      * The other volumes: /etc/fstab, when the disk of the machine carries
      * one. The root is the first mount, so the file has a place to live. A

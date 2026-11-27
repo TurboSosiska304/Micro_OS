@@ -636,6 +636,9 @@ int port_x86_64_net_register(void);
  */
 int port_x86_64_stack_register(void);
 
+/* Register the `install` command: dry-run plan for installing to a disk. */
+int port_x86_64_install_register(void);
+
 /*
  * The hook of the task substrate, called on every tick. Weak here: a build
  * without a scheduler keeps its clock, and the file of the tasks of the port
