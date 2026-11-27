@@ -119,6 +119,8 @@ int microos_waitpid(int pid, int *status, int flags);
 int microos_fork(void);
 int microos_getpid(void);
 int microos_getppid(void);
+int microos_getpgid(unsigned pid);
+int microos_setpgid(unsigned pid, unsigned pgid);
 int microos_getcwd(char *buf, size_t size);
 unsigned microos_sleep(unsigned ms);
 int microos_yield(void);
@@ -172,6 +174,8 @@ const char *microos_strerror(int code);
 #define fork microos_fork
 #define getpid microos_getpid
 #define getppid microos_getppid
+#define getpgid microos_getpgid
+#define setpgid microos_setpgid
 #define getcwd microos_getcwd
 #define sleep microos_sleep
 #define yield microos_yield

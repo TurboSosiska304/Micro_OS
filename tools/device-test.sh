@@ -166,6 +166,7 @@ for marker in \
     "PROGRAM: exit 0" \
     "boot: running from ota_0" \
     "boot: the image of ota_0 is valid, the rollback is cancelled" \
+    "there is no append volume, /etc/bootlog.log and /etc/run.log are in RAM" \
     "  ir         ok" \
     "  sound      ok" \
     "module(s), 0 problem(s)"; do
@@ -194,15 +195,15 @@ fi
 
 # The shell is up at the end of the capture. Three lines prove the other half
 # of the door: /bin is the list of the programs of the partition, the same
-# file runs from the command line, and an image of the other machine is
-# ENOEXEC before a byte of it runs.
+# file runs from the command line, /etc has no file logs on the board, and an
+# image of the other machine is ENOEXEC before a byte of it runs.
 echo "==> the shell: ls /bin, exec /bin/hello and an image of x86-64"
 set +e
 python3 "$ROOT/tools/console.py" "$PORT" 12 \
     --send "ls /bin" \
     --send "mount" \
     --send "exec /bin/hello one two" \
-    --send "cat /log/start.log" \
+    --send "ls /etc" \
     --send "exec /log/.foreign" | tee -a "$LOG"
 set -e
 

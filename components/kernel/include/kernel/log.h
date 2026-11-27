@@ -30,7 +30,7 @@ k_log_level_t klog_get_level(void);
  * macro in the library of Micro OS, and a macro cannot be the name of a
  * format.
  */
-void klog(k_log_level_t level, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
+void klog(k_log_level_t level, const char *fmt, ...) [[gnu::format(__printf__, 2, 3)]];
 #else
 void klog(k_log_level_t level, const char *fmt, ...);
 #endif
@@ -46,7 +46,7 @@ typedef enum { K_LOG_TONE_PLAIN = 0, K_LOG_TONE_OK } k_log_tone_t;
 
 /* Print a message of the given tone at the level of an information. */
 #if defined(__GNUC__)
-void klog_tone(k_log_tone_t tone, const char *fmt, ...) __attribute__((format(__printf__, 2, 3)));
+void klog_tone(k_log_tone_t tone, const char *fmt, ...) [[gnu::format(__printf__, 2, 3)]];
 #else
 void klog_tone(k_log_tone_t tone, const char *fmt, ...);
 #endif
@@ -70,6 +70,8 @@ void klog_clear(void);
  * the log of the boot can be written to a file.
  */
 void klog_capture_start(void);
+/* Capture and print at the same time, for a port whose console already exists. */
+void klog_capture_start_mirroring(void);
 void klog_capture_stop(void);
 const char *klog_captured_text(void);
 k_size_t klog_captured_size(void);

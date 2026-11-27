@@ -29,6 +29,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
 #include "kernel/root.h"
@@ -39,8 +40,8 @@
 #include "config/config.h"
 #include "config/session.h"
 #include "kshell/kshell.h"
-#include "gpu_intel.h"
 #include "port_x86_64_console.h"
+#include "port_x86_64_gpu.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
@@ -356,6 +357,13 @@ static void init_task(void *arg)
 {
     K_UNUSED(arg);
 
+    /* The root is mounted and this task can block on the VFS. Install the
+     * captured boot once; everything printed from here belongs to run.log. */
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) != 0) {
+        kerror("x86-64: the logs cannot be installed");
+    }
+    klog_capture_stop();
+
     /*
      * The program of the boot runs before the shell: execve is a wait now,
      * so the init task is its parent and the shell does not exist until the
@@ -422,6 +430,9 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        /* The existing init loop owns the log batches: no extra task slot and
+         * no writer left running when this task is signalled at shutdown. */
+        k_logfile_tick();
         k_sched_sleep_ms(100u);
     }
 }
@@ -432,6 +443,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     const char *root_type = NULL;
     int mounted;
     int defaults;
+
+    /* COM1 exists before the kernel does. Keep the first boot line in the
+     * capture without hiding it from the person watching the console. */
+    klog_capture_start_mirroring();
 
     port_x86_64_init(boot_info, boot_magic, kernel_phys);
 
@@ -490,6 +505,13 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
      * has no interface to program one. The serial port carries the line
      * either way, which is how a machine without a window is read. */
     kinfo("x86-64: the screen is %s", port_x86_64_console_name());
+
+    /* Display controller probe (hello GPU): read-only PCI identification, no
+     * display engine writes, no firmware, no mode change. */
+    port_x86_64_gpu_init();
+    if (port_x86_64_gpu_register() != 0) {
+        kwarn("x86-64: the gpu command is not registered");
+    }
 
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
@@ -609,11 +631,6 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
      * clock of NTP from components/net when the image has them. */
     if (port_x86_64_net_register() != 0) {
         kwarn("x86-64: not every command of the network is registered");
-    }
-
-    /* The Intel display probe is read-only here; QEMU has no supported card. */
-    if (gpu_intel_register() != 0) {
-        kwarn("x86-64: the gpu command was not registered");
     }
 
     /* The proof of the guard page under a kernel stack (ADR 0048): `guard`

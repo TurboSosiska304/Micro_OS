@@ -68,14 +68,13 @@ ThinkPad. The VBT blob stays outside the repository.
 The measured PCI state matches the probe's assumptions: `8086:5917` is in the
 ID table, function 0 and class `03:00` match, PMCSR is D0, BAR0 is a 64-bit
 memory window, and memory decode is already set. On this laptop the probe will
-therefore not need its conditional PCI command write. BAR2, BAR4 and the ROM
-are outside the probe's read set.
+therefore not need its conditional PCI command write. BAR2 is read only as the
+graphics-aperture base; BAR4 and the ROM are outside the probe's read set.
 
 For the common `gpu_info`, `mmio_base` is read from BAR0. `mmio_size` is the
 16 MiB identity-table value corroborated by the live `lspci`; the probe does
-not write all ones to BAR0 merely to size it. `vram_bytes` stays
-`GPU_INFO_UNKNOWN_SIZE`: no GTT/aperture size was read, and zero would be a
-false claim.
+not write all ones to BAR0 merely to size it. After BAR2 validates,
+`vram_bytes` reports the measured 256 MiB graphics aperture, not dedicated VRAM.
 
 ### 2.1 Where display 9.00 stepping C0 comes from
 
@@ -231,11 +230,11 @@ one:
 4. Set only `PCI_COMMAND.MemorySpace` if firmware left it clear. Bus mastering
    and I/O decoding are not requested.
 5. Read BAR0 as 32-bit or 64-bit memory. Do not size-probe it with all ones;
-   the probe already knows the small register range it needs.
-6. Map the 2 MiB page containing BAR0 as uncached MMIO, then read only the
-   registers in section 3.3. There is no forcewake request and no display
-   power-well request.
-7. Report one line. With no supported card, return `KMOD_SKIP` and say so.
+   the probe already knows the 16 MiB register/GGTT-alias window it needs.
+6. Map that window as uncached MMIO, then read only the registers in section
+   3.3. There is no forcewake request and no display power-well request.
+7. Return the shared `GPU_PROBE_*` result; the dispatcher maps no known card to
+   `KMOD_SKIP` and formats the common report line.
 
 The existing x86-64 API at this base commit is
 `port_x86_64_paging_map_mmio()`. The task's proposed portable name
@@ -346,8 +345,8 @@ contiguous. No PTE or display register is written.
 The parser is covered by synthetic X-tiled, linear RGB565, Yf-padding,
 fragmentation and invalid-entry cases in `tests/cases/test_gpu_intel_ggtt.c`.
 The live physical address and pitch remain unmeasured until the owner boots
-this image on the ThinkPad; QEMU has no Intel card and must keep returning
-`KMOD_SKIP`.
+this image on the ThinkPad; QEMU has no Intel card and the shared dispatcher
+must keep reporting `KMOD_SKIP`.
 
 ### 3.7 Stage 2: one RAM page through the aperture
 
@@ -389,8 +388,8 @@ QEMU test.
 
 Owner checklist:
 
-1. Boot the signed image with serial/power recovery ready; run `gpu info` and
-   record the `gpu: ggtt framebuffer ...` line.
+1. Boot the signed image with serial/power recovery ready; record the boot
+   `gpu: ggtt framebuffer ...` line and run `gpu info` for the shared report.
 2. Run `gpu ggtt-test`; require `PASS` and no neighboring-entry error.
 3. Run `gpu flip`; check the source/target, dimensions and pitch in the dry-run.
 4. Run `gpu flip --yes`; require `copy verified` and `restored original surface`.
@@ -618,46 +617,38 @@ sudo dmesg | grep -Ei 'i915|drm|gpu|edid|vbt|dmc' | tail -80
 Do not run `intel_reg_dumper`, `devmem`, EDID writers, VBIOS flashers or
 forcewake debug tools for this reconnaissance.
 
-### 8.1 Release handshake contract
+### 8.1 Shared GPU handshake contract
 
-The AMD-owned `gpu.c` and `ports/port_x86_64/include/port_x86_64_gpu.h` are
-not merged at this base commit. `gpu_intel.h` therefore contains a compatible
-fallback `struct gpu_info` with the agreed common prefix:
-
-```c
-vendor, device, rev, bus, slot, func,
-mmio_base, mmio_size, vram_bytes, state
-```
-
-After the merge, replace that fallback declaration with the shared header.
-The Intel entry point already has the required shape:
+The release branch now owns `port_x86_64_gpu.h`, `struct gpu_info`,
+`enum gpu_probe_result`, the vendor table and the single `gpu` kmod/shell
+registration. `gpu_intel.h` contains only the Intel identity table and a
+`struct gpu_intel_info` wrapper whose first member is the shared `gpu_info`;
+there is no fallback copy of the common structure.
 
 ```c
-int gpu_intel_probe(struct gpu_info *out);
+enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
+                                      struct gpu_info *out);
 ```
 
-Return convention:
+The dispatcher supplies the PCI function. The probe returns `GPU_PROBE_NONE`
+for another vendor, `GPU_PROBE_UNKNOWN_DEV` for an unknown Intel DID,
+`GPU_PROBE_DEGRADED` when the read-only power/display handshake is incomplete,
+`GPU_PROBE_FAIL` for malformed/non-answering hardware, and `GPU_PROBE_OK` only
+after the firmware-left framebuffer has been resolved.
 
-* `0`: a known Intel card completed the read-only MMIO handshake;
-* `1`: no completed handshake; `out->state` distinguishes `KMOD_SKIP` (no
-  Intel card), `KMOD_UNKNOWN` (Intel card with an unknown DID), and
-  `KMOD_DEGRADED` (known card, but power/display state is not ready);
-* `-1`: hard failure such as malformed PCI identity/BAR or non-answering MMIO.
-
-The common fields come from these sources:
-
-| Field | Source |
+| Common field | Source |
 |---|---|
-| `vendor`, `device`, `rev`, `bus`, `slot`, `func` | PCI configuration read |
+| `present`, `known`, `probe_result` | shared dispatcher/probe outcome |
+| `vendor`, `device`, `revision`, `bus`, `slot`, `function` | PCI configuration read |
 | `mmio_base` | BAR0 read |
 | `mmio_size` | 16 MiB identity-table value, corroborated by live `lspci`; no BAR-size write |
-| `vram_bytes` | `GPU_INFO_UNKNOWN_SIZE`; no GTT/aperture size was read |
-| `state` | probe outcome, not a guessed hardware value |
+| `vram_bytes` | 256 MiB graphics aperture after BAR2 validates |
 
-The Intel tail records the already-justified display/power-well reads and the
-firmware-left eDP timing. Unknown Intel IDs are detected by a read-only PCI
-class/vendor check after the known-ID table misses; no display MMIO is touched.
-No display register is written, no forcewake is requested, and no power well
+The Intel-only tail holds subsystem IDs, power-well/ISR samples, the active
+pipe, plane registers and the decoded GGTT framebuffer. The common `gpu`
+command forwards only `ggtt-test` and `flip [--yes]` through the weak
+`gpu_intel_command()` hook; no second `gpu` command is registered. No display
+register is written by the probe, no forcewake is requested, and no power well
 is raised.
 
 On a successful live handshake the single fact line is:

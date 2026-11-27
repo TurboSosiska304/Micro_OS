@@ -22,6 +22,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/sched.h"
+#include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/tty.h"
 
@@ -298,6 +299,84 @@ static void test_tty_winsize(void)
     KT_CHECK(!k_tty_console_raw());
 }
 
+static void tty_idle_task(void *arg)
+{
+    K_UNUSED(arg);
+    for (;;) {
+        k_sched_sleep_ms(1000);
+    }
+}
+
+static void test_tty_pgrp_ctrlc(void)
+{
+    struct task *t1;
+    struct task *t2;
+    char line[16];
+    int count;
+
+    ktest_begin("tty: Ctrl+C sends SIGINT to the foreground process group");
+
+    t1 = task_create("tty1", tty_idle_task, NULL, TASK_PRIO_DEFAULT);
+    t2 = task_create("tty2", tty_idle_task, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(t1 != NULL);
+    KT_CHECK(t2 != NULL);
+    if (t1 == NULL || t2 == NULL) {
+        return;
+    }
+
+    KT_CHECK_INT_EQ(task_setpgid(t1->pid, t1->pid), 0);
+    KT_CHECK_INT_EQ(task_setpgid(t2->pid, t1->pid), 0);
+
+    use_text("");
+    k_tty_open();
+    KT_CHECK_INT_EQ(k_tty_set_fg_pgrp(t1->pid), 0);
+    k_tty_set_canonical();
+
+    /* Ctrl+C interrupts the line and signals the foreground pgrp. */
+    use_text("ab\x03"
+             "cd\n");
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK_INT_EQ(count, KERR_INTR);
+    KT_CHECK((task_signal_pending(t1) & 1u) != 0);
+    KT_CHECK((task_signal_pending(t2) & 1u) != 0);
+
+    /* After interrupt the next line is readable. */
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK_INT_EQ(count, 3);
+    KT_CHECK(count == 3 && memcmp(line, "cd\n", 3) == 0);
+
+    /* tcsetpgrp switches who gets the signal. */
+    __atomic_fetch_and(&t1->sig_pending, ~1u, __ATOMIC_RELAXED);
+    __atomic_fetch_and(&t2->sig_pending, ~1u, __ATOMIC_RELAXED);
+    KT_CHECK_INT_EQ(task_setpgid(t2->pid, t2->pid), 0);
+    KT_CHECK_INT_EQ(k_tty_set_fg_pgrp(t2->pid), 0);
+
+    use_text("\x03");
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK_INT_EQ(count, KERR_INTR);
+    KT_CHECK((task_signal_pending(t1) & 1u) == 0);
+    KT_CHECK((task_signal_pending(t2) & 1u) != 0);
+
+    k_tty_close();
+    drop_terminal();
+}
+
+static void test_tty_session_release(void)
+{
+    k_u32_t pgid;
+
+    ktest_begin("tty: closing the last descriptor releases the session");
+
+    use_text("");
+    k_tty_open();
+    pgid = task_get_pgid(task_self());
+    KT_CHECK_INT_EQ(k_tty_set_fg_pgrp(pgid), 0);
+    KT_CHECK(k_tty_fg_pgrp() == pgid);
+    k_tty_close();
+    KT_CHECK_INT_EQ(k_tty_fg_pgrp(), 0);
+    drop_terminal();
+}
+
 void test_tty(void)
 {
     test_tty_defaults();
@@ -307,4 +386,6 @@ void test_tty(void)
     test_tty_long_line();
     test_tty_raw();
     test_tty_winsize();
+    test_tty_pgrp_ctrlc();
+    test_tty_session_release();
 }

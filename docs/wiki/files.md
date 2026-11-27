@@ -44,6 +44,8 @@ microos> tree /
 | `/` | MicroFS on the volume of the port |
 | `/etc` | the configuration: a file name is the key and its content the value for a single setting, `key=value` lines for a system (`display`, `font`, `console`) |
 | `/etc/passwd` | the accounts: `name:uid:gid:home:shell`, one line per person (ADR 0033) |
+| `/etc/bootlog.log` | the captured boot of this start; the previous attempt is `/etc/bootlog.1.log` |
+| `/etc/run.log` | the console of the session, appended; `/etc/run.1.log` is the previous 64 KiB generation |
 | `/etc/shadow` | the hash of a password: `name:$sha256$<salt>$<hex>`, `*` for an account without one; mode `0600` |
 | `/etc/group` | the groups: `name:gid:member,member`, one line per group (ADR 0044). A task has one gid and no supplementary list, so the members decide nothing yet |
 | `/etc/init.d` | the scripts of the init process, one command per line |
@@ -53,8 +55,20 @@ microos> tree /
 | `/etc/licenses/sbase` | the MIT notice of sbase, beside the ten commands it was built into |
 | `/proc` | the kernel: `version`, `uptime`, `meminfo`, `tasks`, `modules`, one directory per task |
 | `/dev` | the devices: `tty0`, `null`, `input` and the ones the port adds |
-| `/log` | on the board: `start.log`, the log of the boot |
+| `/log` | the board's foreign-program fixture (`/log/.foreign`); the machine logs live in `/etc` or in RAM |
 | `/bin` | on x86-64: the programs of the disk image (`hello`, `crash`, `fork`, ...), written by `make x86-disk` and read by `execve`; no boot installs them |
+
+The machine logs are bounded to two generations of 64 KiB. A writable root
+keeps `/etc/bootlog.log` and `/etc/run.log`; rotation replaces the `.1.log` file
+and starts the new current file with `log: rotated at 65536 bytes`. A read-only
+root (the ISO and `boot0p1` of the stick), and the board whose `/etc` has no
+append volume, keep the same images in RAM and print a line that says so.
+`run.log` records what the machine printed, including ordinary input echo, but
+never a password: `login`, `su` and any secret `session_read_line()` mute the
+console log for the reading task until the line ends. The console itself only
+copies bytes into a memory buffer; a separate task writes batches, so a slow
+volume cannot block the prompt. Telnet terminals keep their own transcript and
+are not part of the machine console log yet.
 
 `/bin/ls` is the `ls` of sbase: one name per line, `-l` for the mode, the
 owner, the group, the size and the date, `-a` for the two names `.` and `..`,
@@ -118,7 +132,9 @@ microos> rm /hello.txt
 `write` replaces the file and appends a newline; the text is one line of at
 most 127 bytes. The count of the answer has the word of the number (`1 byte`,
 `2 bytes`), and a text that is cut says how many bytes of it were kept. `rm`
-removes a file, not a directory, and there is no `-r` without the flag.
+removes a file; `rm -r` removes a directory and its tree. The root of the
+filesystem is not removed, and a recursive walk does not cross a mount point -
+`/proc` and `/dev` stay where the kernel put them.
 `df` prints the free blocks and inodes of the filesystem of the path, and a
 path that is not there is `df: /nope: no such file or directory` instead of the
 numbers of the root. The block is the unit of the volume and the line names it:
@@ -488,9 +504,10 @@ the honest part of the answer:
 
 ## Mounting a volume
 
-`mount` without a word lists the points of the tree, in the order the boot
-mounted them. With the three words `device point type` it mounts a volume of a
-registered type; `umount` gives the point back:
+`mount` without a word lists the mounted filesystems: the device, the point,
+the type and whether the volume is read or written. With the three words
+`device point type` it mounts a volume of a registered type; `umount` gives
+the point back:
 
 ```text
 microos> mount

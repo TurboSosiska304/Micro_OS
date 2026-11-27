@@ -17,6 +17,17 @@
 
 #include "kernel/types.h"
 
+/*
+ * C23 made a few of these names type-generic macros in the host header. This
+ * file provides the definitions the freestanding kernel calls, so the macros
+ * must not rewrite the names below.
+ */
+#undef memchr
+#undef strchr
+#undef strpbrk
+#undef strrchr
+#undef strstr
+
 size_t strlen(const char *text)
 {
     size_t len = 0;
@@ -407,9 +418,30 @@ char *strrchr(const char *text, int c)
  * the name of the function of the system.
  */
 unsigned long microos_strtoul(const char *text, char **end, int base);
+long microos_strtol(const char *text, char **end, int base);
 unsigned long strtoul(const char *text, char **end, int base);
+long strtol(const char *text, char **end, int base);
 
 unsigned long strtoul(const char *text, char **end, int base)
 {
     return microos_strtoul(text, end, base);
+}
+
+long strtol(const char *text, char **end, int base)
+{
+    return microos_strtol(text, end, base);
+}
+
+/*
+ * C23 redirects these names in the host headers; the freestanding kernel
+ * provides the symbols the compiled calls resolve to.
+ */
+unsigned long __isoc23_strtoul(const char *text, char **end, int base)
+{
+    return microos_strtoul(text, end, base);
+}
+
+long __isoc23_strtol(const char *text, char **end, int base)
+{
+    return microos_strtol(text, end, base);
 }

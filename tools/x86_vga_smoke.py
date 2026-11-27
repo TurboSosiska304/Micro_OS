@@ -1443,7 +1443,21 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 "the console did not apply the theme of /etc",
             )
 
-            picture = machine.picture(workdir)
+            # The repaint of the whole glass follows the line of the command,
+            # and the log of the machine (2.1) gives that repaint more work per
+            # byte: the picture is taken until it is the finished one, and a
+            # frame that never becomes the theme is still a failure.
+            def light_ready(seen):
+                return (
+                    seen.only_colors(BLACK, GREY)
+                    and seen.pixel(VBE_WIDTH - 2, VBE_HEIGHT - 2) == GREY
+                    and (
+                        seen.row_of("MicroOS", BLACK, GREY) is not None
+                        or seen.row_of("microos>", BLACK, GREY) is not None
+                    )
+                )
+
+            picture = settled_picture(machine, workdir, light_ready)
             if picture is not None:
                 expect(
                     "the light theme is black on light grey",
@@ -1456,12 +1470,16 @@ def run_framebuffer(loader: str, kernel: str, timeout: float, verbose: bool, dis
                 # asks where the banner is instead of assuming the row 0, and a
                 # line more in the log of a kernel is not a failure of the
                 # screen.
+                # The text that is drawn is read in the new pair: the banner
+                # while it is on the glass, and the prompt after the boot has
+                # scrolled it away. A line more in the log of a kernel is not a
+                # failure of the screen, and a theme that did not apply is.
                 expect(
                     "the text of the boot is read in the new colours",
-                    picture.cell_is(0, 0, GLYPHS["M"], BLACK, GREY)
-                    or picture.cell_is(0, 0, GLYPHS["m"], BLACK, GREY)
-                    or picture.row_of("MicroOS", BLACK, GREY) is not None,
-                    "no row of the picture holds the banner in the colours of the theme",
+                    picture.row_of("MicroOS", BLACK, GREY) is not None
+                    or picture.row_of("microos>", BLACK, GREY) is not None,
+                    "no row of the picture holds the banner or the prompt in the "
+                    "colours of the theme",
                 )
                 foreign = picture.foreign_cells(BLACK)
                 expect(
@@ -4157,7 +4175,8 @@ def run_boot_desktop(
 
             expect("the desk of the machine ends with the power",
                    machine.process.poll() is not None,
-                   "QEMU was still running after the shutdown of the desk")
+                   "QEMU was still running after the shutdown of the desk; the log ends with "
+                   + repr(machine.read_serial()[-1600:]))
         finally:
             machine.close()
 

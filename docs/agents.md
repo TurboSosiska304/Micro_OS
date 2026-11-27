@@ -63,6 +63,13 @@ was not a defect:
   nothing: the name to ask for is `qemu-system-x86` (and `qemu-system-aar`).
   A check that cannot match is worse than no check, because it passes.
 
+* **a wrapper that starts an emulator is worse than no wrapper.** A script
+  that waits for a free host and then boots QEMU keeps doing it after the
+  agent that wrote it has died: the emulator outlives its parent, holds the
+  host and makes the next lane wait for a machine that nobody owns. A lane
+  starts its own emulator in its own command and takes it down in the same
+  command; nothing waits in the background to boot one.
+
 The measurements that suffered from this are the frame checks of
 `x86-vga-smoke`: they read the screen a second after the boot and a busy host
 changes what the second catches. A check like that belongs to the picture (the

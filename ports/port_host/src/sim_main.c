@@ -22,6 +22,7 @@
 #include "kernel/errno.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
@@ -197,6 +198,11 @@ static void init_task(void *arg)
 
     K_UNUSED(arg);
 
+    if (k_logfile_start(klog_captured_text(), klog_captured_size(), true) != 0) {
+        kerror("sim: the logs cannot be installed");
+    }
+    klog_capture_stop();
+
     kinfo("sim: init is up, %u task(s)", (unsigned)task_count());
 
     if (config_register() != 0) {
@@ -314,6 +320,7 @@ static void init_task(void *arg)
             session_console_reaped((k_u32_t)pid, status);
         }
 
+        k_logfile_tick();
         k_sched_sleep_ms(100);
     }
 }
@@ -359,6 +366,10 @@ int main(void)
     cfg.board_info = info;
     cfg.subsystems = g_subsystems;
     cfg.nsubsystems = K_ARRAY_SIZE(g_subsystems);
+
+    /* The console of the host exists from the first line, so the capture is
+     * mirrored while the root is still being mounted. */
+    klog_capture_start_mirroring();
 
     /* The time base of the kernel: one tick per millisecond. */
     port_host_start_tick(1);

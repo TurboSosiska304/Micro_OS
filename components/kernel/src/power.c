@@ -16,6 +16,7 @@
 #include "kernel/blockdev.h"
 #include "kernel/errno.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kernel/panic.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
@@ -167,6 +168,17 @@ int k_power_shutdown(enum k_power_action action, bool force)
         kinfo("power: every task has ended");
     }
 
+    /* The log writer is a task too, but its last batch belongs to this task:
+     * close the ring and drain it before the second sync can put those bytes
+     * on the disk, and before unmount_all() takes the volume away. */
+    kinfo("power: closing the machine log before the volumes leave");
+    rc = k_logfile_stop_for_poweroff();
+    if (rc != 0) {
+        kerror("power: the machine log did not close, the machine stays on (rc=%d)", rc);
+        g_ending = false;
+        return rc;
+    }
+
     /* The writers are gone: the volumes and the disks are read again. */
     kinfo("power: syncing the volumes and flushing the disks once more");
 
@@ -205,14 +217,14 @@ int k_power_shutdown(enum k_power_action action, bool force)
     KERNEL_PANIC("the port returned from the power of the machine");
 }
 
-_Noreturn void k_reboot(void)
+[[noreturn]] void k_reboot(void)
 {
     k_port_reset();
 
     KERNEL_PANIC("the port returned from reset");
 }
 
-_Noreturn void k_halt(void)
+[[noreturn]] void k_halt(void)
 {
     k_port_halt();
 

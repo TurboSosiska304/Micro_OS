@@ -10,6 +10,7 @@ if(NOT ESP_PLATFORM)
         cases/test_gpu_intel_ggtt.c
         cases/test_board.c
         cases/test_log.c
+        cases/test_logfile.c
         cases/test_ansi.c
         cases/test_port.c
         cases/test_blockdev.c
@@ -47,6 +48,8 @@ if(NOT ESP_PLATFORM)
         cases/test_input_debounce.c
         cases/test_input_hid.c
         cases/test_ps2.c
+        cases/test_xhci_portsc.c
+        cases/test_gpu_amd.c
         cases/test_battery_soc.c
         cases/test_fb_draw.c
         cases/test_rtc.c
@@ -124,8 +127,8 @@ if(NOT ESP_PLATFORM)
         ${MICRO_OS_TEST_CASES}
     )
 
-    # The Intel case links the real probe against an empty-bus PCI stub, so
-    # both the identity table and the no-card KMOD_SKIP path are exercised.
+    # The Intel case links the real probe against a PCI stub, so the shared
+    # GPU_PROBE_NONE/UNKNOWN_DEV contract and the identity table are exercised.
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")
@@ -163,7 +166,8 @@ if(NOT ESP_PLATFORM)
         # The verifier of ADR 0020 and its two primitives: the boot loader and
         # the tool compile the same files, and the test is the third caller.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/loader"
-        # The Intel identity table shares its header with the x86-64 probe.
+        # PORTSC decoding has no MMIO and is shared by the driver and its test.
+        # Pure GPU ID tables and probe headers for host unit tests.
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/include"
         # The directory of the `progs` partition (ADR 0022): read by the port
         # of the board and by the test, written by tools/progs_image.py.
@@ -381,6 +385,7 @@ if(NOT ESP_PLATFORM)
         # the release's own build does not ask for are turned off here.
         -Wno-sign-compare -Wno-unused-parameter -Wno-clobbered
         -Wno-missing-prototypes -Wno-strict-prototypes
+        -Wno-discarded-qualifiers
         # The calculator is the program under test: the sanitizer of the test
         # binary is for the kernel, and a leak of the release at its exit (the
         # release frees its state only in a debug build) must not turn a good
@@ -388,6 +393,10 @@ if(NOT ESP_PLATFORM)
         -fno-sanitize=all
     )
     target_link_options(microos_bc_host PRIVATE -fno-sanitize=all)
+    set_target_properties(microos_bc_host PROPERTIES
+        C_STANDARD 23
+        C_EXTENSIONS ON
+    )
 
     target_compile_definitions(microos_tests PRIVATE
         MICROOS_BC_HOST="$<TARGET_FILE:microos_bc_host>")
@@ -802,6 +811,18 @@ target_compile_definitions(microos_tests PRIVATE
     # without the sanitizer, and the rest of the tests carry it.
     target_compile_options(microos_heap_tests PRIVATE -fno-sanitize=all)
     target_link_options(microos_heap_tests PRIVATE -fno-sanitize=all)
+    # Host test binaries: they and the third-party code they compile use
+    # POSIX interfaces, so they opt into gnu23 on their own targets.
+    set_target_properties(
+        microos_tests microos_test_file microos_userland_tests
+        microos_libc_user_tests microos_heap_tests
+        PROPERTIES C_STANDARD 23 C_EXTENSIONS ON
+    )
+    if(TARGET microos_magic_compile)
+        set_target_properties(microos_magic_compile PROPERTIES
+            C_STANDARD 23 C_EXTENSIONS ON)
+    endif()
+
     add_test(NAME heap COMMAND microos_heap_tests)
     set_tests_properties(heap PROPERTIES TIMEOUT 60)
 

@@ -517,7 +517,7 @@ static int cmd_httpd(int argc, char **argv)
 
 static int cmd_http(int argc, char **argv)
 {
-    char body[257];
+    static char body[4097];
     struct http_response response;
     int rc;
 
@@ -541,7 +541,18 @@ static int cmd_http(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    kshell_printf("HTTP %d, %u byte(s)\n", response.status, (unsigned)response.length);
+    if (response.truncated) {
+        if (response.total > 0) {
+            kshell_printf("HTTP %d, truncated at %u of %u byte(s)\n", response.status,
+                          (unsigned)response.length, (unsigned)response.total);
+        } else {
+            kshell_printf("HTTP %d, truncated at %u byte(s)\n", response.status,
+                          (unsigned)response.length);
+        }
+    } else {
+        kshell_printf("HTTP %d, %u byte(s)\n", response.status, (unsigned)response.length);
+    }
+
     if (response.length > 0) {
         kshell_printf("%s\n", body);
     }

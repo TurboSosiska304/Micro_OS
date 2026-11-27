@@ -28,6 +28,7 @@ static void run_tests(void *arg)
     test_gpu_intel_ggtt();
     test_board();
     test_log();
+    test_logfile();
     test_ansi();
     test_port();
     test_blockdev();
@@ -72,6 +73,8 @@ static void run_tests(void *arg)
     test_input_debounce();
     test_input_hid();
     test_ps2();
+    test_xhci_portsc();
+    test_gpu_amd();
     test_battery_soc();
     test_fb_draw();
     test_rtc();

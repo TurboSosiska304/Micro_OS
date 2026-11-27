@@ -12,6 +12,20 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 
 ## [Unreleased]
 
+### Fixed
+
+- The xHCI root-port reset of K25: PORTSC change clears no longer copy the
+  read-back PED bit into an RW1CS write (which disables the port) or assert PED
+  and PR together. The driver reads the Supported Protocol Capability, resets
+  a USB2 port in Polling but lets a USB3 port finish training, asserts PR once,
+  waits for PRC and CCS/PED/U0/speed, and waits 10 ms for USB2 or 50 ms for USB3
+  before the first command. The host test replays `0x000286e1` and `0x000806e1`;
+  `usb-smoke` checks both PORTSC values and the enabled state without changing
+  its 66 checks. The owner's laptop log is still the closing evidence.
+- Every xHCI poll has a time and spin boundary with a timeout line, the event
+  ring has a one-ringful service bound, and `usb-smoke` has a 300-second overall
+  deadline so a failed keyboard cannot leave QEMU waiting through later modes.
+
 ## [2.0.2] - 2026-11-26
 
 ### The release

@@ -95,6 +95,16 @@ struct k_tty;
 struct task {
     k_u32_t pid;
     /*
+     * The process group and the session of the task. A process group is the
+     * set of tasks a terminal signal reaches: Ctrl+C is delivered to every
+     * task of the foreground group of the tty, not to a single reader. A
+     * session is the owner of a controlling tty. A fresh task inherits both
+     * from its creator; `setpgid` moves a task to a group, and a session is
+     * created by the leader of a session (the minimal slice of job control).
+     */
+    k_u32_t pgid;
+    k_u32_t sid;
+    /*
      * The credentials of the task (ADR 0005, the second half of 1.4, ADR
      * 0053): the user it runs as, the group it belongs to, and the three uids
      * of POSIX. The effective uid decides the triads of the mode of every
@@ -125,6 +135,12 @@ struct task {
      * a terminal of its own.
      */
     struct k_terminal *terminal;
+    /*
+     * The dialogue of this task hides its input from the file log while a
+     * password is read. It belongs beside the terminal because two sessions
+     * may ask for a secret at the same moment.
+     */
+    bool input_not_logged;
     /*
      * The mode of the terminal of that session (kernel/tty.h): made on the
      * first question a program asks of its terminal and freed with the task.
@@ -388,6 +404,24 @@ const char *task_get_cwd(struct task *t);
  */
 void task_set_job(struct task *t, k_u32_t job);
 k_u32_t task_get_job(const struct task *t);
+
+/* The process group and the session of a task. A child inherits both; a
+ * fork and execve keep them. `task_setpgid` is the setpgid syscall: it moves
+ * a task to a group inside its session (or creates one when pgid == pid). */
+void task_set_pgid(struct task *t, k_u32_t pgid);
+k_u32_t task_get_pgid(const struct task *t);
+void task_set_sid(struct task *t, k_u32_t sid);
+k_u32_t task_get_sid(const struct task *t);
+int task_setpgid(k_u32_t pid, k_u32_t pgid);
+k_i32_t task_getpgid(k_u32_t pid);
+
+/*
+ * Send a signal to every living task of a process group except the caller.
+ * The answer is 0 when at least one task was named, and ESRCH when the
+ * group has no other task. This is how Ctrl+C reaches the foreground group
+ * of a tty.
+ */
+int task_signal_pgrp(k_u32_t pgid, int sig);
 
 /*
  * Send a signal to every living task of a job except the caller, which is

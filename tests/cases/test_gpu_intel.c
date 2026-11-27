@@ -1,5 +1,5 @@
 /*
- * Micro OS — the Intel GPU identity table and probe states.
+ * Micro OS — the Intel GPU identity table and probe contract.
  *
  * Facts from drivers/gpu/drm/i915/i915_pciids.h,
  * drivers/gpu/drm/i915/intel_step.c and
@@ -10,22 +10,16 @@
 #include "tests/tests.h"
 
 #include "gpu_intel.h"
-#include "kernel/log.h"
+#include "port_x86_64.h"
 #include "port_x86_64_pci.h"
 
-enum test_bus {
-    TEST_BUS_EMPTY,
-    TEST_BUS_UNKNOWN_INTEL,
-};
+#include <string.h>
 
-/* The fake bus used by the no-card and unknown-ID cases; the real probe is linked. */
-static enum test_bus s_bus;
-static k_u32_t s_find_calls;
-static k_u32_t s_class_calls;
-static k_u32_t s_map_calls;
-static k_u32_t s_fb_map_calls;
+static k_u16_t s_vendor;
+static k_u16_t s_device;
+static k_u8_t s_revision;
 
-/* The host case links the Intel source but not the x86-64 paging port. */
+/* The host case links the Intel source but not the x86-64 paging/timer port. */
 k_u64_t g_port_x86_64_kernel_phys;
 static k_u64_t s_ticks;
 
@@ -35,47 +29,24 @@ k_u64_t port_x86_64_ticks(void)
     return s_ticks;
 }
 
-bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device, struct port_x86_64_pci_device *found)
-{
-    K_UNUSED(vendor);
-    K_UNUSED(device);
-    K_UNUSED(found);
-    s_find_calls++;
-    return false;
-}
-
-bool port_x86_64_pci_find_class(k_u8_t base, k_u8_t sub, k_u8_t prog_if,
-                                struct port_x86_64_pci_device *found)
-{
-    K_UNUSED(base);
-    K_UNUSED(sub);
-    K_UNUSED(prog_if);
-    s_class_calls++;
-    if (s_bus != TEST_BUS_UNKNOWN_INTEL) {
-        return false;
-    }
-    *found = (struct port_x86_64_pci_device){0u, 2u, 0u};
-    return true;
-}
-
 k_u32_t port_x86_64_pci_read32(const struct port_x86_64_pci_device *device, k_u8_t offset)
 {
-    K_UNUSED(device);
-    K_UNUSED(offset);
+    (void)device;
+    (void)offset;
     return 0u;
 }
 
 k_u16_t port_x86_64_pci_read16(const struct port_x86_64_pci_device *device, k_u8_t offset)
 {
-    K_UNUSED(device);
-    if (s_bus != TEST_BUS_UNKNOWN_INTEL) {
-        return 0u;
-    }
+    (void)device;
     if (offset == PCI_VENDOR) {
-        return 0x8086u;
+        return s_vendor;
     }
     if (offset == PCI_DEVICE) {
-        return 0xFFFFu;
+        return s_device;
+    }
+    if (offset == PCI_REVISION) {
+        return (k_u16_t)s_revision;
     }
     if (offset == PCI_CLASS) {
         return 0x0300u;
@@ -85,25 +56,23 @@ k_u16_t port_x86_64_pci_read16(const struct port_x86_64_pci_device *device, k_u8
 
 void port_x86_64_pci_enable(const struct port_x86_64_pci_device *device, k_u16_t bits)
 {
-    K_UNUSED(device);
-    K_UNUSED(bits);
+    (void)device;
+    (void)bits;
 }
 
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
-    K_UNUSED(vaddr);
-    K_UNUSED(paddr);
-    K_UNUSED(len);
-    s_map_calls++;
+    (void)vaddr;
+    (void)paddr;
+    (void)len;
     return 0u;
 }
 
 k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
-    K_UNUSED(vaddr);
-    K_UNUSED(paddr);
-    K_UNUSED(len);
-    s_fb_map_calls++;
+    (void)vaddr;
+    (void)paddr;
+    (void)len;
     return 0u;
 }
 
@@ -163,68 +132,70 @@ static void test_rejections(void)
     KT_CHECK(gpu_intel_id_lookup(0x1234u, 0x1111u) == NULL);
 }
 
-static void test_absent_card(void)
+static void test_probe_none_for_other_vendor(void)
 {
+    struct port_x86_64_pci_device pci = {0u, 2u, 0u};
     struct gpu_info info;
-    const char *captured;
-    int rc;
+    enum gpu_probe_result res;
 
-    ktest_begin("gpu-intel: an empty PCI bus is an honest KMOD_SKIP");
+    ktest_begin("gpu-intel: non-Intel vendor is not this probe's responsibility");
 
-    s_bus = TEST_BUS_EMPTY;
-    s_find_calls = 0u;
-    s_class_calls = 0u;
-    s_map_calls = 0u;
-    klog_capture_start();
-    rc = gpu_intel_probe(&info);
-    klog_capture_stop();
-    captured = klog_captured_text();
-
-    KT_CHECK_INT_EQ(rc, 1);
-    KT_CHECK_INT_EQ(info.state, KMOD_SKIP);
-    KT_CHECK(info.vendor == 0u);
-    KT_CHECK(info.vram_bytes == GPU_INFO_UNKNOWN_SIZE);
-    KT_CHECK_INT_EQ(s_find_calls, 5);
-    KT_CHECK_INT_EQ(s_class_calls, 1);
-    KT_CHECK_INT_EQ(s_map_calls, 0u);
-    KT_CHECK(captured != NULL);
-    if (captured != NULL) {
-        KT_CHECK(strstr(captured, "gpu: no Intel display found (KMOD_SKIP)") != NULL);
-    }
+    s_vendor = 0x1002u;
+    s_device = 0x67DFu;
+    s_revision = 0xEFu;
+    memset(&info, 0, sizeof(info));
+    res = gpu_intel_probe(&pci, &info);
+    KT_CHECK_INT_EQ((int)res, (int)GPU_PROBE_NONE);
 }
 
-static void test_unknown_intel(void)
+static void test_probe_unknown_intel(void)
 {
+    struct port_x86_64_pci_device pci = {0u, 2u, 0u};
     struct gpu_info info;
-    const char *captured;
-    int rc;
+    enum gpu_probe_result res;
 
-    ktest_begin("gpu-intel: an unknown Intel DID is KMOD_UNKNOWN, not KMOD_SKIP");
+    ktest_begin("gpu-intel: unknown Intel DID is GPU_PROBE_UNKNOWN_DEV");
 
-    s_bus = TEST_BUS_UNKNOWN_INTEL;
-    s_find_calls = 0u;
-    s_class_calls = 0u;
-    s_map_calls = 0u;
-    klog_capture_start();
-    rc = gpu_intel_probe(&info);
-    klog_capture_stop();
-    captured = klog_captured_text();
+    s_vendor = 0x8086u;
+    s_device = 0xFFFFu;
+    s_revision = 0x07u;
+    memset(&info, 0, sizeof(info));
+    res = gpu_intel_probe(&pci, &info);
 
-    KT_CHECK_INT_EQ(rc, 1);
-    KT_CHECK_INT_EQ(info.state, KMOD_UNKNOWN);
+    KT_CHECK_INT_EQ((int)res, (int)GPU_PROBE_UNKNOWN_DEV);
+    KT_CHECK(info.present);
+    KT_CHECK(!info.known);
     KT_CHECK_INT_EQ(info.vendor, 0x8086u);
     KT_CHECK_INT_EQ(info.device, 0xFFFFu);
+    KT_CHECK_INT_EQ(info.revision, 0x07u);
     KT_CHECK_INT_EQ(info.bus, 0u);
     KT_CHECK_INT_EQ(info.slot, 2u);
-    KT_CHECK_INT_EQ(info.func, 0u);
-    KT_CHECK(info.mmio_size == 0u);
-    KT_CHECK(info.vram_bytes == GPU_INFO_UNKNOWN_SIZE);
-    KT_CHECK_INT_EQ(s_class_calls, 1);
-    KT_CHECK_INT_EQ(s_map_calls, 0u);
-    KT_CHECK(captured != NULL);
-    if (captured != NULL) {
-        KT_CHECK(strstr(captured, "is not in the probe table (KMOD_UNKNOWN)") != NULL);
-    }
+    KT_CHECK_INT_EQ(info.function, 0u);
+}
+
+static void test_probe_known_intel_degraded(void)
+{
+    struct port_x86_64_pci_device pci = {0u, 2u, 0u};
+    struct gpu_info info;
+    enum gpu_probe_result res;
+
+    ktest_begin("gpu-intel: a known laptop fills the shared result before degrading");
+
+    s_vendor = 0x8086u;
+    s_device = 0x5917u;
+    s_revision = 0x07u;
+    memset(&info, 0, sizeof(info));
+    res = gpu_intel_probe(&pci, &info);
+
+    KT_CHECK_INT_EQ((int)res, (int)GPU_PROBE_DEGRADED);
+    KT_CHECK(info.present);
+    KT_CHECK(info.known);
+    KT_CHECK_STR_EQ(info.name, "Intel UHD 620");
+    KT_CHECK_INT_EQ(info.mmio_size, 16u * 1024u * 1024u);
+    KT_CHECK_INT_EQ(info.display_gen, 9);
+    KT_CHECK_INT_EQ(info.display_rel, 0);
+    KT_CHECK_STR_EQ(info.display_step, "C0");
+    KT_CHECK_INT_EQ(info.probe_result, GPU_PROBE_DEGRADED);
 }
 
 void test_gpu_intel(void)
@@ -232,6 +203,7 @@ void test_gpu_intel(void)
     test_laptop_identity();
     test_nearby_identities();
     test_rejections();
-    test_absent_card();
-    test_unknown_intel();
+    test_probe_none_for_other_vendor();
+    test_probe_unknown_intel();
+    test_probe_known_intel_degraded();
 }

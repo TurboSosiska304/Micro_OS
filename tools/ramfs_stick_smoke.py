@@ -296,6 +296,10 @@ def main(argv: list[str]) -> int:
             ok &= check("the boot log says the root is read-only",
                         "read-only" in boot_text,
                         boot_text[-600:])
+            ok &= check("the boot log says its logs are in RAM",
+                        "the root is read-only, /etc/bootlog.log and /etc/run.log are in RAM"
+                        in boot_text,
+                        boot_text[-600:])
             ok &= check("the boot log says /tmp is a ramfs",
                         "/tmp is a ramfs" in boot_text,
                         boot_text[-600:])

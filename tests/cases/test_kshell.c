@@ -1421,6 +1421,136 @@ static void test_mount(void)
     ls_teardown();
 }
 
+static void test_sleep(void)
+{
+    char buf[512];
+    FILE *sink = tmpfile();
+    size_t used;
+    int rc;
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    port_host_set_sink(sink);
+    rc = kshell_execute("sleep -1");
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+    port_host_set_sink(NULL);
+
+    KT_CHECK(rc != KSHELL_OK);
+    KT_CHECK(strstr(buf, "sleep: -1: not a number of milliseconds") != NULL);
+    KT_CHECK(strstr(buf, "18446744073709551615") == NULL);
+    KT_CHECK(strstr(buf, "slept 60000 ms") == NULL);
+}
+
+static void test_rm_guards(void)
+{
+    struct vfs_stat info;
+    char buf[2048];
+    FILE *sink = tmpfile();
+    size_t used;
+
+    KT_CHECK(sink != NULL);
+    if (sink == NULL) {
+        return;
+    }
+
+    ls_setup();
+    KT_CHECK_INT_EQ(vfs_mkdir("/etc"), 0);
+    KT_CHECK_INT_EQ(vfs_mkdir("/home"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /etc/keep hello"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("write /home/keep hello"), KSHELL_OK);
+
+    port_host_set_sink(sink);
+
+    /* The root is never removed: not with -r, and not with the hint. */
+    KT_CHECK_INT_EQ(kshell_execute("rm /"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /"), KSHELL_ERROR);
+
+    /* A mount point is a boundary, not a directory of the volume. */
+    KT_CHECK_INT_EQ(devfs_register("/dev"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm /dev"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/dev"), 0);
+
+    KT_CHECK_INT_EQ(devfs_register("/proc"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /proc"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(kshell_execute("rm /proc"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/proc"), 0);
+
+    /* A mount inside the tree is a boundary: the walk stops, it does not
+     * cross into the mounted filesystem. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/safe"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /safe/keep hi"), KSHELL_OK);
+    KT_CHECK_INT_EQ(vfs_mkdir("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(devfs_register("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /safe"), KSHELL_ERROR);
+    KT_CHECK_INT_EQ(vfs_umount("/safe/mnt"), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/safe/mnt", &info), 0);
+
+    /* A normal recursive removal still works. */
+    KT_CHECK_INT_EQ(vfs_mkdir("/tree"), 0);
+    KT_CHECK_INT_EQ(kshell_execute("write /tree/file hi"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /tree"), KSHELL_OK);
+    KT_CHECK(vfs_stat("/tree", &info) != 0);
+
+    /* The guard must not have touched the volume. */
+    KT_CHECK_INT_EQ(vfs_stat("/etc/keep", &info), 0);
+    KT_CHECK_INT_EQ(vfs_stat("/home/keep", &info), 0);
+
+    rewind(sink);
+    used = fread(buf, 1, sizeof(buf) - 1, sink);
+    buf[used] = '\0';
+
+    port_host_set_sink(NULL);
+
+    KT_CHECK(strstr(buf, "the root of the filesystem is not removed by the shell") != NULL);
+    KT_CHECK(strstr(buf, "rm: /dev: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "rm: /proc: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "rm: /safe/mnt: is a mount point") != NULL);
+    KT_CHECK(strstr(buf, "is a directory, use -r") == NULL);
+
+    ls_teardown();
+}
+
+static void test_rm_many(void)
+{
+    static struct mfs_ram_device volume;
+    static struct k_blockdev device;
+    struct vfs_stat info;
+    char name[32];
+    int i;
+
+    KT_CHECK_INT_EQ(mfs_ram_init(&volume, 512), 0);
+    mfs_ram_device(&volume, &device);
+    KT_CHECK_INT_EQ(mfs_format(&device, 512), 0);
+    KT_CHECK_INT_EQ(mfs_mount(&device), 0);
+    KT_CHECK_INT_EQ(mfs_vfs_register("/"), 0);
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/many"), 0);
+
+    for (i = 0; i < 320; i++) {
+        struct vfs_file file;
+        k_u8_t data[VFS_FILE_DATA_SIZE];
+
+        snprintf(name, sizeof(name), "/many/f%03d", i);
+        KT_CHECK_INT_EQ(vfs_open(name, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /many"), KSHELL_OK);
+    KT_CHECK(vfs_stat("/many", &info) != 0);
+
+    vfs_umount("/");
+    mfs_unmount();
+    mfs_ram_free(&volume);
+}
+
 void test_kshell(void)
 { /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
@@ -1432,10 +1562,13 @@ void test_kshell(void)
     test_kill();
     test_free();
     test_uptime();
+    test_sleep();
     test_date();
     test_memtest();
     test_mfetch();
     test_ls();
+    test_rm_guards();
+    test_rm_many();
     test_ls_color();
     test_attr();
     test_help_programs();

@@ -65,6 +65,7 @@
 #include "port_x86_64_console.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_pci.h"
+#include "port_x86_64_xhci_portsc.h"
 
 /* The stub of the line of the controller in the table of interrupts.S. */
 extern void isr_irq_xhci(void);
@@ -85,7 +86,6 @@ extern void isr_irq_xhci(void);
 #define XHCI_OP_CRCR 0x18u
 #define XHCI_OP_DCBAAP 0x30u
 #define XHCI_OP_CONFIG 0x38u
-#define XHCI_OP_PORTS 0x400u /* PORTSC of the port 1, sixteen bytes a port */
 
 /* The runtime registers, from the base plus RTSOFF: the interrupter 0 is the
  * first and starts at 0x20, and the four registers of it are these. */
@@ -136,42 +136,17 @@ extern void isr_irq_xhci(void);
 #define PCI_MSI_CAP_MAX 48u
 #define PCI_APIC_ADDRESS 0xFEE00000u
 
-/* One port: the bits of PORTSC this driver reads and writes. */
-#define XHCI_PORT_CCS 0x00000001u
-#define XHCI_PORT_PED 0x00000002u
-#define XHCI_PORT_PR 0x00000010u
-#define XHCI_PORT_PLS_MASK 0x000001E0u
-#define XHCI_PORT_PP 0x00000200u
-#define XHCI_PORT_SPEED_SHIFT 10u
-#define XHCI_PORT_SPEED_MASK 0x00003C00u
-#define XHCI_PORT_CHANGE 0x00FE0000u /* CSC..CEC, all write-one-to-clear */
-#define XHCI_PORT_PRC 0x00200000u
-#define XHCI_PORT_CSC 0x00020000u
-
-/* The speeds of a port, as PORTSC names them. */
-#define XHCI_SPEED_FULL 1u
-#define XHCI_SPEED_LOW 2u
-#define XHCI_SPEED_HIGH 3u
-#define XHCI_SPEED_SUPER 4u
-
-/* The link states of PORTSC.PLS (bits 5..8). A USB3 port is enabled when it
- * is in U0; a port in Polling (7) has not finished its reset, and a port in
- * Inactive (6) has no partner. */
-#define XHCI_PLS_U0 0u
-#define XHCI_PLS_POLLING 7u
-#define XHCI_PLS_INACTIVE 6u
-
 /*
- * The waits of a port reset. The budget of the reset itself is the one of the
- * specification (500 ms, and a device behind a bad cable may use all of it),
- * the enable after PRC is the moment of the device, and the power of the port
- * is a rail that comes up in twenty milliseconds (§4.19.1).
+ * The waits of a root port. The reset itself gets the 500 ms budget of
+ * xHCI 1.2b §4.19.5, PED gets a separate deadline, and PP is a rail that must
+ * be stable for 20 ms before software changes the port (§5.4.8).
  */
 #define XHCI_PORT_POWER_MS 20u
 #define XHCI_RESET_TIMEOUT_US 500000u
 #define XHCI_RESET_ENABLE_US 100000u
-#define XHCI_RESET_SETTLE_MS 10u
-#define XHCI_RESET_ATTEMPTS 5u
+#define XHCI_USB3_TRAINING_US 500000u
+#define XHCI_POLL_SPINS 10000000u
+#define XHCI_DELAY_SPINS_PER_MS 1000000u
 
 /* --- the TRBs -------------------------------------------------------------- */
 
@@ -302,6 +277,12 @@ static k_u8_t g_hub_desc[16] __attribute__((aligned(64)));
 static k_u64_t g_scratch_array[XHCI_SCRATCH_MAX] __attribute__((aligned(64)));
 static void *g_scratch_raw[XHCI_SCRATCH_MAX];
 
+/* HCSPARAMS1.MaxPorts is eight bits. The Supported Protocol Capability maps
+ * each one-based root port number to USB 2 or USB 3; zero means the table was
+ * not available and the speed after reset is the fallback. */
+#define XHCI_MAX_PORTS 256u
+static k_u8_t g_port_major[XHCI_MAX_PORTS];
+
 /* --- the state of the driver ---------------------------------------------- */
 
 static volatile k_u8_t *g_cap; /* the registers of the capability */
@@ -310,7 +291,6 @@ static volatile k_u8_t *g_rt;  /* the runtime registers */
 static volatile k_u8_t *g_db;  /* the doorbells */
 static k_u32_t g_max_slots;
 static k_u32_t g_max_ports;
-static k_u32_t g_port_base;
 
 static bool g_running; /* the rings are there and the controller runs */
 static k_u32_t g_cmd_index;
@@ -550,15 +530,21 @@ static k_u64_t now_us(void)
     return k_port_uptime_us();
 }
 
-/* Spend a few milliseconds without a ring to wait on. The clock of the
- * machine is the tick of the PIT, so a wait is a deadline and the loop reads
- * the register of the controller between two of them - which is also the
- * moment the device behind the port needs to be ready. */
+/* Spend a few milliseconds without a ring to wait on. The PIT normally moves
+ * the deadline; the spin limit is a second boundary for a machine whose tick
+ * is not moving, and that failure is reported instead of hanging the boot. */
 static void delay_ms(k_u32_t milliseconds)
 {
     k_u64_t deadline = k_port_uptime_ms() + milliseconds;
+    k_u64_t spins = 0;
+    k_u64_t limit = (k_u64_t)milliseconds * XHCI_DELAY_SPINS_PER_MS;
 
     while (k_port_uptime_ms() < deadline) {
+        if (spins++ >= limit) {
+            kwarn("usb: a %u ms delay did not finish its clock deadline", (unsigned)milliseconds);
+            return;
+        }
+
         __asm__ volatile("pause");
     }
 }
@@ -720,6 +706,7 @@ static bool command_wait(const struct xhci_trb *trb, k_u8_t *code, k_u32_t *slot
 {
     k_u64_t address = trb_phys(trb);
     k_u64_t deadline = k_port_uptime_ms() + 500u;
+    k_u32_t spins = 0;
 
     for (;;) {
         struct xhci_trb event;
@@ -733,7 +720,9 @@ static bool command_wait(const struct xhci_trb *trb, k_u8_t *code, k_u32_t *slot
             return true;
         }
 
-        if (k_port_uptime_ms() > deadline) {
+        if (k_port_uptime_ms() > deadline || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("xhci: command %u did not complete within its 500 ms budget",
+                  (unsigned)XHCI_TRB_GET_TYPE(trb->control));
             *code = 0xFFu;
             return false;
         }
@@ -1033,6 +1022,7 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
 {
     k_u64_t deadline = k_port_uptime_ms() + timeout_ms;
     struct xhci_transfer_wanted wanted;
+    k_u32_t spins = 0;
 
     wanted.slot = slot;
     wanted.dci = dci;
@@ -1049,7 +1039,9 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
             return true;
         }
 
-        if (k_port_uptime_ms() > deadline) {
+        if (k_port_uptime_ms() > deadline || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("xhci: slot %u endpoint %u transfer did not complete within %u ms",
+                  (unsigned)slot, (unsigned)dci, (unsigned)timeout_ms);
             *code = 0xFFu;
             return false;
         }
@@ -1961,8 +1953,14 @@ static bool hub_port_reset(struct xhci_hub *hub, k_u32_t port)
             return false;
         }
 
-        if ((change & HUB_CHANGE_RESET) != 0u || k_port_uptime_ms() > deadline) {
+        if ((change & HUB_CHANGE_RESET) != 0u) {
             break;
+        }
+
+        if (k_port_uptime_ms() > deadline || guard + 1u >= 100000u) {
+            kwarn("usb: the port %u of the hub %u did not finish its reset within 500 ms",
+                  (unsigned)port, (unsigned)hub->slot);
+            return false;
         }
     }
 
@@ -2501,7 +2499,114 @@ static bool enumerate_device(const struct xhci_where *where, k_u32_t speed)
     return false;
 }
 
-/* --- the port of the controller -------------------------------------------- */
+/* --- the ports of the controller ------------------------------------------ */
+
+#define XHCI_EXT_SUPPORTED_PROTOCOL 2u
+#define XHCI_EXT_CAP_LIMIT 64u
+
+static k_u32_t cap_read32(k_u32_t offset)
+{
+    return *(volatile k_u32_t *)(g_cap + offset);
+}
+
+/*
+ * The protocol of a port cannot be guessed from the Port Speed field before a
+ * USB2 reset: §5.4.8 says that field is invalid on USB2 until after the reset.
+ * The Supported Protocol Capability (§7.2) is the authority. Its Compatible
+ * Offset is one-based, exactly like the n in the PORTSC address formula, so
+ * ports 14 and 15 are entries 13 and 14 of the one shared PORTSC array.
+ */
+static bool protocols_read(k_u32_t hcsparams1, k_u32_t size)
+{
+    k_u32_t offset = (hcsparams1 >> 16) * 4u;
+    k_u32_t guard;
+    bool found = false;
+
+    memset(g_port_major, 0, sizeof(g_port_major));
+
+    if (offset == 0u) {
+        return false;
+    }
+
+    for (guard = 0; guard < XHCI_EXT_CAP_LIMIT; guard++) {
+        k_u32_t header;
+        k_u32_t next;
+        k_u32_t step;
+
+        if (offset > size || size - offset < 4u) {
+            return false;
+        }
+
+        header = cap_read32(offset);
+        next = (header >> 8) & 0xFFu;
+
+        if ((header & 0xFFu) == XHCI_EXT_SUPPORTED_PROTOCOL) {
+            k_u32_t compatible;
+            k_u32_t first;
+            k_u32_t count;
+            k_u32_t major;
+            k_u32_t port;
+
+            if (size - offset < 16u) {
+                return false;
+            }
+
+            compatible = cap_read32(offset + 8u);
+            first = xhci_protocol_first_port(compatible);
+            count = xhci_protocol_port_count(compatible);
+            major = xhci_protocol_major(header);
+
+            /* QEMU keeps a capability for a bus it disabled and gives it a
+             * zero port count (for example p2=0,p3=1). Skip that empty range
+             * and continue to the protocol capability that owns the ports. */
+            if (count == 0u) {
+                found = true;
+            } else {
+                if (first == 0u || first > g_max_ports || count > g_max_ports - first + 1u) {
+                    return false;
+                }
+
+                if (major == 2u || major == 3u) {
+                    for (port = first; port < first + count; port++) {
+                        g_port_major[port - 1u] = (k_u8_t)major;
+                    }
+
+                    kdebug("xhci: ports %u-%u speak USB %x.%x", (unsigned)first,
+                           (unsigned)(first + count - 1u), (unsigned)major,
+                           (unsigned)xhci_protocol_minor(header));
+                }
+            }
+
+            found = true;
+        }
+
+        if (next == 0u) {
+            break;
+        }
+
+        step = next * 4u;
+
+        if (step == 0u || step > size - offset || offset + step <= offset) {
+            return false;
+        }
+
+        offset += step;
+    }
+
+    return found && guard < XHCI_EXT_CAP_LIMIT;
+}
+
+static bool port_usb3(k_u32_t port, k_u32_t state)
+{
+    k_u8_t major;
+
+    if (port == 0u || port > XHCI_MAX_PORTS) {
+        return false;
+    }
+
+    major = g_port_major[port - 1u];
+    return major != 0u ? major >= 3u : xhci_portsc_speed(state) >= XHCI_SPEED_SUPER;
+}
 
 /* The name of a speed, for the lines of the log a person reads. */
 static const char *speed_name(k_u32_t speed)
@@ -2522,153 +2627,196 @@ static const char *speed_name(k_u32_t speed)
 
 /*
  * The power of the port, before anything else: a port that is not powered is
- * a port whose reset is not a reset.
- *
- * This is the defect the laptop of the report showed. The write of PP is
- * posted, and the old code read the register back at once, saw zero and
- * wrote the reset with the zero in it - which turned the port off in the
- * same write that reset it, and no PED ever came. A controller with PPC
- * clear (HCCPARAMS1 bit 3) powers its ports itself and PP reads zero for
- * ever; there the write and the wait are the price of a bit that is not
- * there, and the reset goes on - a port with a device on it is powered on
- * such a machine by definition.
+ * a port whose reset is not a reset. A controller with PPC clear powers its
+ * ports itself and PP reads zero for ever; there is no switch to wait for.
  */
 static bool port_power(k_u32_t address, k_u32_t state)
 {
     k_u64_t started;
+    k_u32_t spins = 0;
 
     if (!g_ppc || (state & XHCI_PORT_PP) != 0u) {
         return true;
     }
 
-    op_write(address, (state & ~XHCI_PORT_CHANGE) | XHCI_PORT_PP);
+    /* PP is sticky read/write. Preserve only fields that are safe in a write;
+     * in particular, never copy PED=1 into a power update (it disables). */
+    op_write(address, xhci_portsc_neutral(state) | XHCI_PORT_PP);
     (void)op_read(address);
 
     started = now_us();
 
     while ((op_read(address) & XHCI_PORT_PP) == 0u) {
-        if (now_us() - started > (k_u64_t)XHCI_PORT_POWER_MS * 1000u) {
-            kwarn("usb: the port at %x did not take its power (PORTSC %08x)", (unsigned)address,
-                  (unsigned)op_read(address));
+        if (now_us() - started > (k_u64_t)XHCI_PORT_POWER_MS * 1000u ||
+            spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port at %x did not take its power within 20 ms (PORTSC %08x)",
+                  (unsigned)address, (unsigned)op_read(address));
             return false;
         }
     }
 
-    /* The rail is up: the device behind it has the twenty milliseconds of the
-     * specification before it is reset (§4.19.1). */
+    /* xHCI 1.2b §5.4.8: with PPC software waits 20 ms after asserting PP
+     * before it changes any other state of the port. */
     delay_ms(XHCI_PORT_POWER_MS);
 
     return true;
 }
 
 /*
- * One attempt of a reset, and the PORTSC of the moment it gave up. The order
- * is the one of the specification and of the driver of Linux:
+ * One reset of a port, and the PORTSC of the moment it gave up. The order is
+ * the one of xHCI 1.2b §4.3.1, §4.19.5 and §5.4.8:
  *
- *   1. the change bits of an earlier scan (or of the firmware) are cleared,
- *      because a PRC that is already set is not the end of this reset;
- *   2. PR is written with the bits the port keeps - its power, its speed and
- *      its link state - and the write is read back, because a posted write
- *      that has not landed yet reads as a port that is not resetting;
- *   3. the answer is PRC and not the clearing of PR: on a real controller PR
- *      clears before the device is on the bus of the port, which is exactly
- *      how this driver read PED too early on the laptop of the report. The
- *      budget is 500 ms of the specification;
- *   4. the change bit of the reset is cleared after the enable, and PED is
- *      waited for in a loop: on a USB2 port it can lag the change bit by a
- *      few reads, and a USB3 port is enabled when PLS is U0 and not when it
- *      is Polling.
+ *   1. clear an old change with a neutral write plus the observed RW1CS bits;
+ *   2. write PR once, preserving PP/PLS/speed but never PED or a change bit;
+ *   3. wait for PRC with PR cleared, with the 500 ms reset budget;
+ *   4. wait for CCS, PED, U0 and a valid speed, then spend TRSTRCY before the
+ *      first command to the device;
+ *   5. clear the resulting changes with another neutral write and recheck.
+ *
+ * A failed enable gets one delayed second look, not another reset. Repeated
+ * PR writes cannot restart a reset that is already asserted (footnote 83) and
+ * can train a USB3 link over and over instead of letting it finish.
  */
-static bool port_reset_once(k_u32_t address, k_u32_t *final, k_u32_t *speed)
+static bool port_reset_once(k_u32_t port, k_u32_t address, bool usb3, k_u32_t *final,
+                            k_u32_t *speed)
 {
     k_u32_t state = op_read(address);
     k_u64_t started;
-    k_u32_t neutral;
+    k_u32_t changes;
+    k_u32_t settle;
+    k_u32_t spins = 0;
 
-    op_write(address, state | XHCI_PORT_CHANGE);
-    (void)op_read(address);
+    *final = state;
+    *speed = 0u;
 
-    state = op_read(address);
-
-    if ((state & XHCI_PORT_CCS) == 0u) {
-        *final = state;
+    if ((state & (XHCI_PORT_CCS | XHCI_PORT_OCA)) != XHCI_PORT_CCS ||
+        (g_ppc && (state & XHCI_PORT_PP) == 0u)) {
         return false;
     }
 
-    neutral = state & (XHCI_PORT_PP | XHCI_PORT_PLS_MASK | XHCI_PORT_SPEED_MASK);
-    op_write(address, neutral | XHCI_PORT_PR);
-    (void)op_read(address);
+    if ((state & XHCI_PORT_PR) == 0u) {
+        if (!xhci_portsc_can_reset(state, usb3)) {
+            return false;
+        }
+
+        /* A PRC left by firmware or an earlier scan is not the completion of
+         * the reset below. Clear only observed change bits and never copy PED
+         * into the write: PED is RW1CS and a one disables the port. */
+        changes = state & XHCI_PORT_CHANGE;
+
+        if (changes != 0u) {
+            op_write(address, xhci_portsc_clear_changes(state));
+            state = op_read(address);
+        }
+
+        if (!xhci_portsc_can_reset(state, usb3)) {
+            *final = state;
+            return false;
+        }
+
+        /* PR is RW1S; writing zero does not clear a reset already in progress.
+         * PED is deliberately absent, as required by §5.4.8 footnote 82. */
+        op_write(address, xhci_portsc_start_reset(state));
+        (void)op_read(address);
+    }
 
     started = now_us();
 
     for (;;) {
         state = op_read(address);
 
-        if ((state & XHCI_PORT_PRC) != 0u) {
+        if ((state & (XHCI_PORT_PRC | XHCI_PORT_PR)) == XHCI_PORT_PRC) {
             break;
         }
 
-        if (now_us() - started > XHCI_RESET_TIMEOUT_US) {
+        if (now_us() - started > XHCI_RESET_TIMEOUT_US || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port %u did not report PRC within 500 ms (PORTSC %08x)", (unsigned)port,
+                  (unsigned)state);
             *final = state;
             return false;
         }
     }
 
-    /* The reset is over: the change bit of it goes back as a one, and the
-     * port is asked for its enable. */
-    op_write(address, (state & ~XHCI_PORT_CHANGE) | XHCI_PORT_PRC);
-    state = op_read(address);
+    /* Speed is valid only after PR has cleared (§4.19.5). Read it again in
+     * the enable loop instead of freezing the first value after PRC. */
+    settle = xhci_portsc_settle_ms(state, usb3);
+    started = now_us();
+    spins = 0;
 
-    {
-        k_u32_t speed_now = (state & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
-        k_u64_t enabled = now_us();
-
-        for (;;) {
-            k_u32_t pls = (state & XHCI_PORT_PLS_MASK) >> 5;
-
-            if ((state & XHCI_PORT_PED) != 0u &&
-                (speed_now != XHCI_SPEED_SUPER || pls == XHCI_PLS_U0)) {
-                break;
-            }
-
-            if (now_us() - enabled > XHCI_RESET_ENABLE_US) {
-                *final = state;
-                return false;
-            }
-
+    while (!xhci_portsc_enabled(state, usb3)) {
+        if (now_us() - started > XHCI_RESET_ENABLE_US || spins++ >= XHCI_POLL_SPINS) {
+            kwarn("usb: the port %u did not reach PED/U0 within 100 ms (PORTSC %08x); "
+                  "checking again after %u ms",
+                  (unsigned)port, (unsigned)state, (unsigned)settle);
+            delay_ms(settle);
             state = op_read(address);
+            break;
         }
+
+        state = op_read(address);
     }
 
-    /* The change bits after the enable: the connect and the reset of this
-     * attempt are read and cleared, so the next scan does not see them. */
-    op_write(address, state | XHCI_PORT_CHANGE);
-    *final = op_read(address);
-
-    if ((*final & XHCI_PORT_PED) == 0u) {
+    if (!xhci_portsc_enabled(state, usb3)) {
+        op_write(address, xhci_portsc_clear_changes(state));
+        *final = op_read(address);
         return false;
     }
 
-    *speed = (*final & XHCI_PORT_SPEED_MASK) >> XHCI_PORT_SPEED_SHIFT;
+    /* The device is in Default state at PR=0. Give it the reset recovery
+     * interval before the first Address Device command: 10 ms for USB2 and
+     * 50 ms for USB3, not one unconditional 10 ms after enumeration. */
+    delay_ms(settle);
+    state = op_read(address);
 
+    op_write(address, xhci_portsc_clear_changes(state));
+    *final = op_read(address);
+
+    if (!xhci_portsc_enabled(*final, usb3)) {
+        return false;
+    }
+
+    *speed = xhci_portsc_speed(*final);
     return true;
 }
 
 /* Reset one port that has a device, and answer its speed and the PORTSC it
  * had before the reset. A port with nothing on it is not an error and says
  * nothing; a port with a device that does not come up is a warning with the
- * two PORTSC of the attempts, because that line is what a person sends when
- * the keyboard of a laptop does not work. */
+ * two PORTSC values and the decoded fields, because that is what a person
+ * sends when the keyboard of a laptop does not work. */
 static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
 {
-    k_u32_t address = g_port_base + (port - 1u) * 16u;
-    k_u32_t state = op_read(address);
-    k_u32_t final = state;
-    k_u32_t attempt;
+    k_u32_t address;
+    k_u32_t state;
+    k_u32_t final;
+    k_u64_t started;
+    k_u32_t spins = 0;
+    bool usb3;
 
+    *speed = 0u;
+
+    if (port == 0u || port > g_max_ports) {
+        *before = 0u;
+        return false;
+    }
+
+    address = xhci_portsc_offset(port);
+    state = op_read(address);
+    final = state;
     *before = state;
 
     if ((state & XHCI_PORT_CCS) == 0u) {
+        return false;
+    }
+
+    usb3 = port_usb3(port, state);
+    kinfo("xhci: port %u: PORTSC %08x before reset decision (PED=%u PLS=%u PP=%u speed=%u)",
+          (unsigned)port, (unsigned)state, (unsigned)((state & XHCI_PORT_PED) != 0u),
+          (unsigned)xhci_portsc_pls(state), (unsigned)((state & XHCI_PORT_PP) != 0u),
+          (unsigned)xhci_portsc_speed(state));
+
+    if ((state & XHCI_PORT_OCA) != 0u) {
+        kwarn("usb: the port %u is in over-current (PORTSC %08x)", (unsigned)port, (unsigned)state);
         return false;
     }
 
@@ -2676,39 +2824,77 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
         return false;
     }
 
-    kdebug("usb: port %u: PORTSC %08x before the reset", (unsigned)port, (unsigned)state);
+    state = op_read(address);
+    usb3 = port_usb3(port, state);
 
-    for (attempt = 0; attempt < XHCI_RESET_ATTEMPTS; attempt++) {
-        if (port_reset_once(address, &final, speed)) {
-            kdebug("usb: port %u: PORTSC %08x after the reset (attempt %u, speed %s)",
-                   (unsigned)port, (unsigned) final, (unsigned)(attempt + 1u), speed_name(*speed));
+    /* USB2 reports a newly attached device as PLS=Polling (the Disabled
+     * state). USB3 reports CCS only after Polling reaches Enabled; leave that
+     * training alone rather than resetting a link that is still coming up. */
+    if (usb3 && xhci_portsc_pls(state) == XHCI_PLS_POLLING) {
+        started = now_us();
 
-            /* The specification gives the device a moment after the reset of
-             * its port before it answers the first command (Linux spends
-             * 10 ms here), and a controller of a real laptop is not QEMU
-             * about it. */
-            delay_ms(XHCI_RESET_SETTLE_MS);
-
-            return true;
+        while ((state & XHCI_PORT_CCS) != 0u && !xhci_portsc_enabled(state, true) &&
+               now_us() - started <= XHCI_USB3_TRAINING_US && spins < XHCI_POLL_SPINS) {
+            spins++;
+            __asm__ volatile("pause");
+            state = op_read(address);
         }
 
-        /* A device that left during the reset is not a port of retries, and
-         * a machine of a person unplugs one while it boots. */
-        if ((op_read(address) & XHCI_PORT_CCS) == 0u) {
+        if ((state & XHCI_PORT_CCS) == 0u) {
+            kinfo("usb: the port %u lost its device during link training (PORTSC %08x)",
+                  (unsigned)port, (unsigned)state);
+            return false;
+        }
+
+        if (!xhci_portsc_enabled(state, true)) {
+            kwarn("usb: the port %u did not leave Polling within its 500 ms budget; no reset "
+                  "asserted (PORTSC %08x)",
+                  (unsigned)port, (unsigned)state);
+            return false;
+        }
+    } else if (!usb3 && xhci_portsc_pls(state) == XHCI_PLS_RXDETECT) {
+        started = now_us();
+        spins = 0;
+
+        while ((state & XHCI_PORT_CCS) != 0u && xhci_portsc_pls(state) == XHCI_PLS_RXDETECT &&
+               now_us() - started <= XHCI_RESET_ENABLE_US && spins < XHCI_POLL_SPINS) {
+            spins++;
+            __asm__ volatile("pause");
+            state = op_read(address);
+        }
+
+        if (xhci_portsc_pls(state) == XHCI_PLS_RXDETECT) {
+            kinfo("usb: the port %u did not leave RxDetect within its 100 ms budget; no reset "
+                  "asserted (PORTSC %08x)",
+                  (unsigned)port, (unsigned)state);
+        }
+    }
+
+    if (!xhci_portsc_can_reset(state, usb3)) {
+        kinfo("usb: the port %u is not ready for reset (PORTSC %08x, PLS=%u, speed=%u)",
+              (unsigned)port, (unsigned)state, (unsigned)xhci_portsc_pls(state),
+              (unsigned)xhci_portsc_speed(state));
+        return false;
+    }
+
+    if (!port_reset_once(port, address, usb3, &final, speed)) {
+        if ((final & XHCI_PORT_CCS) == 0u) {
             kinfo("usb: the port %u lost its device during its reset (PORTSC %08x)", (unsigned)port,
                   (unsigned) final);
             return false;
         }
 
-        /* The core of Linux tries the reset five times: a USB2 port whose
-         * device was still settling comes up on the second one. */
-        delay_ms(XHCI_RESET_SETTLE_MS);
+        kwarn("usb: the port %u is not enabled after its reset (PORTSC %08x -> %08x, 1 attempt(s))",
+              (unsigned)port, (unsigned)*before, (unsigned) final);
+        kinfo("usb: port %u after reset: PED=%u PLS=%u PP=%u speed=%u", (unsigned)port,
+              (unsigned)((final & XHCI_PORT_PED) != 0u), (unsigned)xhci_portsc_pls(final),
+              (unsigned)((final & XHCI_PORT_PP) != 0u), (unsigned)xhci_portsc_speed(final));
+        return false;
     }
 
-    kwarn("usb: the port %u is not enabled after its reset (PORTSC %08x -> %08x, %u attempt(s))",
-          (unsigned)port, (unsigned)state, (unsigned) final, (unsigned)attempt);
-
-    return false;
+    kdebug("usb: port %u: PORTSC %08x after the reset (1 attempt, speed %s)", (unsigned)port,
+           (unsigned) final, speed_name(*speed));
+    return true;
 }
 
 /*
@@ -2723,7 +2909,7 @@ static void root_port_scan(void)
     k_u32_t port;
 
     for (port = 1; port <= g_max_ports; port++) {
-        k_u32_t address = g_port_base + (port - 1u) * 16u;
+        k_u32_t address = xhci_portsc_offset(port);
         k_u32_t state = op_read(address);
         k_u32_t change = state & XHCI_PORT_CHANGE;
 
@@ -2731,7 +2917,9 @@ static void root_port_scan(void)
             continue;
         }
 
-        op_write(address, state | change);
+        /* Clear the observed changes without copying PED=1 into the write.
+         * The old whole-register write-back could disable a live port. */
+        op_write(address, xhci_portsc_clear_changes(state));
 
         if ((state & XHCI_PORT_CSC) == 0u) {
             continue;
@@ -2863,6 +3051,10 @@ static bool controller_init(k_u64_t base, k_u32_t size)
     g_max_ports = (parameters >> 24) & 0xFFu;
     g_ppc = (parameters & 0x00000008u) != 0u;
 
+    if (!protocols_read(parameters, size)) {
+        kdebug("xhci: the supported protocol table is not readable; using PORTSC speed");
+    }
+
     if (g_max_slots == 0u || g_max_slots > 64u) {
         kwarn("xhci: the controller reports %u slots", (unsigned)g_max_slots);
         g_max_slots = g_max_slots > 64u ? 64u : g_max_slots;
@@ -2875,7 +3067,6 @@ static bool controller_init(k_u64_t base, k_u32_t size)
     g_op = g_cap + capability_length;
     g_db = g_cap + db_offset;
     g_rt = g_cap + rt_offset;
-    g_port_base = XHCI_OP_PORTS;
 
     parameters2 = *(volatile k_u32_t *)(g_cap + XHCI_CAP_HCSPARAMS2);
     pages_of_scratch = ((parameters2 >> 21) & 0x1Fu) | (((parameters2 >> 27) & 0x1Fu) << 5);
@@ -3378,6 +3569,8 @@ static void report_event(k_u32_t slot, k_u32_t dci, k_u64_t param, k_u32_t statu
 static void usb_service(void)
 {
     struct xhci_trb *event;
+    k_u32_t events = 0;
+    bool ring_busy;
 
     if (!g_running) {
         return;
@@ -3385,7 +3578,8 @@ static void usb_service(void)
 
     k_port_enter_critical();
 
-    while ((event = event_peek()) != NULL) {
+    while ((event = event_peek()) != NULL && events < XHCI_EVENT_TRBS) {
+        events++;
         k_u32_t type = XHCI_TRB_GET_TYPE(event->control);
         k_u32_t slot = XHCI_TRB_SLOT(event->control);
         k_u32_t dci = XHCI_TRB_ENDPOINT(event->control);
@@ -3438,7 +3632,13 @@ static void usb_service(void)
         event_pop();
     }
 
+    ring_busy = events == XHCI_EVENT_TRBS && event_peek() != NULL;
     k_port_exit_critical();
+
+    if (ring_busy) {
+        kwarn("xhci: the event ring still has events after a %u-event service bound",
+              (unsigned)XHCI_EVENT_TRBS);
+    }
 }
 
 /* --- the hot-plug of the ports --------------------------------------------- */
@@ -3634,7 +3834,7 @@ void port_x86_64_xhci_init(void)
             struct xhci_where where;
             k_u32_t before = 0;
 
-            if ((op_read(g_port_base + (port - 1u) * 16u) & XHCI_PORT_CCS) != 0u) {
+            if ((op_read(xhci_portsc_offset(port)) & XHCI_PORT_CCS) != 0u) {
                 attached++;
             }
 
@@ -3647,7 +3847,7 @@ void port_x86_64_xhci_init(void)
              * controller named. */
             kinfo("xhci: port %u: a device at speed %u (%s), PORTSC %08x -> %08x", (unsigned)port,
                   (unsigned)speed, speed_name(speed), (unsigned)before,
-                  (unsigned)op_read(g_port_base + (port - 1u) * 16u));
+                  (unsigned)op_read(xhci_portsc_offset(port)));
 
             where.root_port = (k_u8_t)port;
             where.depth = 0u;

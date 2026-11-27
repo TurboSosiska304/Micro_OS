@@ -1,27 +1,16 @@
 /*
- * Micro OS — the Intel GPU probe and framebuffer contract of the x86-64 port.
+ * Micro OS — Intel-specific GPU details over the shared x86-64 GPU contract.
  *
  * Facts from drivers/gpu/drm/i915/i915_reg.h,
  * drivers/gpu/drm/i915/gt/intel_gtt.h and
  * drivers/gpu/drm/i915/display/skl_universal_plane.c (GPL-2.0, Linux v6.12);
  * code written here for Micro OS (MIT).
- *
- * The shared gpu.c/port_x86_64_gpu.h lane is not merged at this base commit.
- * struct gpu_info below is the compatible fallback: after the merge, replace
- * it with the shared declaration and keep the Intel-specific tail in the
- * dispatcher's vendor detail or a mutually agreed extension.
  */
 #ifndef MICRO_OS_PORT_X86_64_GPU_INTEL_H
 #define MICRO_OS_PORT_X86_64_GPU_INTEL_H
 
 #include "gpu_intel_ggtt.h"
-#include "kernel/kmod.h"
-#include "kernel/types.h"
-
-#include "port_x86_64.h"
-
-/* A size that was not read is not zero and must not be reported as zero. */
-#define GPU_INFO_UNKNOWN_SIZE UINT64_MAX
+#include "port_x86_64_gpu.h"
 
 /*
  * One uncached 16 MiB MMIO window above the other devices of the port. The
@@ -29,31 +18,16 @@
  * the 256 MiB graphics aperture, is mapped separately when a later stage needs
  * to access the pages behind those entries.
  */
-#define PORT_X86_64_GPU_INTEL_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
+#define PORT_X86_64_GPU_INTEL_VIRT (PORT_X86_64_KERNEL_BASE + 0x3B000000ull)
 
 /* BAR2 is mapped write-combining only while a GGTT aperture test needs it. */
 #define PORT_X86_64_GPU_INTEL_APERTURE_VIRT (PORT_X86_64_KERNEL_BASE + 0x3C000000ull)
 
-/* The common prefix expected by the future gpu.c dispatcher. */
-struct gpu_info {
-    k_u16_t vendor;
-    k_u16_t device;
-    k_u8_t rev;
-    k_u8_t bus;
-    k_u8_t slot;
-    k_u8_t func;
-    k_u64_t mmio_base;
-    k_u64_t mmio_size;
-    k_u64_t vram_bytes;
-    kmod_state_t state;
-
-    /* Intel detail: the dispatcher may keep this tail or map it to its own. */
-    const char *name;
+/* Intel-only observations which do not belong in the shared vendor handshake. */
+struct gpu_intel_info {
+    struct gpu_info common;
     k_u16_t subsystem_vendor;
     k_u16_t subsystem_device;
-    k_u8_t display_gen;
-    k_u8_t display_rel;
-    const char *display_step;
     k_u8_t pipes;
     k_u8_t transcoders;
     k_u8_t ports;
@@ -63,8 +37,6 @@ struct gpu_info {
     k_u32_t de_port_isr;
     k_u32_t de_misc_isr;
     k_u32_t edp_ctl;
-    k_u16_t panel_width;
-    k_u16_t panel_height;
     k_u8_t panel_pipe; /* 0xff when no active eDP timing was read */
     bool mmio_responded;
     bool display_ready;
@@ -95,16 +67,11 @@ struct gpu_intel_id {
 /* The identity table is deliberately testable without a PCI bus. */
 const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device);
 
-/*
- * int gpu_intel_probe(struct gpu_info *out) is the weak-symbol entry used by
- * the future gpu.c vendor table. Return 0 only when a known card completed the
- * read-only MMIO handshake. Return 1 when no handshake completed (out->state
- * distinguishes KMOD_SKIP, KMOD_UNKNOWN and KMOD_DEGRADED), and -1 on a hard
- * failure. No card is a skip, not a boot failure.
- */
-int gpu_intel_probe(struct gpu_info *out);
+/* The shared dispatcher supplies the PCI function and receives the common result. */
+enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
+                                      struct gpu_info *out);
 
-/* Register the x86-64 `gpu` command after the read-only boot probe. */
-int gpu_intel_register(void);
+/* Optional subcommands for the shared `gpu` command. */
+int gpu_intel_command(int argc, char **argv);
 
 #endif /* MICRO_OS_PORT_X86_64_GPU_INTEL_H */
