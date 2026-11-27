@@ -132,6 +132,21 @@ k_size_t k_sched_sleeping_count(void);
 k_size_t k_sched_blocked_count(void);
 
 /*
+ * The deadlines of the sleeping table, for a diagnosis of a wait that did
+ * not end. The record is a snapshot under the scheduler lock, so a port can
+ * print it without holding that lock while it writes to a console. The
+ * number returned is the number of records written.
+ */
+struct k_sched_sleeper {
+    k_u32_t pid;
+    k_u32_t wake_tick;
+    k_u32_t cpu;
+    k_u8_t state;
+};
+
+k_size_t k_sched_sleepers(struct k_sched_sleeper *out, k_size_t max);
+
+/*
  * Move a task to the queue of another core. Only the scheduler decides where
  * a task belongs; this call is the one the scheduler and the tests use. A
  * task that is running is refused (-1): it is not moved in the middle of its

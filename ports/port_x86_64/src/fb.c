@@ -99,6 +99,8 @@ static volatile k_u16_t *g_fb;
 static int g_width;
 static int g_height;
 static int g_stride; /* pixels of a line, the pitch of the mode in pixels */
+static k_u8_t g_fb_format = FB_FORMAT_RGB565;
+static k_u8_t g_fb_bpp = PORT_X86_64_SCREEN_BPP;
 
 static int g_columns;
 static int g_rows;
@@ -192,6 +194,8 @@ static void pixel_put(int x, int y, k_u16_t color)
         return;
     }
 
+    /* g_fb is the VESA RGB565 framebuffer; the console draws into it even when
+     * the reported format changes for an intel page-flip surface. */
     g_fb[y * g_stride + x] = color;
 }
 
@@ -203,6 +207,7 @@ static struct k_fb_surface fb_surface(void)
     surface.width = (k_u32_t)g_width;
     surface.height = (k_u32_t)g_height;
     surface.pitch = (k_u32_t)g_stride;
+    surface.format = g_fb_format;
 
     return surface;
 }
@@ -775,6 +780,12 @@ const struct port_x86_64_screen *port_x86_64_fb_screen(const struct port_x86_64_
  * framebuffer (the text mode of the VGA is the console of this port, not a
  * picture a program may draw in).
  */
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp)
+{
+    g_fb_format = format;
+    g_fb_bpp = bpp;
+}
+
 bool port_x86_64_fb_info(struct fb_info *out)
 {
     if (out == NULL || g_fb == NULL) {
@@ -787,8 +798,8 @@ bool port_x86_64_fb_info(struct fb_info *out)
     out->pitch = (k_u16_t)g_stride;
     out->columns = (k_u16_t)g_columns;
     out->rows = (k_u16_t)g_rows;
-    out->bpp = (k_u8_t)PORT_X86_64_SCREEN_BPP;
-    out->format = FB_FORMAT_RGB565;
+    out->bpp = g_fb_bpp;
+    out->format = g_fb_format;
     out->font_width = FB_CELL_WIDTH;
     out->font_height = FB_CELL_HEIGHT;
 

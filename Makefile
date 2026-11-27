@@ -32,7 +32,7 @@ IDF_BUILD   ?= build
 IDF_PORT    ?=
 IDF_PORT_ARG = $(if $(IDF_PORT),-p $(IDF_PORT))
 
-.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-shell-smoke x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-volume-smoke
+.PHONY: ahci-smoke all bench board-soak build bundle bundle-board bundle-x86 ci clean coverage cut-smoke disk-stress format fuzz-long help idf-build idf-check idf-flash idf-monitor idf-size integrity fork-smoke mmu-smoke nvme-smoke ports-smoke power-smoke reproducible sdk sim smoke soak soak-host soak-image soak-smp test test-asan test-minimal test-smp test-tsan tty-smoke uefi uefi-run uefi-smoke uefi-stick uefi-stick-smoke usb-smoke usb-stick-smoke wiki-check x86-build x86-cut-smoke x86-disk x86-disk-smoke x86-fat-build x86-fs-smoke x86-iso x86-iso-run x86-iso-smoke x86-iso-uefi-smoke x86-iso-usb-smoke x86-net-build x86-net-run x86-net-smoke x86-open-build x86-root-smoke x86-run x86-run-disk x86-run-disk-serial x86-run-serial x86-shell-smoke x86-smoke x86-smp-build x86-smp-run x86-smp-smoke x86-usb-smoke x86-vga-smoke x86-mouse-smoke x86-volume-smoke
 help:
 	@echo "Micro OS — available targets:"
 	@echo "  make build      configure and build the host build"
@@ -108,7 +108,7 @@ help:
 	@echo "  make soak       the session of 600 seconds on x86-64 (one boot)"
 	@echo "  make soak SOAK_MINUTES=1  the same, short, to check the tool"
 	@echo "  make soak SOAK_ITERATIONS=5  five short boots, one pass each"
-	@echo "  make soak-smp   the same session on the two-core image (-smp 2)"
+	@echo "  make soak-smp   the same session on the SMP image (-smp 8)"
 	@echo "  make soak-host  the same ten minutes on the host, two cores, under TSan"
 	@echo "  make fuzz-long  the fuzzers with a multiplier and a seed"
 	@echo "  make disk-stress  a full volume, fsck -y and two boots (MicroFS, FAT)"
@@ -314,9 +314,15 @@ X86_SIGN_ARGS := -DMICROOS_SIGN_KEY=$(MICROOS_SIGN_KEY)
 # machine without it. `make x86-run X86_DISPLAY=sdl` picks the other one.
 X86_DISPLAY ?= gtk
 
+# The policy of the cores is a knob of the build, because a machine of metal may
+# refuse the many cores before the kernel has a way to say why: `make SMP=OFF`
+# builds the same image that brings up only the processor it booted on, and a
+# stick of it is the first thing to try on a machine that resets at the boot.
+SMP ?= ON
+
 x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
-		-DMICRO_OS_FS_EXT2=ON -DMICRO_OS_FS_FAT32=ON $(X86_SIGN_ARGS)
+		-DMICRO_OS_FS_EXT2=ON -DMICRO_OS_FS_FAT32=ON -DKERNEL_SMP=$(SMP) $(X86_SIGN_ARGS)
 	cmake --build $(X86_BUILD) --target image
 
 # The other policy of ADR 0020: the loader verifies the image, prints the
@@ -329,13 +335,11 @@ x86-open-build:
 		-DMICRO_OS_REQUIRE_SIGNATURE=OFF $(X86_SIGN_ARGS)
 	cmake --build $(X86_OPEN_BUILD) --target microos64.bin loader32.elf
 
-# The kernel of two cores on the x86-64 machine (ADR 0012). The port reads the
-# processor list of the firmware (the MADT of ACPI) and starts the processor of
-# the boot only: the APs wait for the trampoline that is not written yet, so
-# the kernel says how many cores the machine has and uses one. The build is the
-# half of the gate that can be checked today - the sources of a two-core kernel
-# compile and boot on the machine - and `make x86-smoke` boots the same image
-# with -smp 2 and reads the two numbers.
+# The kernel of the many cores on the x86-64 machine (ADR 0012). The port
+# reads the processor list of the firmware (the MADT of ACPI) and starts every
+# core it has room for, up to KERNEL_CPUS_MAX; the build is SMP by default, so
+# this target is the same image as `x86-build` kept under its own directory for
+# the smoke that names it explicitly.
 X86_SMP_BUILD := build-x86-smp
 
 x86-smp-build:
@@ -345,7 +349,7 @@ x86-smp-build:
 
 x86-smp-run: x86-smp-build x86-disk
 	qemu-system-x86_64 -kernel $(X86_SMP_BUILD)/loader32.elf \
-		-initrd $(X86_SMP_BUILD)/microos64.bin -m 256 -smp 2 -nographic -no-reboot \
+		-initrd $(X86_SMP_BUILD)/microos64.bin -m 256 -smp 8 -nographic -no-reboot \
 		$(X86_DISK_DRIVE)
 
 # The disk of the machine: an MBR, one partition and a MicroFS volume with
@@ -564,7 +568,7 @@ uefi-run: uefi
 	@test -n "$(UEFI_CODE)" || { echo "uefi-run: no OVMF (install edk2-ovmf)" >&2; exit 2; }
 	@test -f "$(UEFI_VARS)" || { echo "uefi-run: $(UEFI_VARS) is not there" >&2; exit 2; }
 	cp "$(UEFI_VARS)" $(UEFI_BUILD)/vars.fd
-	qemu-system-x86_64 -machine q35 -m 512 -smp 2 \
+	qemu-system-x86_64 -machine q35 -m 512 -smp 8 \
 		-drive if=pflash,format=raw,readonly=on,file=$(UEFI_CODE) \
 		-drive if=pflash,format=raw,file=$(UEFI_BUILD)/vars.fd \
 		-drive file=$(UEFI_IMAGE),format=raw,if=ide,index=0 \
@@ -577,13 +581,11 @@ uefi-run: uefi
 uefi-smoke: uefi
 	python3 tools/uefi_smoke.py --image $(UEFI_IMAGE) --timeout 180
 
-# The gate of the two cores (ADR 0012): the kernel of `x86-smp-build` boots on
-# a machine of two processors and has to start both of them, keep a task on
-# one core, take work on the other and read the clock of the AP. The disk is
-# the same image of `x86-disk`; the tool drives the `smp` command of the shell
-# and compares the ticks of the core 1 before and after the load. It is not a
-# part of `make ci`: the two-core image is not green until the kernel lanes of
-# the branch land.
+# The gate of the many cores (ADR 0012): the kernel of `x86-smp-build` boots
+# on a machine of eight processors and has to start every one of them, keep
+# tasks on all cores, take work across them and read the clock of every AP.
+# The disk is the same image of `x86-disk`; the tool drives the `smp` command
+# of the shell and compares the ticks of the APs before and after the load.
 x86-smp-smoke: x86-smp-build x86-disk
 	python3 tools/x86_smp_smoke.py --build $(X86_SMP_BUILD) --image $(X86_PROGRAMS_IMAGE)
 
@@ -648,6 +650,11 @@ bench: x86-build build
 # `make ci`: the monitor is a tool of its own.
 x86-vga-smoke: x86-build x86-disk
 	python3 tools/x86_vga_smoke.py --image $(X86_PROGRAMS_IMAGE)
+
+# The PS/2 mouse: move the pointer through the QEMU monitor and confirm the
+# cursor moved in the screendump.
+x86-mouse-smoke: x86-build x86-disk
+	python3 tools/x86_mouse_smoke.py --image $(X86_PROGRAMS_IMAGE) --loader $(X86_BUILD)/loader32.elf --kernel $(X86_BUILD)/microos64.bin
 
 # The keyboard of the USB (ADR 0040): the machine of this run has no PS/2
 # controller at all (`-machine pc,i8042=off`) and the only keyboard on it is a
@@ -942,13 +949,13 @@ soak: soak-image
 		$(if $(SOAK_ITERATIONS),--iterations $(SOAK_ITERATIONS),--minutes $(SOAK_MINUTES)) \
 		$(SOAK_ARGS)
 
-# The same session on the kernel of two cores: `--smp` boots the build of
-# `x86-smp-build` with -smp 2 and the load asserts the two-core invariants on
-# top of the ones of 1.0 - the report of `smp`, the ticks of both cores
-# moving, the queues consistent and no exception in any answer. The image is
-# the full volume of the session, made from the current programs of
-# `x86-disk` (the images of the programs do not depend on the kernel), and
-# the boot is the two-core kernel on that image.
+# The same session on the kernel of the many cores: `--smp` boots the build of
+# `x86-smp-build` with -smp 8 and the load asserts the SMP invariants on top of
+# the ones of 1.0 - the report of `smp`, the ticks of every core moving, the
+# queues consistent and no exception in any answer. The image is the full
+# volume of the session, made from the current programs of `x86-disk` (the
+# images of the programs do not depend on the kernel), and the boot is the
+# SMP kernel on that image.
 soak-smp: x86-smp-build x86-disk
 	rm -f $(SOAK_SMP_IMAGE) $(SOAK_SMP_IMAGE).full
 	python3 tools/soak_image.py --build $(X86_BUILD) --image $(SOAK_SMP_IMAGE) \

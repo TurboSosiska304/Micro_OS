@@ -1056,8 +1056,8 @@ static bool wait_transfer(k_u32_t slot, k_u32_t dci, k_u32_t timeout_ms, k_u8_t 
  * two TRBs, and the status stage of a request of the device is the other
  * direction of its data.
  */
-static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, k_u16_t value,
-                             k_u16_t index, k_u16_t length, void *data)
+static bool control_transfer_ms(k_u32_t slot, k_u8_t request_type, k_u8_t request, k_u16_t value,
+                                k_u16_t index, k_u16_t length, void *data, k_u32_t timeout_ms)
 {
     struct xhci_trb trb;
     k_u8_t setup[8];
@@ -1108,11 +1108,17 @@ static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, 
     __asm__ volatile("" : : : "memory");
     doorbell(slot, 1);
 
-    if (!wait_transfer(slot, 1u, 500u, &code, &left)) {
+    if (!wait_transfer(slot, 1u, timeout_ms, &code, &left)) {
         return false;
     }
 
     return code == XHCI_CODE_SUCCESS || code == XHCI_CODE_SHORT;
+}
+
+static bool control_transfer(k_u32_t slot, k_u8_t request_type, k_u8_t request, k_u16_t value,
+                             k_u16_t index, k_u16_t length, void *data)
+{
+    return control_transfer_ms(slot, request_type, request, value, index, length, data, 500u);
 }
 
 /* --- the configuration descriptor ----------------------------------------- */
@@ -2079,7 +2085,14 @@ static bool hub_port_reset(struct xhci_hub *hub, k_u32_t port)
         (void)hub_status(hub, port, &status, &change);
     }
 
-    return (status & HUB_PORT_STAT_CONNECTION) != 0u;
+    if ((status & HUB_PORT_STAT_CONNECTION) == 0u) {
+        return false;
+    }
+
+    /* Same recovery window as a root port: the device needs time after reset
+     * before the first descriptor read. */
+    delay_ms(100u);
+    return true;
 }
 
 /* The change bits of a port are cleared one at a time: the write of a feature
@@ -2147,22 +2160,57 @@ static void hub_port_changed(struct xhci_hub *hub, k_u32_t port, k_u16_t status,
         return;
     }
 
-    if (!hub_port_reset(hub, port)) {
-        kinfo("usb: the port %u of the hub %u did not come up after its reset", (unsigned)port,
-              (unsigned)hub->slot);
-        return;
-    }
-
     {
         struct xhci_where child;
+        k_u32_t attempt;
+        const k_u32_t max_attempts = 3u;
+        bool ok = false;
 
         child.root_port = hub->root_port;
         child.depth = (k_u8_t)(hub->depth + 1u);
         child.parent_slot = hub->slot;
         child.route = route;
 
-        (void)hub_status(hub, port, &status, &change);
-        (void)enumerate_device(&child, hub_port_speed(hub, status));
+        for (attempt = 1u; attempt <= max_attempts; attempt++) {
+            k_u32_t speed;
+
+            if (attempt > 1u) {
+                if (!hub_port_reset(hub, port)) {
+                    kwarn("usb: hub %u port %u: gave up after %u attempt(s): the port did not come "
+                          "back after reset",
+                          (unsigned)hub->slot, (unsigned)port, (unsigned)(attempt - 1u));
+                    return;
+                }
+            } else if (!hub_port_reset(hub, port)) {
+                kinfo("usb: the port %u of the hub %u did not come up after its reset",
+                      (unsigned)port, (unsigned)hub->slot);
+                return;
+            }
+
+            (void)hub_status(hub, port, &status, &change);
+            speed = hub_port_speed(hub, status);
+
+            if (enumerate_device(&child, speed)) {
+                if (attempt > 1u) {
+                    kinfo("usb: hub %u port %u: enumerated after %u retries", (unsigned)hub->slot,
+                          (unsigned)port, (unsigned)(attempt - 1u));
+                }
+                ok = true;
+                break;
+            }
+
+            if (attempt < max_attempts) {
+                kwarn("usb: hub %u port %u: attempt %u/%u failed: enumeration failed; resetting "
+                      "the port",
+                      (unsigned)hub->slot, (unsigned)port, (unsigned)attempt,
+                      (unsigned)max_attempts);
+            }
+        }
+
+        if (!ok) {
+            kwarn("usb: hub %u port %u: gave up after %u attempts", (unsigned)hub->slot,
+                  (unsigned)port, (unsigned)max_attempts);
+        }
     }
 }
 
@@ -2512,7 +2560,7 @@ static bool enumerate_device(const struct xhci_where *where, k_u32_t speed)
      * packet of its endpoint 0 is the seventh, and a full-speed device that
      * answers with sixteen or thirty-two needs a context of that size before
      * the rest of the descriptor can arrive without a babble. */
-    if (!control_transfer(slot, 0x80u, 6u, 0x0100u, 0u, 8u, g_desc)) {
+    if (!control_transfer_ms(slot, 0x80u, 6u, 0x0100u, 0u, 8u, g_desc, 2000u)) {
         kinfo("usb: port %u: the device did not answer its descriptor", (unsigned)where->root_port);
         disable_slot(slot);
         return false;
@@ -3004,7 +3052,52 @@ static bool port_reset(k_u32_t port, k_u32_t *speed, k_u32_t *before)
 
     kdebug("usb: port %u: PORTSC %08x after the reset (1 attempt, speed %s)", (unsigned)port,
            (unsigned) final, speed_name(*speed));
+    /* USB 2.0: allow the device at least 10 ms of recovery after reset;
+     * we give it 100 ms so the first descriptor read does not race the
+     * device's own wake-up on a real controller. */
+    delay_ms(100u);
     return true;
+}
+
+/* Retry enumeration of a root port. The first attempt uses the speed the
+ * caller already obtained from port_reset; on failure the port is reset
+ * again, 100 ms is allowed after the reset (port_reset does it), and the
+ * attempt is repeated. The log names every attempt so a silent laptop can
+ * be diagnosed from the boot transcript. */
+static bool enumerate_root_port_retry(k_u32_t port, const struct xhci_where *where, k_u32_t speed)
+{
+    k_u32_t attempt;
+    k_u32_t cur_speed = speed;
+    const k_u32_t max_attempts = 3u;
+
+    for (attempt = 1u; attempt <= max_attempts; attempt++) {
+        if (enumerate_device(where, cur_speed)) {
+            if (attempt > 1u) {
+                kinfo("usb: port %u: enumerated after %u retries", (unsigned)port,
+                      (unsigned)(attempt - 1u));
+            }
+            return true;
+        }
+
+        if (attempt < max_attempts) {
+            k_u32_t before = 0u;
+
+            kwarn("usb: port %u: attempt %u/%u failed: enumeration failed; resetting the port",
+                  (unsigned)port, (unsigned)attempt, (unsigned)max_attempts);
+
+            if (!port_reset(port, &cur_speed, &before)) {
+                kwarn("usb: port %u: gave up after %u attempt(s): the port did not come back after "
+                      "reset",
+                      (unsigned)port, (unsigned)attempt);
+                return false;
+            }
+
+            continue;
+        }
+    }
+
+    kwarn("usb: port %u: gave up after %u attempts", (unsigned)port, (unsigned)max_attempts);
+    return false;
 }
 
 /*
@@ -3060,7 +3153,7 @@ static void root_port_scan(void)
             where.parent_slot = 0u;
             where.route = 0u;
 
-            (void)enumerate_device(&where, speed);
+            (void)enumerate_root_port_retry(port, &where, speed);
         }
     }
 }
@@ -3968,7 +4061,7 @@ void port_x86_64_xhci_init(void)
 
             /* Every port is enumerated: a laptop has a keyboard and a stick
              * at the same time, and the second one is not a reason to stop. */
-            if (enumerate_device(&where, speed)) {
+            if (enumerate_root_port_retry(port, &where, speed)) {
                 enumerated++;
             }
         }
@@ -3986,6 +4079,7 @@ void port_x86_64_xhci_init(void)
     g_next_hub_scan_ms = (k_u32_t)k_port_uptime_ms() + XHCI_HUB_SCAN_MS;
 
     if (!g_keyboard.present) {
+        kwarn("x86-64: no keyboard: the shell is up, but there is nothing to type on");
         kinfo("usb: the controller answered, no keyboard of the boot protocol on it");
     }
 

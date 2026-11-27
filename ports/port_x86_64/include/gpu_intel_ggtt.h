@@ -32,6 +32,23 @@
 #define GPU_INTEL_TILE_Y 4u
 #define GPU_INTEL_TILE_YF 5u
 
+struct gpu_intel_plane_ctl {
+    k_u8_t format;
+    k_u8_t tiling;
+    k_u8_t bpp;
+    k_u32_t stride_unit;
+    bool valid;
+};
+
+const char *gpu_intel_format_name(k_u8_t format);
+const char *gpu_intel_tiling_name(k_u8_t tiling);
+
+/* Decode the format, tiling and stride unit encoded in a primary PLANE_CTL. */
+struct gpu_intel_plane_ctl gpu_intel_plane_ctl_decode(k_u32_t plane_control);
+
+/* True when the plane is linear and in a format the page-flip backend can show. */
+bool gpu_intel_plane_ctl_present_ok(k_u32_t plane_control);
+
 struct gpu_intel_fb {
     k_u64_t surface;   /* byte offset in the graphics aperture */
     k_u64_t phys;      /* physical address of the first page */

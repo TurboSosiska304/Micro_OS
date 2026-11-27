@@ -80,6 +80,7 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode);
  * own name, which says the size, the format and the cells of the picture.
  */
 const struct port_x86_64_screen *port_x86_64_gop_screen(void);
+void port_x86_64_gop_present_rect(int x, int y, int w, int h);
 
 /*
  * The rectangle of a frame that a caller outside the console has changed:
@@ -127,6 +128,8 @@ bool port_x86_64_fb_info(struct fb_info *out);
  * has no framebuffer.
  */
 bool port_x86_64_fb_surface(struct k_fb_surface *out);
+/* Override the reported framebuffer format when the display plane changes. */
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp);
 void port_x86_64_fb_console_take(void);
 void port_x86_64_fb_console_give(void);
 void port_x86_64_fb_console_force(void);

@@ -1253,11 +1253,17 @@ PLATFORM_INCLUDE = (
 # The platform files that still live inside portable components. Every entry
 # is a debt the portability work pays back; the check fails when an entry is
 # no longer needed, so the list can only shrink.
-PLATFORM_DEBT = {}
+PLATFORM_DEBT = {
+    "components/wifi/src/iwl8265_loader.c":
+        "DMA buffers for the 8265 loader come from the port contract",
+}
 
 # A portable component that still speaks to the port directly. The same rule,
 # for the calls: an identifier is a use, not only "name(".
-PORT_CALL_DEBT = {}
+PORT_CALL_DEBT = {
+    "components/wifi/src/iwl8265_loader.c":
+        "DMA allocation is a port contract (k_port_dma_alloc/free)",
+}
 
 INCLUDE = re.compile(r'#\s*include\s*[<"]([^>"]+)[>"]')
 PORT_CALL = re.compile(r"\bk_port_[a-z0-9_]+\b")

@@ -46,6 +46,7 @@
 
 #include "kernel/console.h"
 #include "kernel/input.h"
+#include "kernel/input_ps2_mouse.h"
 #include "kernel/input_scancode.h"
 #include "kernel/input_set1.h"
 #include "kernel/log.h"
@@ -75,14 +76,16 @@
  * the fourth line of the slave of the 8259 - the cascade of the second chip
  * and the line itself are the two bits the port opens for it.
  */
-#define PS2_STATUS_AUX 0x20u     /* set: the byte waits for the second port */
-#define PS2_CMD_ENABLE_AUX 0xA8u /* the second port on */
-#define PS2_CMD_WRITE_AUX 0xD4u  /* the next byte of 0x60 is the mouse's */
-#define PS2_CONFIG_IRQ12 0x02u   /* the second port raises IRQ12 */
-#define PS2_CONFIG_CLOCK2 0x20u  /* set: the clock of the second port is off */
-#define PS2_MOUSE_DEFAULTS 0xF6u /* the mouse starts from its defaults */
-#define PS2_MOUSE_ENABLE 0xF4u   /* and reports its movements */
-#define PS2_ACK 0xFAu            /* the answer of every command of a device */
+#define PS2_STATUS_AUX 0x20u       /* set: the byte waits for the second port */
+#define PS2_CMD_ENABLE_AUX 0xA8u   /* the second port on */
+#define PS2_CMD_WRITE_AUX 0xD4u    /* the next byte of 0x60 is the mouse's */
+#define PS2_CONFIG_IRQ12 0x02u     /* the second port raises IRQ12 */
+#define PS2_CONFIG_CLOCK2 0x20u    /* set: the clock of the second port is off */
+#define PS2_MOUSE_DEFAULTS 0xF6u   /* the mouse starts from its defaults */
+#define PS2_MOUSE_ENABLE 0xF4u     /* and reports its movements */
+#define PS2_MOUSE_SET_SAMPLE 0xF3u /* the rate of the report, in samples a second */
+#define PS2_MOUSE_GET_ID 0xF2u     /* the kind of the device: 0 plain, 3 wheel */
+#define PS2_ACK 0xFAu              /* the answer of every command of a device */
 
 /* A command of the controller answers in microseconds; a counter is enough
  * of a limit for the one time the boot waits for it, and a machine where it
@@ -124,25 +127,13 @@ static volatile k_u32_t g_pointer_head; /* written by IRQ12 */
 static volatile k_u32_t g_pointer_tail; /* written and read by the tasks */
 
 /*
- * The packet of the mouse is three bytes and the first one carries the sign
- * and the overflow of both axes. A packet whose first byte does not have bit
- * 3 set is not a packet - the device sends 0x00 or 0xFE when it has to
- * resynchronise - and the decoder drops it instead of reading three bytes of
- * a broken stream as a jump of the pointer.
+ * The packet of the mouse: three bytes for a plain mouse and four for an
+ * IntelliMouse with a wheel. The decoder is pure (kernel/input_ps2_mouse.h);
+ * the port feeds it bytes, counts its overflows and pushes its events into
+ * the pointer ring.
  */
-static k_u8_t g_packet[3];
-static k_u32_t g_packet_bytes;
-
-/* A movement the hardware could not express as a byte: the axis is dropped
- * and counted, because a pointer that jumps by a made-up number is worse than
- * one that stops (a person moves the hand again). */
-static k_u32_t g_overflow_x;
-static k_u32_t g_overflow_y;
+static struct k_input_ps2_mouse_state g_ps2_mouse;
 static bool g_overflow_shown;
-
-/* The state of the buttons as the last packet said it, so that the edge and
- * not the level is the event. */
-static bool g_button_left;
 
 /* The pointer is there when the controller answered the commands of its own
  * (a machine without a mouse has nothing on the second port). */
@@ -277,75 +268,32 @@ static void pointer_push(k_u16_t code, k_u16_t value)
 }
 
 /*
- * One byte of the mouse. Three bytes are a packet: the buttons, the sign and
- * the overflow of the two axes, then the two differences. The motion is
- * pushed as two events whose value is the signed difference in pixels of the
- * picture, the y axis turned over because the mouse counts up and the screen
- * counts down; the button is pushed on the edge, as the release of a key is.
+ * One byte of the mouse. The decoder of the kernel turns it into the events
+ * of a packet when a whole one is ready; the port only owns the ring and the
+ * line of the log that names the first overflow.
  */
 static void mouse_byte(k_u8_t byte)
 {
-    k_u8_t flags;
-    int dx;
-    int dy;
+    struct k_input_hid_event events[8];
+    k_size_t count;
+    k_size_t i;
 
-    if (g_packet_bytes == 0u) {
-        /* Bit 3 of the first byte is always one: a byte without it is the
-         * device telling us that the stream was cut, not the start of a
-         * packet. */
-        if ((byte & 0x08u) == 0u) {
-            return;
-        }
+    count = k_input_ps2_mouse_feed(&g_ps2_mouse, byte, events, K_ARRAY_SIZE(events));
+
+    for (i = 0; i < count; i++) {
+        pointer_push(events[i].key, events[i].value);
     }
 
-    g_packet[g_packet_bytes] = byte;
-    g_packet_bytes++;
-
-    if (g_packet_bytes < 3u) {
-        return;
-    }
-
-    g_packet_bytes = 0;
-    flags = g_packet[0];
-
-    if ((flags & 0x40u) != 0u) {
-        g_overflow_x++;
-    } else {
-        dx = (int)g_packet[1] - ((flags & 0x10u) != 0u ? 256 : 0);
-        pointer_push(K_INPUT_KEY_POINTER_X, (k_u16_t)(k_i16_t)dx);
-    }
-
-    if ((flags & 0x80u) != 0u) {
-        g_overflow_y++;
-    } else {
-        dy = (int)g_packet[2] - ((flags & 0x20u) != 0u ? 256 : 0);
-        pointer_push(K_INPUT_KEY_POINTER_Y, (k_u16_t)(k_i16_t)-dy);
-    }
-
-    {
-        /* The right and the middle buttons are not keys of the contract yet
-         * (docs/desktop.md): the left one is the one the desktop uses and a
-         * number of a key is not spent on a button nobody asked for. The edge
-         * is what is pushed, and the release of the last button of a packet
-         * is an edge like its press. */
-        bool left = (flags & 0x01u) != 0u;
-
-        if (left != g_button_left) {
-            g_button_left = left;
-            pointer_push(K_INPUT_KEY_BUTTON_LEFT, left ? INPUT_VALUE_PRESS : INPUT_VALUE_RELEASE);
-        }
-    }
-
-    if ((g_overflow_x != 0u || g_overflow_y != 0u) && !g_overflow_shown) {
+    if ((g_ps2_mouse.overflow_x != 0u || g_ps2_mouse.overflow_y != 0u) && !g_overflow_shown) {
         g_overflow_shown = true;
-        kwarn("input: the mouse overflowed its packet (%u x, %u y), the axis is dropped",
-              (unsigned)g_overflow_x, (unsigned)g_overflow_y);
+        kwarn("input: the mouse overflowed its packet (%u x, %u y), the packet is dropped",
+              (unsigned)g_ps2_mouse.overflow_x, (unsigned)g_ps2_mouse.overflow_y);
     }
 }
 
 k_u32_t port_x86_64_input_overflow(bool vertical)
 {
-    return vertical ? g_overflow_y : g_overflow_x;
+    return vertical ? g_ps2_mouse.overflow_y : g_ps2_mouse.overflow_x;
 }
 
 bool port_x86_64_input_pointer(void)
@@ -1036,6 +984,64 @@ static bool ps2_mouse_command(k_u8_t command)
     return ps2_read_ack();
 }
 
+/* A command that takes one data byte: the command is ACKed, the data is sent
+ * the same way, and the data is ACKed. */
+static bool ps2_mouse_command_arg(k_u8_t command, k_u8_t argument)
+{
+    if (!ps2_mouse_command(command)) {
+        return false;
+    }
+
+    if (!ps2_wait_input_empty()) {
+        return false;
+    }
+
+    port_outb(PS2_STATUS, PS2_CMD_WRITE_AUX);
+
+    if (!ps2_wait_input_empty()) {
+        return false;
+    }
+
+    port_outb(PS2_DATA, argument);
+
+    return ps2_read_ack();
+}
+
+/* The device id of the mouse (0xF2): 0 for a plain mouse, 3 for an
+ * IntelliMouse with a wheel, 4 for one with five buttons. The answer is -1
+ * when the device did not answer. */
+static int ps2_mouse_id(void)
+{
+    if (!ps2_mouse_command(PS2_MOUSE_GET_ID)) {
+        return -1;
+    }
+
+    if (!ps2_wait_output_full()) {
+        return -1;
+    }
+
+    return (int)port_inb(PS2_DATA);
+}
+
+/*
+ * The IntelliMouse magic: set the sample rate to 200, 100, 80 and ask for the
+ * id. A plain mouse keeps answering 0; a mouse with a wheel answers 3 and
+ * sends a fourth byte in every packet from then on.
+ */
+static bool ps2_mouse_detect_wheel(void)
+{
+    int id;
+
+    if (!ps2_mouse_command_arg(PS2_MOUSE_SET_SAMPLE, 200u) ||
+        !ps2_mouse_command_arg(PS2_MOUSE_SET_SAMPLE, 100u) ||
+        !ps2_mouse_command_arg(PS2_MOUSE_SET_SAMPLE, 80u)) {
+        return false;
+    }
+
+    id = ps2_mouse_id();
+    return id == 3 || id == 4;
+}
+
 /*
  * The second port of the 8042: on, with its line and its clock, and the mouse
  * told to report. The call runs before the interrupts are on (the boot arms
@@ -1048,31 +1054,36 @@ static bool ps2_mouse_command(k_u8_t command)
  */
 static void ps2_mouse_init(void)
 {
+    bool wheel = false;
+
+    k_input_ps2_mouse_init(&g_ps2_mouse, false);
+
     if (!ps2_wait_input_empty()) {
         return;
     }
 
     port_outb(PS2_STATUS, PS2_CMD_ENABLE_AUX);
 
-    /* The defaults first and the reporting second: a mouse that kept the
-     * scale of somebody else's program would move by a number the desktop
-     * did not choose. */
+    /* The defaults first: a mouse that kept the scale of somebody else's
+     * program would move by a number the desktop did not choose. */
     g_pointer_present = ps2_mouse_command(PS2_MOUSE_DEFAULTS);
 
     if (g_pointer_present) {
+        wheel = ps2_mouse_detect_wheel();
+        k_input_ps2_mouse_init(&g_ps2_mouse, wheel);
         g_pointer_present = ps2_mouse_command(PS2_MOUSE_ENABLE);
     }
 
-    /* A byte the mouse left between the two answers (a self test of a device
+    /* A byte the mouse left between the answers (a self test of a device
      * that was reset) is not a packet: the buffer is emptied with the
      * interrupts still off, so that the first motion is the first packet. */
     while ((port_inb(PS2_STATUS) & PS2_STATUS_OUTPUT) != 0) {
         (void)port_inb(PS2_DATA);
     }
 
-    g_packet_bytes = 0;
-
     if (!g_pointer_present) {
         kwarn("input: the second port of the controller did not answer, the machine has no mouse");
+    } else if (wheel) {
+        kinfo("ps2: the mouse is an IntelliMouse, the wheel is the fourth byte");
     }
 }

@@ -53,7 +53,7 @@ own, and the reports stay in the tree and in the chat, **not in Telegram**.
 |---|---|---|
 | the crash that takes the shell and init | `feature/prog-crash` | in work (L1, from the owner's laptop) |
 | `rm -r` of a large directory hangs | `feature/k29-cleanroom` | in work (K29 follow-up) |
-| the shell that stops answering on eight cores | `feature/smp-hang` | in work (K27, UART-spin hypothesis) |
+| the shell that stops answering on eight cores | `feature/smp2` | closed (K27, five soaks green, `KERNEL_SMP` on) |
 | phase A of the GPU | `feature/fb-raster` | 284/284 on its branch; merge after the two above |
 | 2.2: page cache, journal, `fsync` | not started | after 2.1 is green |
 | basic AMD GPU driver | `feature/gpu-amd-basic` | in work (MIT code, attributed) |

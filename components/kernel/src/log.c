@@ -9,7 +9,17 @@
 #include "kernel/console.h"
 
 /* The capture of the log of the boot. */
+/*
+ * The boot capture buffer. On the ESP32 DRAM is a scarce budget (the exec
+ * window leaves an 8 KiB gap at 0x3ffce000, see exec_windows.ld); 256 bytes
+ * keeps the capture functional for early boot diagnostics while leaving room
+ * for the kernel BSS. The host and x86 ports keep the full 6 KiB.
+ */
+#if defined(ESP_PLATFORM)
+#define KERNEL_LOG_CAPTURE_SIZE (256)
+#else
 #define KERNEL_LOG_CAPTURE_SIZE (6 * 1024)
+#endif
 
 static char g_lines[KERNEL_LOG_LINES][KERNEL_LOG_LINE_MAX];
 static k_u32_t g_next;  /* slot to be written next */

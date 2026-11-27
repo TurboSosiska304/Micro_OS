@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "kernel/log.h"
+#include "kernel/pagecache.h"
 #include "kernel/port.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
@@ -160,6 +161,8 @@ static void kmm_get_stats_locked(struct kmm_stats *out);
 
 void kmm_init(void)
 {
+    /* Pagecache holds kmm allocations; drop them before the heap is wiped. */
+    pagecache_reset();
     kmm_lock();
     kmm_init_locked();
     kmm_unlock();

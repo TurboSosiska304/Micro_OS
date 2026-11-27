@@ -24,19 +24,27 @@ static void run_tests(void *arg)
     K_UNUSED(arg);
 
     test_version();
-    test_gpu_intel();
-    test_gpu_intel_ggtt();
+    test_wifi_8265_fw();
+    test_wifi_8265_fw_file();
+    test_wifi_8265_regs();
+    test_wifi_8265_power();
+    test_wifi_8265_attach();
+    test_wifi_8265_virtual();
     test_board();
     test_log();
     test_logfile();
     test_ansi();
     test_port();
+    test_port_dma();
     test_blockdev();
     test_blockdev_cache();
+    test_blockdev_fault();
+    test_pagecache();
     test_blockdev_view();
     test_partition();
     test_root();
     test_volume();
+    test_install();
     test_power();
     test_render();
     test_task();
@@ -53,6 +61,7 @@ static void run_tests(void *arg)
     test_mfs();
     test_mfs_format();
     test_mfs_journal();
+    test_mfs_fault();
     test_mfs_persistence();
     test_mfs_repair();
     test_mfs_many();
@@ -73,6 +82,7 @@ static void run_tests(void *arg)
     test_input_debounce();
     test_input_hid();
     test_ps2();
+    test_ps2_mouse();
     test_xhci_portsc();
     test_bt_hci();
     test_gpu_amd();
@@ -96,6 +106,8 @@ static void run_tests(void *arg)
     test_initd();
     test_config();
     test_settings();
+    test_gpu_intel();
+    test_gpu_intel_ggtt();
 #if MICRO_OS_NET
     test_dhcp();
 #endif

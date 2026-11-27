@@ -118,10 +118,10 @@ class Machine:
             "qemu-system-x86_64",
             "-machine",
             "q35",
-            # Two processors: the boot says what the firmware's MADT reports,
-            # which is the one line of the log that proves the root of the ACPI
-            # tables came from the firmware and not from the extended BIOS area
-            # (a machine of UEFI does not keep it there).
+            # The processors of the machine: the boot says what the firmware's
+            # MADT reports, which is the one line of the log that proves the
+            # root of the ACPI tables came from the firmware and not from the
+            # extended BIOS area (a machine of UEFI does not keep it there).
             "-smp",
             str(self.cpus),
             "-m",
@@ -355,7 +355,7 @@ def main(argv: list) -> int:
     parser.add_argument("--memory", default="512",
                         help="the memory of the machine in MB (default: 512, the size of the "
                              "first gigabyte the kernel can name)")
-    parser.add_argument("--cpus", type=int, default=2,
+    parser.add_argument("--cpus", type=int, default=8,
                         help="the processors of the machine (default: 2, which is what the "
                              "boot line of the MADT is checked against)")
     parser.add_argument("--verbose", action="store_true")

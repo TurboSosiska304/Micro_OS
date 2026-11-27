@@ -12,6 +12,8 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/fb.h"
+#include "kernel/log.h"
 #include "kernel/port/exec.h"
 
 /* A card which cannot flip is not asked once per frame. The identity and
@@ -58,34 +60,7 @@ static bool clip_rect(const k_blit_surface *surface, const k_blit_rect *rect, k_
     return true;
 }
 
-static void fill_row(k_u16_t *line, k_i32_t count, k_u16_t pixel)
-{
-    k_i32_t column = 0;
-    k_u64_t word = (k_u64_t)pixel;
-
-    word |= word << 16;
-    word |= word << 32;
-
-    while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
-        line[column] = pixel;
-        column++;
-        count--;
-    }
-
-    while (count >= 4) {
-        __builtin_memcpy(line + column, &word, sizeof(word));
-        column += 4;
-        count -= 4;
-    }
-
-    while (count > 0) {
-        line[column] = pixel;
-        column++;
-        count--;
-    }
-}
-
-static int software_fill(k_blit_surface *surface, const k_blit_rect *rect, k_u16_t pixel)
+static int software_fill(k_blit_surface *surface, const k_blit_rect *rect, k_u32_t pixel)
 {
     k_blit_rect part;
     k_i32_t row;
@@ -94,11 +69,60 @@ static int software_fill(k_blit_surface *surface, const k_blit_rect *rect, k_u16
         return 0;
     }
 
+    if (surface->format == FB_FORMAT_XRGB8888) {
+        k_u32_t *base = (k_u32_t *)(void *)surface->base;
+        for (row = 0; row < part.h; row++) {
+            k_u32_t *line =
+                base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
+            k_i32_t column = 0;
+            k_i32_t count = part.w;
+            k_u64_t word = ((k_u64_t)pixel << 32) | (k_u64_t)pixel;
+
+            while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
+                line[column] = pixel;
+                column++;
+                count--;
+            }
+            while (count >= 2) {
+                __builtin_memcpy(line + column, &word, sizeof(word));
+                column += 2;
+                count -= 2;
+            }
+            while (count > 0) {
+                line[column] = pixel;
+                column++;
+                count--;
+            }
+        }
+        return 0;
+    }
+
     for (row = 0; row < part.h; row++) {
         k_u16_t *line =
             surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
+        k_i32_t column = 0;
+        k_i32_t count = part.w;
+        k_u16_t px = (k_u16_t)pixel;
+        k_u64_t word = (k_u64_t)px;
 
-        fill_row(line, part.w, pixel);
+        word |= word << 16;
+        word |= word << 32;
+
+        while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
+            line[column] = px;
+            column++;
+            count--;
+        }
+        while (count >= 4) {
+            __builtin_memcpy(line + column, &word, sizeof(word));
+            column += 4;
+            count -= 4;
+        }
+        while (count > 0) {
+            line[column] = px;
+            column++;
+            count--;
+        }
     }
 
     return 0;
@@ -113,7 +137,7 @@ int k_blit_fill(k_blit_surface *surface, const k_blit_rect *rect, k_u32_t color)
         return ops->fill(context, rect, color);
     }
 
-    return software_fill(surface, rect, (k_u16_t)color);
+    return software_fill(surface, rect, color);
 }
 
 static int software_copy(k_blit_surface *dst, const k_blit_rect *dst_rect,
@@ -204,24 +228,35 @@ static int software_copy(k_blit_surface *dst, const k_blit_rect *dst_rect,
         return 0;
     }
 
-    reverse = (dst->base == src->base) && (dy > sy) && (dy < sy + h);
+    {
+        k_u8_t pixel_bytes =
+            fb_pixel_bytes(dst->format == FB_FORMAT_XRGB8888 ? dst->format : src->format);
 
-    if (reverse) {
-        for (row = h - 1; row >= 0; row--) {
-            k_u16_t *dline = dst->base + (k_size_t)(dy + row) * (k_size_t)dst->pitch + (k_size_t)dx;
-            const k_u16_t *sline =
-                src->base + (k_size_t)(sy + row) * (k_size_t)src->pitch + (k_size_t)sx;
+        reverse = (dst->base == src->base) && (dy > sy) && (dy < sy + h);
 
-            memmove(dline, sline, (k_size_t)w * sizeof(k_u16_t));
-        }
-    } else {
-        for (row = 0; row < h; row++) {
-            k_u16_t *dline = dst->base + (k_size_t)(dy + row) * (k_size_t)dst->pitch + (k_size_t)dx;
-            const k_u16_t *sline =
-                src->base + (k_size_t)(sy + row) * (k_size_t)src->pitch + (k_size_t)sx;
+        if (reverse) {
+            for (row = h - 1; row >= 0; row--) {
+                k_u8_t *dline = (k_u8_t *)(void *)dst->base +
+                                ((k_size_t)(dy + row) * (k_size_t)dst->pitch + (k_size_t)dx) *
+                                    (k_size_t)pixel_bytes;
+                const k_u8_t *sline = (const k_u8_t *)(const void *)src->base +
+                                      ((k_size_t)(sy + row) * (k_size_t)src->pitch + (k_size_t)sx) *
+                                          (k_size_t)pixel_bytes;
 
-            /* memmove handles the same-row overlap case. */
-            memmove(dline, sline, (k_size_t)w * sizeof(k_u16_t));
+                memmove(dline, sline, (k_size_t)w * (k_size_t)pixel_bytes);
+            }
+        } else {
+            for (row = 0; row < h; row++) {
+                k_u8_t *dline = (k_u8_t *)(void *)dst->base +
+                                ((k_size_t)(dy + row) * (k_size_t)dst->pitch + (k_size_t)dx) *
+                                    (k_size_t)pixel_bytes;
+                const k_u8_t *sline = (const k_u8_t *)(const void *)src->base +
+                                      ((k_size_t)(sy + row) * (k_size_t)src->pitch + (k_size_t)sx) *
+                                          (k_size_t)pixel_bytes;
+
+                /* memmove handles the same-row overlap case. */
+                memmove(dline, sline, (k_size_t)w * (k_size_t)pixel_bytes);
+            }
         }
     }
 
@@ -237,6 +272,9 @@ int k_blit_copy(k_blit_surface *dst, const k_blit_rect *dst_rect, const k_blit_s
 static bool present_surfaces_valid(const k_blit_surface *dst, const k_blit_surface *src)
 {
     k_u64_t bytes;
+    k_u8_t pixel_bytes;
+    k_u8_t dst_fmt;
+    k_u8_t src_fmt;
 
     if (dst == NULL || src == NULL || dst->base == NULL || src->base == NULL || dst->width == 0u ||
         dst->height == 0u || src->width != dst->width || src->height != dst->height ||
@@ -245,7 +283,14 @@ static bool present_surfaces_valid(const k_blit_surface *dst, const k_blit_surfa
         return false;
     }
 
-    bytes = (k_u64_t)src->pitch * (k_u64_t)src->height * sizeof(k_u16_t);
+    dst_fmt = dst->format == FB_FORMAT_XRGB8888 ? FB_FORMAT_XRGB8888 : FB_FORMAT_RGB565;
+    src_fmt = src->format == FB_FORMAT_XRGB8888 ? FB_FORMAT_XRGB8888 : FB_FORMAT_RGB565;
+    if (dst_fmt != src_fmt) {
+        return false;
+    }
+
+    pixel_bytes = fb_pixel_bytes(src_fmt);
+    bytes = (k_u64_t)src->pitch * (k_u64_t)src->height * (k_u64_t)pixel_bytes;
     if (bytes > (k_u64_t)((k_size_t)-1)) {
         return false;
     }
@@ -291,6 +336,7 @@ int k_blit_present(k_blit_surface *dst, const k_blit_surface *src)
          * The latch is per source: a RAM refusal must not disable a later
          * VRAM-surface flip (or the other way around). */
         s_present_failed = true;
+        kwarn("blit: present refused (rc=%d), using software copy fallback", rc);
     } else if (ops == NULL || ops->present == NULL) {
         s_present_failed = true;
     }

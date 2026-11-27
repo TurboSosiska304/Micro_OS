@@ -123,6 +123,9 @@ K_NORETURN void port_x86_64_idle(void);
  */
 void port_x86_64_yield_to_idle(void);
 
+/* Resume the boot context of another core that owns a mutex a task needs. */
+void port_x86_64_resume_boot(k_u32_t cpu);
+
 /* The interrupt flag of RFLAGS and the alignment check flag. AC is bit 18
  * (0x40000) and it is what SMAP reads to allow a supervisor access to a page
  * of ring 3 (ADR 0052, `STAC` and `CLAC` of src/paging.c); the bit is named

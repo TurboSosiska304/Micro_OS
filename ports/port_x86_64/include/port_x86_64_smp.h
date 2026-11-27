@@ -60,6 +60,19 @@ void port_x86_64_cpu_set_self(k_u32_t cpu);
 /* The record of one core, 0 for a number the machine does not have. */
 k_u32_t port_x86_64_smp_core_status(k_u32_t cpu);
 
+/*
+ * Install the AP trampoline at physical 0x7000. The BIOS loader does it with
+ * the identity map of the firmware; a UEFI loader does not carry the bytes,
+ * so the kernel does it here before its own page tables mark the page
+ * executable and read-only. The signature at 0x7F00 is the proof a page is
+ * really there, and no start-up IPI is sent without it.
+ */
+void port_x86_64_ap_trampoline_install(void);
+
+/* Replay the bring-up in the log of the kernel, once the console exists. The
+ * live lines have already gone to the screen and COM1 during the bring-up. */
+void port_x86_64_smp_log_bringup(void);
+
 /* The cores the firmware listed that did not answer the start-up IPI. It is
  * kept for the boot to name; the count the kernel uses is the one of the
  * cores that really reached C (port_x86_64_smp_checked_in). */

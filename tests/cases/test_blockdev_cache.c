@@ -26,6 +26,7 @@ static k_size_t s_syncs;
 static k_u32_t s_last_sector;
 static k_size_t s_last_count;
 static k_size_t s_last_read_count;
+static bool s_fail_writes;
 
 static void fill_sector(k_u32_t sector)
 {
@@ -57,6 +58,10 @@ static int counting_write(void *ctx, k_u32_t sector, const void *buf, k_size_t c
 
     if (sector + count > CACHE_SECTORS) {
         return -1;
+    }
+
+    if (s_fail_writes) {
+        return KERR_IO;
     }
 
     s_writes++;
@@ -464,4 +469,26 @@ void test_blockdev_cache(void)
 
     KT_CHECK_INT_EQ(k_blockdev_unregister(view), 0);
     KT_CHECK(k_blockdev_find("sized0") == NULL);
+
+    /* A failed write-back flush drops the whole dirty run. Its boxes must
+     * leave the index too: a later read of one of them otherwise sees the
+     * dirty copy although the medium never accepted it. */
+    KT_CHECK_INT_EQ(k_blockdev_register_cached_sized(&s_sized, true, 4), 0);
+    view = k_blockdev_find("sized0");
+    KT_CHECK(view != NULL);
+
+    if (view != NULL) {
+        for (i = 25; i < 29; i++) {
+            KT_CHECK_INT_EQ(view->ops->write(view->ctx, (k_u32_t)i, expect, 1), 0);
+        }
+
+        s_fail_writes = true;
+        KT_CHECK_INT_EQ(view->ops->write(view->ctx, 29, expect, 1), -1);
+        s_fail_writes = false;
+
+        memset(buffer, 0, sizeof(buffer));
+        KT_CHECK_INT_EQ(view->ops->read(view->ctx, 25, buffer, 1), 0);
+        KT_CHECK_INT_EQ(memcmp(buffer, s_data[25], sizeof(buffer)), 0);
+        KT_CHECK_INT_EQ(k_blockdev_unregister(view), 0);
+    }
 }

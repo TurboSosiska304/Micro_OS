@@ -15,12 +15,24 @@
 #include "kernel/types.h"
 
 /* The bits of a pixel and the format of its number. The machine of 1.4 has
- * one format; a second one is a new number and not a change of this one. */
+ * RGB565; a later one may answer XRGB8888 when the display is in that mode. */
 #define FB_BPP_RGB565 16u
 #define FB_FORMAT_RGB565 1u
+#define FB_BPP_XRGB8888 32u
+#define FB_FORMAT_XRGB8888 2u
 
-/* The bytes of one pixel of the format above. */
+/* The bytes of one pixel of the RGB565 format; prefer `fb_pixel_bytes`. */
 #define FB_PIXEL_BYTES 2u
+
+static inline k_u8_t fb_pixel_bytes(k_u8_t format)
+{
+    return format == FB_FORMAT_XRGB8888 ? 4u : 2u;
+}
+
+static inline k_u8_t fb_bpp(k_u8_t format)
+{
+    return format == FB_FORMAT_XRGB8888 ? 32u : 16u;
+}
 
 /* The colours of the console palette a program may name in its own picture. */
 #define FB_PALETTE_COLORS 16u

@@ -265,6 +265,62 @@ static void put_le64(k_u8_t *out, k_u64_t value)
     put_le32(out + 4, (k_u32_t)(value >> 32));
 }
 
+/*
+ * A GPT on a disk whose sectors are 512 bytes - the real laptop case.
+ * The NVMe namespace reports LBA size 512 (lbads 9); the driver must expose
+ * 512-byte sectors so a partition ending on an odd 512-byte LBA is
+ * representable. entries_lba is 2016 (not 2), 128 entries of 128 bytes.
+ * p2 ends past last_usable but inside the disk - sgdisk -v accepts it.
+ */
+#define PART_GPT512_SECTOR 512u
+#define PART_GPT512_SECTORS 1000215216u
+#define PART_GPT512_ENTRIES_LBA 2016u
+#define PART_GPT512_ENTRIES_BYTES (128u * 128u)
+
+/* LBA 0 (protective MBR) and LBA 1 (GPT header). */
+static k_u8_t s_gpt512_head[2u * PART_GPT512_SECTOR];
+static k_u8_t s_gpt512_entries[PART_GPT512_ENTRIES_BYTES];
+
+static int gpt512_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
+{
+    k_size_t i;
+
+    K_UNUSED(ctx);
+
+    for (i = 0; i < count; i++) {
+        k_u32_t s = sector + (k_u32_t)i;
+        k_u8_t *out = (k_u8_t *)buf + i * PART_GPT512_SECTOR;
+
+        if (s < 2u) {
+            memcpy(out, s_gpt512_head + (k_size_t)s * PART_GPT512_SECTOR, PART_GPT512_SECTOR);
+        } else if (s >= PART_GPT512_ENTRIES_LBA &&
+                   s < PART_GPT512_ENTRIES_LBA + PART_GPT512_ENTRIES_BYTES / PART_GPT512_SECTOR) {
+            k_size_t off = (k_size_t)(s - PART_GPT512_ENTRIES_LBA) * PART_GPT512_SECTOR;
+
+            memcpy(out, s_gpt512_entries + off, PART_GPT512_SECTOR);
+        } else {
+            memset(out, 0, PART_GPT512_SECTOR);
+        }
+    }
+
+    return 0;
+}
+
+static const struct k_blockdev_ops s_gpt512_ops = {
+    .read = gpt512_read,
+    .write = NULL,
+    .erase = NULL,
+    .sync = NULL,
+};
+
+static struct k_blockdev s_gpt512_device = {
+    .name = "gpt5120",
+    .sector_size = PART_GPT512_SECTOR,
+    .sectors = PART_GPT512_SECTORS,
+    .ops = &s_gpt512_ops,
+    .ctx = NULL,
+};
+
 /* The blank medium of the test: what an image that was just made reads as. */
 static void part_disk_blank(void)
 {
@@ -536,6 +592,83 @@ void test_partition(void)
     /* A protective MBR of a disk whose GPT is gone is a damaged table. */
     s_part_disk[PART_GPT_HEADER] = 0xFFu;
     KT_CHECK_INT_EQ(partition_scan(&s_part_device), KERR_INVAL);
+
+    /* --- GPT at real laptop geometry (512-byte sectors, entries_lba 2016)
+     * The Samsung MZVLB512HBJQ reports 512-byte LBA (lbads 9). The driver
+     * must expose 512-byte sectors, not 1024-byte MFS blocks. entries_lba is
+     * 2016 (not 2), so the array lives at byte 1 032 192. p2 ends past
+     * last_usable but inside the disk - sgdisk -v says "No problems found",
+     * so the scan must accept it. */
+    {
+        k_u8_t *hdr = s_gpt512_head + PART_GPT_HEADER;
+        k_u8_t *ent;
+        k_u64_t disk_512 = 1000215216ull;
+        k_u64_t last_usable = 1000214158ull;
+        k_u64_t p2_last = 1000215182ull;
+
+        memset(s_gpt512_head, 0, sizeof(s_gpt512_head));
+        memset(s_gpt512_entries, 0, sizeof(s_gpt512_entries));
+
+        /* Protective MBR: one 0xEE entry covering the disk. */
+        s_gpt512_head[PART_MBR_SIGNATURE] = 0x55u;
+        s_gpt512_head[PART_MBR_SIGNATURE + 1u] = 0xAAu;
+        {
+            k_u8_t *pmbr = s_gpt512_head + PART_MBR_OFFSET;
+
+            pmbr[4] = 0xEEu;
+            put_le32(pmbr + 8, 1u);
+            put_le32(pmbr + 12, 0xFFFFFFFFu);
+        }
+
+        memcpy(hdr, "EFI PART", 8);
+        put_le32(hdr + 8, 0x00010000u);
+        put_le32(hdr + 12, 92u);
+        put_le64(hdr + 24, 1u);            /* current LBA */
+        put_le64(hdr + 32, 1000214191ull); /* alternate LBA */
+        put_le64(hdr + 40, 2048u);         /* first usable */
+        put_le64(hdr + 48, last_usable);   /* last usable */
+        put_le64(hdr + 72, PART_GPT512_ENTRIES_LBA);
+        put_le32(hdr + 80, 128u);
+        put_le32(hdr + 84, 128u);
+
+        /* p1: 2048 .. 206847 */
+        ent = s_gpt512_entries;
+        ent[0] = 0xAFu; /* any non-zero type GUID byte */
+        put_le64(ent + 32, 2048u);
+        put_le64(ent + 40, 206847u);
+
+        /* p2: 206848 .. 1 000 215 182 (past last_usable, inside disk) */
+        ent = s_gpt512_entries + 128u;
+        ent[0] = 0xAFu;
+        put_le64(ent + 32, 206848u);
+        put_le64(ent + 40, p2_last);
+
+        put_le32(hdr + 88, part_crc32(s_gpt512_entries, PART_GPT512_ENTRIES_BYTES));
+        put_le32(hdr + 16, 0u);
+        put_le32(hdr + 16, part_crc32(hdr, 92u));
+
+        KT_CHECK_INT_EQ((int)s_gpt512_device.sector_size, 512);
+        KT_CHECK_INT_EQ((int)s_gpt512_device.sectors, 1000215216);
+        KT_CHECK(p2_last > last_usable);
+        KT_CHECK(p2_last < disk_512);
+
+        KT_CHECK_INT_EQ(partition_scan(&s_gpt512_device), 2);
+
+        child = k_blockdev_find("gpt5120p1");
+        KT_CHECK(child != NULL);
+        if (child != NULL) {
+            KT_CHECK_INT_EQ((int)child->sector_size, 512);
+            KT_CHECK_INT_EQ((int)child->sectors, 204800); /* 206847-2048+1 */
+        }
+
+        child = k_blockdev_find("gpt5120p2");
+        KT_CHECK(child != NULL);
+        if (child != NULL) {
+            KT_CHECK_INT_EQ((int)child->sectors, (int)(p2_last - 206848u + 1u));
+        }
+
+        partition_release(&s_gpt512_device);
+    }
 
     /* --- the slots go back when the disk is let go -------------------- */
     partition_release(&s_part_device);

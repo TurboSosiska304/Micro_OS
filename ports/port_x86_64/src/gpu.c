@@ -505,7 +505,9 @@ static int cmd_gpu(int argc, char **argv)
     if (gpu_intel_command != NULL &&
         ((argc == 2 && strcmp(argv[1], "ggtt-test") == 0) ||
          (argc == 2 && strcmp(argv[1], "flip") == 0) ||
-         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0))) {
+         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0) ||
+         (argc == 2 && strcmp(argv[1], "plane-linear") == 0) ||
+         (argc == 3 && strcmp(argv[1], "plane-linear") == 0 && strcmp(argv[2], "--yes") == 0))) {
         return gpu_intel_command(argc, argv);
     }
 
@@ -513,7 +515,7 @@ static int cmd_gpu(int argc, char **argv)
                   "vramread <id>|vramfree <id>|vramdump|bufalloc <kib> [--name X]|buffill <id>|"
                   "bufread <id>|buffree <id>|buflist|bufmap <id> [--yes]|bufunmap <id> [--yes]|"
                   "bufflip <id> [--yes] [--keep]|amdflip [--yes] [--keep]|"
-                  "ggtt-test|flip [--yes]]\n");
+                  "ggtt-test|flip [--yes]|plane-linear [--yes]\n");
     return KSHELL_USAGE;
 }
 
@@ -523,7 +525,8 @@ int port_x86_64_gpu_register(void)
         .summary = "display controller probe",
         .usage = "gpu "
                  "[info|vramtest|vrammap|vramalloc|vramfill|vramread|vramfree|vramdump|bufalloc|"
-                 "buffill|bufread|buffree|buflist|bufmap|bufunmap|bufflip|amdflip|ggtt-test|flip]",
+                 "buffill|bufread|buffree|buflist|bufmap|bufunmap|bufflip|amdflip|ggtt-test|flip|"
+                 "plane-linear]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
                   "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a raw block;\n"
                   "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
@@ -533,8 +536,8 @@ int port_x86_64_gpu_register(void)
                   "arms VRAM present, without it present keeps the RAM copy. bufunmap <id>\n"
                   "[--yes] restores scanout before unmapping an active surface.\n"
                   "bufflip <id> [--yes] [--keep] flips scanout to a buffer. amdflip [--yes]\n"
-                  "[--keep] copies the current frame to VRAM and flips. Intel: ggtt-test, flip "
-                  "[--yes].\n",
+                  "[--keep] copies the current frame to VRAM and flips. Intel: ggtt-test, flip\n"
+                  "[--yes], plane-linear [--yes].\n",
     };
     int rc;
 
