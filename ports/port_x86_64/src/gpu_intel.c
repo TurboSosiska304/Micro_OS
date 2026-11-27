@@ -1531,7 +1531,7 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
     }
 
     if (gpu_intel_present_ready(info)) {
-        k_fb_ops_register(&s_gpu_intel_present_ops, &g_gpu_intel);
+        k_fb_ops_register(&s_gpu_intel_present_ops, info);
         kinfo("gpu: Intel page-flip backend ready (%ux%u linear RGB565)",
               (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
     }

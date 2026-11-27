@@ -24,6 +24,7 @@
 
 #include "kernel/blit.h"
 #include "kernel/errno.h"
+#include "kernel/fb.h"
 #include "kernel/fb_ops.h"
 #include "kernel/types.h"
 
@@ -157,6 +158,7 @@ static struct k_fb_surface test_surface(void)
     surface.width = TEST_WIDTH;
     surface.height = TEST_HEIGHT;
     surface.pitch = TEST_PITCH;
+    surface.format = FB_FORMAT_RGB565;
 
     return surface;
 }
@@ -417,6 +419,7 @@ static void test_blit_present(void)
     source.width = TEST_WIDTH;
     source.height = TEST_HEIGHT;
     source.pitch = TEST_PITCH;
+    source.format = FB_FORMAT_RGB565;
     for (index = 0; index < K_ARRAY_SIZE(source_pixels); index++) {
         source_pixels[index] = (k_u16_t)(TEST_COLOR + index);
     }

@@ -12,6 +12,7 @@
 #include "gpu_intel.h"
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
+#include "port_x86_64_screen.h"
 
 #include <string.h>
 
