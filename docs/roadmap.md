@@ -164,8 +164,8 @@ written when the project was an operating system for one board; the numbers
       a frame of the port and returns through `sigreturn`, `waitpid()` cut by
       a signal with `EINTR`, `SIGCHLD` on the exit of a child, `kill` in the
       shell and Ctrl+C of the foreground program (`/bin/signals` in
-      `make x86-smoke`, ADR 0015). No job control: there are no groups and
-      the shell says so.
+      `make x86-smoke`, ADR 0015). The 2.2 shell slice adds process groups,
+      SIGSTOP/SIGTSTP/SIGCONT, `&`, `jobs`, `fg`, `bg` and Ctrl+Z (ADR 0059).
 * [x] The kernel in a higher half: the image is linked at
       `0xFFFFFFFF80000000` and the loader copies it to 16 MiB and maps the
       same bytes at the top, with `-mcmodel=kernel` for the C, `page_phys()`

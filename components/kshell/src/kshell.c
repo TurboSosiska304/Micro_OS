@@ -735,6 +735,9 @@ static int cmd_sleep(int argc, char **argv)
     }
 
     k_sched_sleep_ms((k_u32_t)ms);
+    /* A stage is a kernel task: a terminal signal that cut the wait is
+     * answered here, before the command reports a sleep that did not finish. */
+    task_signal_check(task_self(), 0, false);
     kshell_printf("slept %lu ms\n", ms);
 
     return KSHELL_OK;

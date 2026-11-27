@@ -2785,6 +2785,7 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
     char *const *vector = NULL;
     char *const *environment = NULL;
     struct exec_creds creds;
+    struct task *self = task_self();
     k_u8_t *data;
     k_size_t got = 0;
     int applied;
@@ -3004,13 +3005,14 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
 
     /*
      * The answers below are the contract of k_exec_run: a number from 0 to
-     * 255 is a program that ran and returned with that status - the call ends
-     * with 0, because the status belongs to a process and the program is a
-     * task now - K_EXEC_RUN_NO_MACHINE is a machine that cannot run a program
-     * at all (the simulator, the board until it can) and is ENOSYS,
-     * K_EXEC_RUN_OTHER_ARCH is an image of another machine and is ENOEXEC
-     * before a byte of it runs, and REFUSED is the image the port could not
-     * place in its window or could not copy.
+     * 255 is a program that ran and returned with that status. The call itself
+     * ends with 0, because execve's ABI answer is not a waitpid; the code is
+     * recorded in the calling kernel task for the shell's pipeline status.
+     * K_EXEC_RUN_NO_MACHINE is a machine that cannot run a program at all (the
+     * simulator, the board until it can) and is ENOSYS; K_EXEC_RUN_OTHER_ARCH is
+     * an image of another machine and is ENOEXEC before a byte of it runs, and
+     * REFUSED is the image the port could not place in its window or could not
+     * copy.
      *
      * K_EXEC_RUN_REPLACED is the POSIX shape: the caller was a program of
      * ring 3 and the port has already made the new image its memory and the
@@ -3024,6 +3026,9 @@ static k_ssize_t sys_execve(ksys_arg_t path, ksys_arg_t argv, ksys_arg_t envp, k
     }
 
     if (rc >= 0) {
+        if (self != NULL) {
+            self->exec_status = rc;
+        }
         return 0;
     }
 

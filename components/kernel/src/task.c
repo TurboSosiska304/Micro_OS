@@ -731,6 +731,7 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->parent = creator;
         t->pgid = (creator != NULL) ? creator->pgid : t->pid;
         t->sid = (creator != NULL) ? creator->sid : t->pid;
+        t->exec_status = -1;
         t->uid = (creator != NULL) ? creator->uid : 0u;
         t->euid = (creator != NULL) ? creator->euid : 0u;
         t->suid = (creator != NULL) ? creator->suid : 0u;
@@ -1101,6 +1102,11 @@ int task_reap(k_u32_t pid)
     k_port_exit_critical();
 
     return rc;
+}
+
+int task_exec_status(const struct task *t)
+{
+    return t != NULL ? t->exec_status : -1;
 }
 
 /*

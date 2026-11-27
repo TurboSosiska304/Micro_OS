@@ -167,10 +167,10 @@ file 35 and the credentials of a task 36 to 40 (the second half of 1.4),
 descriptor 43 and the memory a program maps 44 to 47 (the first lane of 1.6).
 The lane of 1.8 added the directory of a task 48, the clock 49 and the use of
 the processor 50; the three are below. The group of an object took 51 beside
-the owner (ADR 0044). The process group of a task took 52 and 53, the minimal
-slice of job control: a tty has a foreground group and Ctrl+C is delivered to
-it. A call that is not in the table is `ENOSYS`, never a guess at what it
-might have meant.
+the owner (ADR 0044). The process group of a task took 52 and 53. A tty has a foreground group and
+Ctrl+C is delivered to it; 2.2 adds SIGSTOP/SIGTSTP/SIGCONT and the shell's
+job table on top of that group. A call that is not in the table is `ENOSYS`,
+never a guess at what it might have meant.
 
 ## The control commands of `ioctl`
 
@@ -565,8 +565,9 @@ ends with is the answer of the `waitpid` of its parent, not of this call.
 A caller with no address space is a task of the kernel - the shell - and there
 is nothing to replace: the port starts the program as a task of its own and
 the call returns when the program has ended, with 0 and not the status of the
-program (the status belongs to `waitpid` of that task, which is the child of
-the caller). This is the compatibility shape of a machine whose shell is not a
+program. The status is recorded in the calling kernel task for the shell's
+pipeline and list arithmetic; `waitpid` of the program's parent sees the same
+code. This is the compatibility shape of a machine whose shell is not a
 program; the board keeps it for every caller.
 
 The vector of the arguments is the memory of the program. It is copied word
@@ -673,18 +674,20 @@ default end, or a handler the task installed - makes the call answer
 `EINTR` (`KERR_INTR`, -4) without reaping the child; `ECHILD` keeps its
 meaning. An ignored signal and the default `SIGCHLD` do not cut a wait.
 
-There is no job control: no `SIGSTOP`, `SIGCONT` or `SIGTSTP`, no groups and
-no `&`. Ctrl+C at the console is the one signal of the terminal: while the
-shell waits for the program it started, a Ctrl+C byte sends `SIGINT` to
-that program, and while it waits for a pipeline to every stage of the job
-and the programs they started (ADR 0017). `kill` from the prompt sends a
-signal to a pid from `ps`.
+SIGSTOP (19), SIGTSTP (20) and SIGCONT (18) are scheduler operations rather
+than pending marks. STOP and TSTP remove a living task from every run queue
+and from the sleep table; CONT is the only operation that makes it ready
+again. They cannot be caught or ignored. Ctrl+C at the console sends SIGINT
+to the foreground process group, and Ctrl+Z sends SIGTSTP to it. The shell
+turns that group into a numbered job, restores its own foreground group while
+it reads the next command, and continues the job with `fg` or `bg`.
 
 The library has the same calls as `microos_kill()` and
-`microos_signal()`, with `MICROOS_SIGINT` and the other three numbers, and
-the two dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
+`microos_signal()`, with `MICROOS_SIGINT`, `MICROOS_SIGCONT`,
+`MICROOS_SIGSTOP`, `MICROOS_SIGTSTP` and the other POSIX numbers, and the two
+dispositions `MICROOS_SIG_DFL` and `MICROOS_SIG_IGN`;
 `microos_signal()` answers `MICROOS_SIG_ERR` and sets `microos_errno()`
-when the signal is not one of the system.
+when the signal is not one of the marks with a disposition.
 
 ## The memory of a program
 

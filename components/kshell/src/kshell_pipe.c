@@ -965,7 +965,10 @@ static bool pipeline_wait_one(k_u32_t pid, k_u32_t pgrp, int *status)
             return false;
         }
 
-        if (!k_tty_console_claimed()) {
+        /* The console owner still names the shell after its prompt, so the
+         * claimed flag cannot tell whether this job reads the terminal. Keep
+         * the pipeline's original console poll; typeahead remains a debt. */
+        {
             int key = k_console_poll();
 
             if (key == 3) {

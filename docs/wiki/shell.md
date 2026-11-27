@@ -34,20 +34,42 @@ A line is at most 127 characters and at most 8 words per stage. Backspace
 erases, Ctrl+C throws the line away, and a line that did not fit is **not**
 executed (the shell says `line too long, it was not executed`), because a cut
 line is a different command. While a program or a pipe runs, Ctrl+C is not a
-line: the shell reads it and sends `SIGINT` to the program or to every stage
-of the chain (see [kernel-abi.md](kernel-abi.md#signals)).
+line: the shell reads it and sends `SIGINT` to the foreground job. Ctrl+Z
+sends `SIGTSTP`, returns the terminal to the shell and leaves the job in the
+table as `Stopped` (see [kernel-abi.md](kernel-abi.md#signals)).
 
 A name that is not registered answers `<name>: command not found`. A command
 that is given the wrong arguments answers with its own `usage:` line and does
 nothing.
 
+## Lists
+
+`;`, `&&` and `||` join pipelines. `;` runs the next pipeline whatever the
+last status was; `&&` runs it only after status 0; `||` runs it only after a
+nonzero status. `&&` and `||` have the same precedence and associate to the
+left. The whole line is parsed before any command runs, so a syntax error at
+the end does not leave a prefix behind.
+
+```text
+microos> echo one; echo two
+microos> cat /etc/setting && echo yes
+microos> cat /no/such/file || echo recovered
+microos> echo 'a && b ; c'
+```
+
+The list operators may touch their neighbours (`a;b`, `a&&b`), while a pipe
+or a redirection still needs spaces around it. The status of a list is the
+status of the last pipeline that actually ran; a skipped pipeline does not
+change it.
+
 ## Pipes and redirections
 
-`|` joins two or more stages, and `>`, `>>`, `<`, `2>` and `2>>` send a
-descriptor of a stage to a file. The operators are words of their own, with a
-space around them, and they are read after the quotes are taken off the line:
-a `|` or a `>` inside quotes is an ordinary character of the argument. They
-may stand before or after the arguments of a stage:
+`|` joins two or more stages, and `>`, `>>`, `<`, `2>`, `2>>` and `2>&1` send
+a descriptor of a stage to a file or another descriptor. The operators are
+words of their own, with a space around them, and they are read after the
+quotes are taken off the line: a `|` or a `>` inside quotes is an ordinary
+character of the argument. They may stand before or after the arguments of a
+stage:
 
 ```text
 microos> ls /etc | cat
@@ -56,6 +78,7 @@ microos> cat /etc/setting > /out
 microos> cat /etc/setting >> /out
 microos> cat < /etc/setting
 microos> cat /etc/setting 2> /errors
+microos> cat /no/such/file > /errors 2>&1
 microos> echo 'a | b' > /q
 microos> grep 'a b' /q
 ```
@@ -75,6 +98,10 @@ looked up in `PATH` and started with `execve`; on x86-64 that program
 inherits the three descriptors of the stage, which is what makes
 `echo one | /bin/cat` and `ls /bin | wc -l` work.
 
+The output redirection is installed before `2>&1`, so the duplicate names
+the file or pipe the stage writes. A `2> file` is installed first, which lets
+an error made while opening the output reach that error file.
+
 The ten commands of sbase (`ls`, `cat`, `grep`, `head`, `tail`, `wc`, `sort`,
 `find`, `sed`, `xargs`) are programs of the x86-64 disk, and the shell looks
 their bare name in `PATH` **before** its own table: `ls /etc` at the prompt is
@@ -86,11 +113,12 @@ and not a silent fallback.
 
 What the line does **not** do:
 
-* no `&&`, `||`, `;` or `&`: they are refused by name, not run as arguments;
-* no `2>&1`, no `>&`, no file-descriptor juggling beyond `0`, `1` and `2`;
-* no globs or variables: `*` is a word and not a pattern, `$x` is the two
-  characters;
-* no attached forms: `a|b` and `>file` are arguments; write `a | b`, `> file`;
+* no `>&`, `1>&2` or general file-descriptor juggling: `2>&1` is the one
+  duplicate the shell parses;
+* no globs, variables or substitutions: `*` is a word and not a pattern, `$x`
+  is the two characters, and backticks are not a command;
+* no attached pipe or redirection: `a|b` and `>file` are arguments; write
+  `a | b`, `> file`. List operators may be attached (`a;b`, `a&&b`);
 * at most sixteen stages: the parser keeps sixteen and a line of 32 words
   cannot hold more. The pipes are made one boundary at a time as the stages
   are forked - the shell keeps the reading end between two forks and closes
@@ -105,15 +133,19 @@ What the line does **not** do:
   commands of the shell fit. The shell counts the slots before it makes the
   first pipe and refuses a chain that does not fit with the numbers in the
   sentence, so no part of a line is started and then lost;
-* no background job, no `jobs`, no `fg` or `bg`;
-* a command that changes the task of the shell (`cd`, `path`) cannot be a
-  stage or carry a redirection: it is refused with a sentence instead of
-  changing a copy nobody sees.
+* `&` backgrounds one pipeline; the shell keeps four job entries. There is
+  no POSIX subshell for a whole asynchronous AND-OR list, no `wait`, no job
+  specification beyond `%N`, and no SIGKILL/TTIN/TTOU;
+* a command that changes the task of the shell (`cd`, `path`, `jobs`, `fg`,
+  `bg`) cannot be a stage or carry a redirection: it is refused with a
+  sentence instead of changing a copy nobody sees.
 
-The status of a line is the status of its last stage. A program that is the
-last stage answers 0 when it ran and 1 when it could not start; its own code
-is the status its parent reads with `waitpid`, and a stage is a task of its
-own that waits for the program it started.
+The status of a line is the status of the last pipeline that ran, and the
+status of a pipeline is the status of its last stage. A background launch
+answers 0 without waiting; a stopped foreground job answers `128 + SIGTSTP`.
+A program contributes its own exit code: the port waits for the program and
+records that code for the kernel task that started it, while `execve()` keeps
+its ABI answer of 0 on return. A program that could not start is an error.
 
 ## `help`
 
@@ -183,6 +215,9 @@ The core of the kernel, on every machine:
 | `dmesg` | the log of the boot, from the ring buffer of the kernel |
 | `echo <words>` | print the words |
 | `sleep <milliseconds>` | wait, up to 60000 |
+| `jobs` | the shell's jobs: number, pid, process group, state and command |
+| `fg [%N]` | continue a job in the foreground and wait for it |
+| `bg [%N]` | continue a stopped job in the background |
 | `clear` | clear the screen (the escape sequence the panel and the VGA read) |
 | `modules` | run the hardware doctor and print its report |
 | `abi` | the table of the system calls |
@@ -209,7 +244,7 @@ The files, on every machine:
 | `chmod <mode> <path>`, `chown <uid> <path>`, `chgrp <gid> <path>` | the mode (octal), the owner and the group (0..32767) |
 | `path [directories]` | show or set `PATH` |
 | `exec <program> [args...]` | run a program, by a path or found in `PATH` |
-| `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD` or `PIPE` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
+| `kill [-signal] <pid>` | send `INT`, `TERM`, `CHLD`, `PIPE`, `STOP`, `CONT` or `TSTP` to a task; TERM by default. `init` and the console itself are refused with a sentence: there is no `getty`, so a signal to the shell would leave the machine without one |
 | `login [name]` | open a session as a user of `/etc/passwd`: the name and the password, three attempts, the uid, the gid and the home of the account (ADR 0033) |
 | `su [-l] [name]` | become another user: root without a password, a user with the password of the account; `-l` enters the home |
 | `logout` | end the session of this terminal: the console starts another one as root, a client of telnet is disconnected |
@@ -323,30 +358,39 @@ and the boot and the shell run them as programs of ring 3. The library programs 
 pipeline can end in one of them. [programs.md](programs.md) explains what a
 program is.
 
-## `kill`, Ctrl+C and no job control
+## Jobs, Ctrl+C and Ctrl+Z
 
-There is no job control: no `&`, no `fg`, no `bg`, no groups of processes and
-no `SIGSTOP`. A program runs in the foreground until it ends, and the shell
-waits for it. What a person has instead is two ways to stop one:
+A pipeline runs in its own process group. A foreground pipeline takes the
+terminal; the shell waits, polls Ctrl+C and Ctrl+Z, and restores its own
+foreground group before it reads the next line. `&` starts the pipeline in a
+new group without waiting and prints its number and leader pid:
 
 ```text
-microos> ps
-  pid  prio  state     name
-   12     5  running   shell
-   13     5  sleeping  program
-microos> kill 13
-microos> kill -INT 13
+microos> sleep 3000 &
+[1] 42
+microos> jobs
+[1] pid 42 pgrp 42 Running sleep 3000
 ```
 
+The table belongs to the shell task and keeps four entries. `jobs` reaps
+finished stages and prints `Running`, `Stopped` or `Done`, the pid, the process
+group and the command. `fg %N` gives the group the terminal, sends `SIGCONT`
+and waits; `bg %N` sends `SIGCONT` and leaves the group in the background.
+Without `%N`, both use the most recent unfinished job.
+
+Ctrl+Z sends `SIGTSTP` to the foreground group. The tasks leave the run queue
+and the sleep table, the shell prints `^Z`, and the job stays in the table as
+`Stopped` until `fg` or `bg` sends `SIGCONT`. Ctrl+C sends `SIGINT` to the
+whole group. A program that reads its terminal answers the same keys through
+the tty line discipline; at the shell prompt Ctrl+Z only throws the line away,
+because there is no parent job table here to continue the shell.
+
 `kill` takes a positive pid from `ps` and sends `TERM` unless a signal is
-named: `-INT`, `-TERM`, `-CHLD`, `-PIPE` or the number. A pid that names no
-task answers `kill: 42: no such process`; a signal outside the four is
-refused. During an `exec`, Ctrl+C of the console sends `SIGINT` to the
-program; during a pipeline it goes to every stage and the programs they
-started, because they share one job (ADR 0017). A program that ignores it
-keeps running: there is no `-9` to fall back on (a number outside the table
-is `EINVAL`), and the machine is restarted with `reboot` if a program really
-hangs.
+named: `-INT`, `-TERM`, `-CHLD`, `-PIPE`, `-STOP`, `-CONT`, `-TSTP` or the
+number. A pid that names no task answers `kill: 42: no such process`. The
+state-changing signals cannot be caught or ignored. There is no SIGKILL yet,
+so a program that ignores SIGINT still needs `reboot` if it cannot be stopped
+and removed.
 
 ## `ls` and `tree`
 

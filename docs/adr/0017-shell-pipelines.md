@@ -2,6 +2,10 @@
 
 * Status: accepted
 * Date: 2026-11-21
+* Amendment (2.2): ADR 0059 adds lists, `2>&1`, background jobs and Ctrl+Z,
+  and records a returned program's status for the shell without changing the
+  execve ABI. The refusals below describe the original 1.7 grammar; the wiki has
+  the current language.
 
 ## Context
 

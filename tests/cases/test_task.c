@@ -106,6 +106,7 @@ static void test_task_self(void)
     if (self != NULL) {
         KT_CHECK_STR_EQ(self->name, "test-runner");
         KT_CHECK(self->pid > 0);
+        KT_CHECK_INT_EQ(task_exec_status(self), -1);
     }
 
     KT_CHECK(task_by_pid(9999) == NULL);

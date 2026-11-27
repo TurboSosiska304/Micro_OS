@@ -10,6 +10,7 @@
 #include "kernel/errno.h"
 #include "kernel/log.h"
 #include "kernel/port.h"
+#include "kernel/task.h"
 
 #if KERNEL_EXEC
 
@@ -308,7 +309,15 @@ int k_exec_run(const struct k_exec_image *image, char *const argv[])
         return K_EXEC_RUN_REPLACED;
     }
 
-    return (rc == 0) ? g_exec_exit_code : K_EXEC_RUN_REFUSED;
+    {
+        int status = (rc == 0) ? g_exec_exit_code : K_EXEC_RUN_REFUSED;
+        struct task *caller = task_self();
+
+        if (status >= 0 && caller != NULL) {
+            caller->exec_status = status;
+        }
+        return status;
+    }
 }
 
 #endif /* KERNEL_EXEC */
