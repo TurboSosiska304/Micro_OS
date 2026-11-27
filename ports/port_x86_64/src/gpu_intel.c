@@ -139,6 +139,7 @@ static k_u64_t s_aperture_base;
 
 struct gpu_intel_flip_slot {
     bool mapped;
+    bool identity; /* the firmware already maps these physical pages; no PTE write */
     k_u64_t base;
     k_u32_t width;
     k_u32_t height;
@@ -743,6 +744,8 @@ static bool gpu_intel_present_reserve(const struct gpu_intel_info *info)
 
 static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct k_fb_surface *src)
 {
+    struct gpu_intel_gtt_range excluded[16];
+    k_size_t excluded_count = 0u;
     k_size_t index;
     k_size_t count = info->framebuffer.pte_count;
     int free_slot = -1;
@@ -793,10 +796,24 @@ static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct
         held++;
     }
 
-    rc = gpu_intel_ggtt_install(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
-                                slot->physical, &saved);
-    if (rc != GPU_INTEL_GGTT_OK) {
-        goto fail;
+    if (gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count) &&
+        gpu_intel_ggtt_find_identity(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, slot->physical,
+                                     (k_u32_t)count, excluded, excluded_count,
+                                     &slot->run) == GPU_INTEL_GGTT_OK) {
+        /* The pages were already scanner-visible: touching a PTE would only risk
+         * a regression. The flip needs just the surface address. */
+        slot->identity = true;
+    } else {
+        if (!s_flip.reserved) {
+            kwarn("gpu: present has no GGTT slot for %u pages and no identity run",
+                  (unsigned)count);
+            goto fail;
+        }
+        rc = gpu_intel_ggtt_install(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
+                                    slot->physical, &saved);
+        if (rc != GPU_INTEL_GGTT_OK) {
+            goto fail;
+        }
     }
 
     slot->mapped = true;
@@ -886,14 +903,10 @@ static int gpu_intel_present(void *context, const struct k_fb_surface *dst,
         }
         return KERR_NOTSUP;
     }
-    if (!gpu_intel_present_reserve(info)) {
-        kwarn("gpu: present reserve failed (no GGTT slot for %u pages)",
-              (unsigned)info->framebuffer.pte_count);
-        if (s_flip.active >= 0 && !gpu_intel_present_restore(info)) {
-            kerror("gpu: present could not restore the original plane after reserve failure");
-        }
-        return KERR_NOTSUP;
-    }
+    /* A reserved run is the usual path. A machine whose GGTT already maps RAM
+     * one-to-one can still present without one; present_map looks for that
+     * identity run before it gives up. */
+    (void)gpu_intel_present_reserve(info);
 
     rc = gpu_intel_present_map(info, src);
     if (rc != 0) {
@@ -972,7 +985,8 @@ static int gpu_intel_present_release(void *context)
         if (!slot->mapped) {
             continue;
         }
-        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
+        if (!slot->identity &&
+            gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
                                    slot->run.original) != GPU_INTEL_GGTT_OK) {
             ok = false;
             continue;
