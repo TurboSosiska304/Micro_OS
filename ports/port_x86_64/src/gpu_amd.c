@@ -1327,6 +1327,27 @@ static bool amd_wait_vblank(k_u8_t pipe)
     return (amd_mmio_read32(reg) & GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK) != 0u;
 }
 
+/* A second, independent confirmation of the flip: the surface-update pending
+ * bit is the one the AMD DC path polls after a GRPH address write. It may be
+ * zero already when the update was applied immediately, so "clear" is not a
+ * claim that a pending edge was seen. */
+static bool amd_surface_update_applied(k_u32_t mmio_size)
+{
+    k_u64_t deadline = port_x86_64_ticks() + 200u;
+
+    if (!amd_mmio_mapped(GPU_AMD_MMUNP_GRPH_UPDATE, mmio_size)) {
+        return false;
+    }
+    while (port_x86_64_ticks() < deadline) {
+        k_u32_t v = amd_mmio_read32(GPU_AMD_MMUNP_GRPH_UPDATE);
+
+        if ((v & GPU_AMD_UNP_GRPH_UPDATE__GRPH_SURFACE_UPDATE_PENDING_MASK) == 0u) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static volatile k_u8_t *amd_map_vram(k_u64_t bar0_base, k_u64_t offset, k_size_t bytes)
 {
     k_u64_t aligned = offset & ~((k_u64_t)GPU_AMD_SURFACE_MAP_ALIGN - 1ull);
@@ -1450,8 +1471,8 @@ static bool amd_restore_plane(void)
     amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp, lo);
     amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, hi);
     amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, s_amd_flip.original_pitch);
-    if (!amd_wait_vblank(s_amd_flip.pipe)) {
-        kerror("gpu: restore vblank timeout");
+    if (!amd_wait_vblank(s_amd_flip.pipe) || !amd_surface_update_applied(info->mmio_size)) {
+        kerror("gpu: restore vblank/surface-update timeout");
         return false;
     }
 
@@ -1587,9 +1608,9 @@ static int amd_flip_to_offset(k_u32_t id, k_u64_t offset, k_u64_t bytes, bool co
     amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, new_hi);
     amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, orig_pitch);
 
-    if (!amd_wait_vblank(plane->pipe) ||
+    if (!amd_wait_vblank(plane->pipe) || !amd_surface_update_applied(info->mmio_size) ||
         !amd_plane_points_to(plane, bar0_base, info->vram_bytes, offset)) {
-        kerror("gpu: %s flip readback/vblank failed", label);
+        kerror("gpu: %s flip readback/vblank/surface-update failed", label);
         (void)amd_restore_plane();
         return 1;
     }

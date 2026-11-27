@@ -173,6 +173,13 @@ static inline k_u8_t gpu_amd_decode_chansize(k_u32_t arb_ramcfg)
 #define GPU_AMD_MMCRTC_STATUS 0x1ba3u
 #define GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK 0x00000001u
 
+/* Surface-update pending status: the DC path polls this after a GRPH address
+ * write to know the surface update has been consumed ("surface live"). Facts
+ * from drivers/gpu/drm/amd/include/asic_reg/dce/dce_11_0_d.h (0x4624) and
+ * dce_11_0_sh_mask.h (mask 0x4, shift 2), MIT, Linux v6.12. Code written here. */
+#define GPU_AMD_MMUNP_GRPH_UPDATE 0x4624u
+#define GPU_AMD_UNP_GRPH_UPDATE__GRPH_SURFACE_UPDATE_PENDING_MASK 0x00000004u
+
 /* DCP/CRTC pipe register stride offsets (instances 0-5). */
 #define GPU_AMD_DCE_PIPE_COUNT 6u
 

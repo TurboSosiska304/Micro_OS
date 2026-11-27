@@ -81,9 +81,10 @@ Without `--yes`, `bufmap` is mapping-only and `present` keeps the RAM copy.
   shows each one and freeing one leaves the others intact.
 * Only GRPH primary/secondary surface address and the unchanged pitch register
   are written. Timings, PLL, DDI, format, tiling and enable state are untouched.
-* Flip success requires a vblank edge and address/pitch/control/tiling
-  readback. The original plane is restored by default. A failed rollback is a
-  hard error, not a hidden software copy.
+* Flip success requires a vblank edge, a clear `UNP_GRPH_UPDATE` surface-update
+  pending bit and address/pitch/control/tiling readback. The original plane is
+  restored by default. A failed rollback is a hard error, not a hidden software
+  copy.
 
 ## `k_blit_present` selection
 
