@@ -247,6 +247,65 @@ static struct pagecache_page *page_alloc(void)
     return p;
 }
 
+static int page_writeback_range(struct pagecache_page *start, k_u32_t count)
+{
+    k_u8_t *buf;
+    k_size_t total = 0;
+    k_u32_t i;
+    int rc;
+    k_u64_t offset;
+    struct pagecache_page *p;
+
+    if (start == NULL || count == 0u || start->ops == NULL || start->ops->writepage == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (count == 1u) {
+        return page_writeback(start);
+    }
+
+    buf = (k_u8_t *)kmm_alloc((k_size_t)count * PC_PAGE_SIZE, KMM_PRIORITY_KERNEL);
+    if (buf == NULL) {
+        return page_writeback(start);
+    }
+
+    for (i = 0; i < count; i++) {
+        p = bucket_find(start->fs_key, start->inode, start->page_index + i, NULL);
+        if (p == NULL || (p->flags & PC_DIRTY) == 0u || p->refcount != 0u) {
+            kmm_free(buf);
+            return page_writeback(start);
+        }
+        if (p->valid == 0u) {
+            kmm_free(buf);
+            return page_writeback(start);
+        }
+        memcpy(buf + total, p->data, p->valid);
+        total += p->valid;
+        if (p->valid < PC_PAGE_SIZE) {
+            count = i + 1u;
+            break;
+        }
+    }
+
+    offset = (k_u64_t)start->page_index * PC_PAGE_SIZE;
+    rc = start->ops->writepage(start->fs, start->inode, offset, buf, total);
+    kmm_free(buf);
+    if (rc < 0) {
+        return rc;
+    }
+    if ((k_size_t)rc != total) {
+        return KERR_IO;
+    }
+
+    for (i = 0; i < count; i++) {
+        p = bucket_find(start->fs_key, start->inode, start->page_index + i, NULL);
+        if (p != NULL) {
+            p->flags &= (k_u16_t)~PC_DIRTY;
+        }
+    }
+    return 0;
+}
+
 /*
  * Evict one page. Must be called with g_lock held. Returns 0 on success,
  * KERR_NOSPC if no evictable page, or a negative writeback error.
@@ -268,16 +327,31 @@ static int page_evict_one(struct pagecache_page **out_victim)
         }
     }
 
-    /* Dirty victim: write it back, then evict. */
+    /* Dirty victim: write back a contiguous run, then evict the victim. */
     for (p = g_lru_head.lru_prev; p != &g_lru_head; p = p->lru_prev) {
         if (p->refcount == 0u && (p->flags & PC_DIRTY) != 0u) {
-            int rc = page_writeback(p);
+            k_u32_t count = 1u;
+            k_u32_t i;
+            int rc;
 
+            for (i = 1u; i < 64u; i++) {
+                struct pagecache_page *n =
+                    bucket_find(p->fs_key, p->inode, p->page_index + i, NULL);
+                if (n == NULL || n->refcount != 0u || (n->flags & PC_DIRTY) == 0u ||
+                    n->valid == 0u) {
+                    break;
+                }
+                count++;
+                if (n->valid < PC_PAGE_SIZE) {
+                    break;
+                }
+            }
+
+            rc = page_writeback_range(p, count);
             if (rc != 0) {
                 return rc;
             }
 
-            p->flags &= (k_u16_t)~PC_DIRTY;
             page_detach(p);
             g_evictions++;
             *out_victim = p;

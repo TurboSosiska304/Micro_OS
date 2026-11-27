@@ -687,8 +687,21 @@ static int journal_add(k_u32_t home, const void *image)
  * leave the medium as it found it, or a boot that only reads would change a
  * volume (ADR 0047 §3).
  */
+static struct {
+    k_u32_t inode;
+    k_u32_t block;
+    k_u32_t index;
+    bool valid;
+} g_at_cursor;
+
+static void mfs_at_cursor_invalidate(void)
+{
+    g_at_cursor.valid = false;
+}
+
 static int mfs_txn_begin(void)
 {
+    g_at_cursor.valid = false;
     g.txn_depth++;
 
     return MFS_OK;
@@ -4045,6 +4058,8 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
         return rc;
     }
 
+    mfs_at_cursor_invalidate();
+
     /* A cut of an open object is a write of it: a draft until the close. */
     if (!file->pending) {
         rc = inode_mark_pending(file->inode);
@@ -4659,6 +4674,7 @@ int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t fla
     int rc;
 
     mfs_lock();
+    g_at_cursor.valid = false;
     rc = mfs_format_locked(dev, max_records, flags);
 
     /*
@@ -4683,6 +4699,7 @@ int mfs_mount(const struct k_blockdev *dev)
     int rc;
 
     mfs_lock();
+    g_at_cursor.valid = false;
     rc = mfs_mount_locked(dev);
     mfs_unlock();
     pagecache_drop_all();
@@ -4693,6 +4710,7 @@ int mfs_mount(const struct k_blockdev *dev)
 void mfs_unmount(void)
 {
     mfs_lock();
+    g_at_cursor.valid = false;
     mfs_unmount_locked();
     mfs_unlock();
     pagecache_drop_all();
@@ -5027,7 +5045,21 @@ int mfs_read_at(k_u32_t inode_num, k_u64_t offset, void *buf, k_size_t size)
     tmp.generation = g.generation;
     tmp.chain_blocks_valid = false;
 
+    if (g_at_cursor.valid && g_at_cursor.inode == inode_num) {
+        tmp.chain_block = g_at_cursor.block;
+        tmp.chain_index = g_at_cursor.index;
+        tmp.chain_valid = true;
+    }
+
     rc = mfs_read_locked(&tmp, buf, size);
+    if (rc >= 0 && tmp.chain_valid) {
+        g_at_cursor.inode = inode_num;
+        g_at_cursor.block = tmp.chain_block;
+        g_at_cursor.index = tmp.chain_index;
+        g_at_cursor.valid = true;
+    } else if (rc < 0) {
+        mfs_at_cursor_invalidate();
+    }
     mfs_unlock();
     return rc;
 }
@@ -5072,9 +5104,16 @@ int mfs_write_at(k_u32_t inode_num, k_u64_t offset, const void *buf, k_size_t si
     tmp.chain_blocks_valid = false;
     tmp.pending = (inode.flags & MFS_INODE_PENDING) != 0u;
 
+    if (g_at_cursor.valid && g_at_cursor.inode == inode_num) {
+        tmp.chain_block = g_at_cursor.block;
+        tmp.chain_index = g_at_cursor.index;
+        tmp.chain_valid = true;
+    }
+
     mfs_txn_begin();
     written = mfs_write_locked(&tmp, buf, size);
     if (written < 0) {
+        mfs_at_cursor_invalidate();
         mfs_txn_abort();
         mfs_unlock();
         return written;
@@ -5096,6 +5135,15 @@ int mfs_write_at(k_u32_t inode_num, k_u64_t offset, const void *buf, k_size_t si
         }
     } else {
         mfs_txn_abort();
+    }
+
+    if (rc == MFS_OK && tmp.chain_valid) {
+        g_at_cursor.inode = inode_num;
+        g_at_cursor.block = tmp.chain_block;
+        g_at_cursor.index = tmp.chain_index;
+        g_at_cursor.valid = true;
+    } else if (rc != MFS_OK) {
+        mfs_at_cursor_invalidate();
     }
 
     mfs_unlock();
