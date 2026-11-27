@@ -14,7 +14,7 @@
  * The ring of the board is small because its DRAM is about a hundred kilobytes
  * and the log must not be the reason a program cannot run. */
 #if defined(ESP_PLATFORM)
-#define K_LOGFILE_BUFFER_SIZE 512u
+#define K_LOGFILE_BUFFER_SIZE 480u
 #else
 #define K_LOGFILE_BUFFER_SIZE 4096u
 #endif
