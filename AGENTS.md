@@ -186,6 +186,10 @@ vfs: fix path lookup for trailing slash
 drivers: fix i2c timeout on mpu6886
 ```
 
+**An agent never signs a commit with a model.** `Co-authored-by:` names a person
+who wrote part of the change, never a model, an editor or a script; the work of
+an assistant belongs to the person who directed it (ADR 0060, `NOTICE.md`).
+
 Branches: `mainline` is always green, `release_candidate` feeds releases,
 features go to `feature/<what>`, fixes to `fix/<what>`. Tags `vX.Y.Z`
 publish a release; `vX.Y.Z-pre` is a pre-release and must match the kernel
