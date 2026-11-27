@@ -221,14 +221,16 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
             transcript += chunk
             text = transcript.decode("utf-8", errors="replace")
 
-            # One command per prompt: the shell prints the prompt before it
-            # reads, so the line goes out only when the shell waits for it.
-            while sent < len(commands) and text.count(PROMPT) > sent:
+            # One command per real prompt. A prompt printed inside run.log and
+            # found by grep has a file-name prefix, so only a prompt at the
+            # beginning of a line is the shell waiting for input.
+            prompts = len(re.findall(r"(?m)^microos> ", text))
+            while sent < len(commands) and prompts > sent:
                 process.stdin.write((commands[sent] + "\n").encode("ascii"))
                 process.stdin.flush()
                 sent += 1
 
-            if text.count(PROMPT) > len(commands):
+            if prompts > len(commands):
                 break
     finally:
         process.terminate()
@@ -251,8 +253,12 @@ def run_machine(image: str, commands: list, timeout: float) -> str:
 
 
 def answers(output: str, commands: list) -> list:
-    """The answer of every command, split by the prompt of the shell."""
-    blocks = output.split(PROMPT)[1:]
+    """The answer of every command, split by a real shell prompt.
+
+    A prompt at the start of a line is the shell. The same bytes after a
+    file-name prefix are output of `grep` over run.log and stay in the answer.
+    """
+    blocks = re.split(r"(?m)^microos> ", output)[1:]
     return [blocks[index] if index < len(blocks) else "" for index in range(len(commands))]
 
 

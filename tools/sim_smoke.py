@@ -210,7 +210,9 @@ def check(output: str, commands: list) -> list:
         re.search(r"^smoke-test\s*$", answer("echo smoke-test"), re.MULTILINE) is not None,
     )
     expect("pwd prints the current directory", "/" in answer("pwd"))
-    expect("dmesg prints the log of the kernel", "[ ok ] sched" in answer("dmesg"))
+    # The ring keeps the newest messages; early boot lines may already have
+    # aged out after the configuration and log tasks have written theirs.
+    expect("dmesg prints the log of the kernel", "sim: init is up" in answer("dmesg"))
 
     # --- the filesystem
     root = answer("ls /")
