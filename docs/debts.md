@@ -633,6 +633,19 @@ screen of writes into the framebuffer.
 |---|---|---|---|
 | The console has no notion of a dirty cell: an escape sequence that moves the cursor and writes one character redraws the row, and a program that repaints its window (the editor, the file manager of the desk) pays for the whole glass | `ports/port_x86_64/src/console.c`, the ANSI interpreter, `components/graphics` | open (found by the owner in 2.1, on `kilo`) | A dirty rectangle per row of cells, flushed once per read of the program's output and once per repaint, and a glyph atlas on the text path as well - the same damage model phase A of [`docs/plan-gpu.md`](plan-gpu.md) gives the desk. A test: one keystroke in a full-screen program touches at most two rows. |
 
+## K31 - The runner of an older distribution builds the programs of ports without /bin/ports
+
+The CI of 2.1.0 runs on a distribution whose GCC is older than the one of the
+development machine. The dialect is chosen by a probe now (`-std=c23` or
+`-std=c2x`), and the kernel, the host tools and the firmware build; the x86 image
+of the gate, however, arrives without the programs of `ports/` - the smoke says
+"the programs of the SDK are in /bin/ports of the image" and twenty more checks
+fall with it. Locally, on GCC 16, the same tree answers 431 of 431.
+
+| Debt | Where | Status | What it needs |
+|---|---|---|---|
+| The image of the x86-64 gate on the runner lacks the programs of `ports/`, and no line of the build says why: the step that builds them with the older compiler either fails quietly or is skipped, and the gate of the release reads an image that is not the one the release hands out | `.github/workflows/ci.yml`, `ports/port_x86_64/CMakeLists.txt` (`USERLAND_CFLAGS`, the ports step) | open (found by the gate of 2.1.0) | The build prints the failure instead of carrying on, and the runner proves at least one program of `ports/` (`ls /bin/ports`) or the gate is not run there. A container with a compiler of the same age as the tree would remove the class. |
+
 ## K25 - Five ports of the laptop that do not enumerate
 
 The xHCI of the test laptop reports five ports with a device and refuses all
