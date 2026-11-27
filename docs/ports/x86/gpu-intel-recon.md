@@ -744,7 +744,39 @@ Expected markers are the `gpu:` fact line and `kmod: gpu ok`; the `modules`
 table should also show `gpu` in state `ok`. If the console is VGA-only, run the
 same two commands and photograph the last screen lines instead of using serial.
 
-## 9. Sources
+## 9. The 27 November 2026 GGTT result
+
+The owner reported two facts from the live machine. The firmware had left the
+primary plane linear XRGB8888: `gpu plane-linear` printed `ctl 0x04000000 ->
+0x04000000` and `stride 0x780 -> 0x780`, and the command said the plane was
+already linear. `gpu ggtt-test` answered `no guarded free GGTT slot (rc=-4)`.
+
+That refusal has an arithmetic explanation. The gen8 aperture has
+`256 MiB / 4 KiB = 65,536` PTEs. The decoded linear stride is
+`0x780 * 64 = 122,880` bytes per line; over 1,080 lines that is 32,400 pages
+for one surface. Two page-flip surfaces would occupy 64,800 of the 65,536
+entries before guards. Even an aperture with no other owner could hardly
+provide two guarded runs that large, so `rc=-4` does not by itself identify a
+driver that consumed the slots.
+
+The old `find_free` looked only for runs of identical *present* PTEs with
+identical guards, the assumption being that unused gen8 slots point at one
+scratch page. A firmware handoff that leaves unused slots unmapped makes that
+search fail even when pages are free. The current code first looks for a run
+of never-mapped PTEs with unmapped guards, and falls back to the scratch case.
+`gpu ggtt-map` is read-only and prints the number of mapped, unmapped and
+identity-mapped pages, the longest runs, and the excluded live ranges; it must
+be run on the laptop to answer who actually owns the slots.
+
+`gpu display enable` now prints this arithmetic in its dry-run and refuses to
+promise a device flip when there is no guarded run. On this machine it is
+nearly a no-op: the plane is already linear, so `--yes` only verifies one
+present, releases the mapping and leaves the plane unchanged. A separate path
+uses an identity GGTT run when the firmware already maps the RAM one-to-one;
+then no PTE write is needed at all. Mode and backlight remain research only in
+`gpu-intel-mode-backlight-plan.md`.
+
+## 10. Sources
 
 * Lenovo PSREF, ThinkPad X1 Carbon 6th Gen platform specifications:
   <https://psref.lenovo.com/product/ThinkPad/ThinkPad_X1_Carbon_6th_Gen>

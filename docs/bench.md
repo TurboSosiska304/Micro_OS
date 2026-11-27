@@ -677,29 +677,46 @@ run in this session because unrelated QEMU jobs were active on the host.
 
 ## Intel display enable and present verification (2.1, Intel lane)
 
-The measurement was planned on **27 November 2026** on QEMU 11.1.3 TCG,
-`-vga std`, one emulated processor and 256 MB, the same machine as the
-framebuffer and first-present rows above. `gpu display enable --yes` makes the
-plane linear when needed and verifies that `k_blit_present` returns the device
-path (rc=0) rather than the kernel software copy (rc=1). On this QEMU machine
-there is no measured Intel ThinkPad 17aa:225c and the Intel page-flip backend
-is not registered, so the device-present path is not available and the wm keeps
-the software copy fallback. The QEMU delta for this lane is therefore expected
-to be within noise; no QEMU device-present speedup is claimed here.
+The measurement was made on **27 November 2026** on a ThinkPad X1 Carbon Gen 6
+(UHD 620, `8086:5917`, subsystem `17aa:225c`, eDP panel 1920x1080). The
+firmware left the primary plane **linear XRGB8888**: the `gpu plane-linear`
+dry-run prints `ctl 0x04000000 -> 0x04000000` and `stride 0x780 -> 0x780`, and
+the command answers `plane is already linear; no register write needed`.
+`gpu display enable` is almost a no-op on this machine: its dry-run prints the
+decoded pitch, the guarded-slot estimate and the plan; `--yes` verifies one
+device present and then releases the mapping and RAM used for the check.
 
-The number that matters is the laptop: with `gpu display enable --yes` active,
-the 2 MiB-per-frame software copy should disappear from the wm present path.
-The owner checklist is to boot the laptop, run `gpu display enable` (dry-run),
-then `gpu display enable --yes`, confirm the log line `gpu: display enable:
-present verified (device path, rc=0)`, and compare the wm first-present TSC line
-before and after enable. If the screen goes black, reboot restores the firmware
-plane.
+What is measured on metal, after the wmhang changes: `/bin/wm` produced frames
+with `rc=0` at about **570 us per 1920x1080 frame** (TSC). This is a complete
+measured frame cost, but it is *not* yet a page-flip number. `uiprog_present`
+converts both a device answer (0) and a kernel software copy (1) into a
+program-level `rc=0`; with `ggtt-test` reporting `rc=-4`, the copy path is the
+likely explanation. The split between the copy and the rest of the compositor
+needs an owner run that records the `wm: present: ...` TSC lines together with
+a successful `gpu display enable --yes` device verification.
 
-| Work | QEMU (no Intel flip backend) | Laptop (owner) |
+| Work | QEMU (no Intel backend) | ThinkPad, measured 27 Nov |
 |---|---|---|
-| `k_blit_present` path | kernel copy (rc=1) | device (rc=0), after enable |
-| 2 MiB copy per present | present | removed by page flip |
-| `wm` first present | unchanged in character | measure TSC ns before/after |
+| `wm` frame | QEMU TCG numbers above | ~570 us per 1920x1080 frame |
+| `k_blit_present` path | kernel copy (rc=1) | copy observed; device path not proven |
+| primary plane | no Intel card | already linear XRGB8888, no write |
+| guarded GGTT slot | none | no run found (`ggtt-test` rc=-4) |
 
-The next step, not done in this lane: GTT/VM for own RAM buffers and Y/Yf
-tiling, so the detile copy is removed as well.
+The GGTT arithmetic explains the refusal. The aperture has 65,536 entries of
+4,096 bytes (256 MiB). The decoded stride `0x780 * 64 = 122,880` bytes over
+1,080 lines needs 32,400 pages per surface; two flip surfaces need 64,800 of
+the 65,536 entries *plus* guard pages. Even a completely empty aperture could
+barely hold them, so `rc=-4` is not proof that some other owner consumed the
+slots. `gpu ggtt-map` is a read-only census of mapped, unmapped and
+identity-mapped pages and the excluded live ranges; it must be run on the
+laptop before anyone claims how many slots are really free.
+
+Still open, in order: obtain the `ggtt-map` numbers; check whether the stride
+decode names the plane the firmware really scans (an identity mapping would
+let a RAM surface flip with no PTE write at all); prove the device path with
+`gpu display enable --yes`; then decide between a smaller-pitch surface, one
+surface with a copy, and a real two-surface flip. Mode setting and backlight
+are research only in this lane: no PLL or DDI register is written.
+
+The QEMU row stays as a baseline: there is no Intel card in QEMU, so no
+device-present speedup is claimed for it.
