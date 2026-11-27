@@ -3925,6 +3925,7 @@ def users_checks(loader: str, kernel: str, image: str, timeout: float) -> list:
 
 
 def main(argv: list) -> int:
+    global DISK, CPU, BUILD
     parser = argparse.ArgumentParser(description="the smoke test of the x86-64 port")
     parser.add_argument("--build", default=BUILD, help="the x86-64 build directory")
     parser.add_argument("--image", default=None, help="the image with /bin of the disk")
@@ -3960,7 +3961,6 @@ def main(argv: list) -> int:
     parser.add_argument("--verbose", action="store_true", help="print the console of the machine")
     args = parser.parse_args(argv)
 
-    global DISK, CPU, BUILD
     BUILD = args.build
     if args.image is None:
         args.image = os.path.join(BUILD, "programs.img")
