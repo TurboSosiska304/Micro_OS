@@ -30,7 +30,9 @@
 
 #include <string.h>
 
+#include "kernel/kmm.h"
 #include "kernel/log.h"
+#include "kernel/logfile.h"
 #include "kshell/kshell.h"
 #include "port_x86_64.h"
 
@@ -94,6 +96,13 @@ static k_u32_t amd_mmio_read32(k_u32_t mm_index)
     volatile k_u32_t *mmio = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VIRT;
 
     return mmio[mm_index];
+}
+
+static void amd_mmio_write32(k_u32_t mm_index, k_u32_t value)
+{
+    volatile k_u32_t *mmio = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VIRT;
+
+    mmio[mm_index] = value;
 }
 
 static bool amd_mmio_mapped(k_u32_t mm_index, k_u32_t mmio_size)
@@ -559,4 +568,288 @@ int port_x86_64_gpu_amd_vramtest(bool do_write)
     }
 
     return do_vram_write_test(bar0_base, test_offset);
+}
+
+static bool amd_wait_vblank(k_u8_t pipe)
+{
+    k_u32_t off = gpu_amd_dcp_offset(pipe);
+    k_u32_t reg = GPU_AMD_MMCRTC_STATUS + off;
+    k_u64_t deadline = port_x86_64_ticks() + 200u;
+    bool seen_clear = false;
+
+    if (!amd_mmio_mapped(reg, (k_u32_t)port_x86_64_gpu_info()->mmio_size)) {
+        return false;
+    }
+
+    /* Wait for a vblank edge: first leave vblank, then see it asserted. */
+    while (port_x86_64_ticks() < deadline) {
+        k_u32_t v = amd_mmio_read32(reg);
+        bool in_vblank = (v & GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK) != 0u;
+
+        if (!in_vblank) {
+            seen_clear = true;
+        } else if (seen_clear) {
+            return true;
+        }
+    }
+
+    /* Fallback: accept being in vblank if we never saw a clear edge. */
+    return (amd_mmio_read32(reg) & GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK) != 0u;
+}
+
+static bool amd_map_vram(k_u64_t bar0_base, k_u64_t offset, k_size_t bytes)
+{
+    k_u32_t pages =
+        port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + offset, bytes);
+    return pages != 0u;
+}
+
+int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep)
+{
+    const struct gpu_info *info = port_x86_64_gpu_info();
+    struct gpu_amd_scanout_region regions[12];
+    struct gpu_amd_scanout_region *target = NULL;
+    int region_count = 0;
+    int i;
+    k_u64_t bar0_base = 0u;
+    k_u64_t frame_bytes;
+    k_u64_t frame_offset;
+    k_u32_t orig_lo;
+    k_u32_t orig_hi;
+    k_u32_t orig_pitch;
+    k_u32_t new_pitch;
+    k_u8_t *staging = NULL;
+    volatile k_u8_t *vram = (volatile k_u8_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
+    bool wrote_grph = false;
+    bool restore_ok = false;
+    bool ok = false;
+
+    if (info == NULL || !info->present) {
+        kshell_printf("gpu amdflip: no display controller present\n");
+        return 1;
+    }
+    if (info->vendor != 0x1002u) {
+        kshell_printf("gpu amdflip: not an AMD controller (%04x:%04x)\n", (unsigned)info->vendor,
+                      (unsigned)info->device);
+        return 1;
+    }
+    if (info->mmio_base == 0u || info->mmio_size == 0u) {
+        kshell_printf("gpu amdflip: BAR5 MMIO not mapped\n");
+        return 1;
+    }
+
+    {
+        struct port_x86_64_pci_device pci;
+        pci.bus = info->bus;
+        pci.slot = info->slot;
+        pci.function = info->function;
+        bar0_base = bar_base(&pci, PCI_BAR0);
+    }
+
+    if (bar0_base == 0u || info->vram_bytes == 0u) {
+        kshell_printf("gpu amdflip: BAR0 aperture unknown\n");
+        return 1;
+    }
+
+    region_count = read_scanout_regions(regions, (int)(sizeof(regions) / sizeof(regions[0])));
+    for (i = 0; i < region_count; i++) {
+        if (regions[i].primary && regions[i].enabled) {
+            target = &regions[i];
+            break;
+        }
+    }
+    if (target == NULL) {
+        kshell_printf("gpu amdflip: no enabled primary GRPH scanout found\n");
+        kerror("gpu amdflip: no primary scanout");
+        return 1;
+    }
+
+    frame_bytes = gpu_amd_frame_bytes(target->pitch_pixels, target->height);
+    if (frame_bytes == 0u) {
+        kshell_printf("gpu amdflip: invalid frame size (pitch %u, height %u)\n",
+                      (unsigned)target->pitch_pixels, (unsigned)target->height);
+        return 1;
+    }
+
+    frame_offset =
+        gpu_amd_choose_frame_offset(info->vram_bytes, frame_bytes, regions, region_count);
+    if (frame_offset == 0u) {
+        kshell_printf("gpu amdflip: no safe VRAM block for %u KiB frame\n",
+                      (unsigned)(frame_bytes / 1024ull));
+        kerror("gpu amdflip: no safe VRAM block for %u bytes", (unsigned)frame_bytes);
+        return 1;
+    }
+
+    orig_lo = (k_u32_t)(target->address & 0xFFFFFFFFu);
+    orig_hi = (k_u32_t)(target->address >> 32);
+    orig_pitch = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PITCH + gpu_amd_dcp_offset(target->pipe));
+    new_pitch = orig_pitch; /* preserve other pitch bits; address is the flip */
+
+    kshell_printf("gpu amdflip: pipe %u %ux%u pitch %u, frame %u KiB\n", (unsigned)target->pipe,
+                  (unsigned)target->pitch_pixels, (unsigned)target->height,
+                  (unsigned)(orig_pitch & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK),
+                  (unsigned)(frame_bytes / 1024ull));
+    kshell_printf("gpu amdflip: source 0x%x%08x, target BAR0+0x%x%08x\n", (unsigned)orig_hi,
+                  (unsigned)orig_lo, (unsigned)(frame_offset >> 32),
+                  (unsigned)(k_u32_t)frame_offset);
+
+    if (!confirmed) {
+        kshell_printf("gpu amdflip: dry-run, nothing written; pass --yes to flip on the laptop\n");
+        return 0;
+    }
+
+    staging = (k_u8_t *)kmm_alloc((k_size_t)frame_bytes, KMM_PRIORITY_KERNEL);
+    if (staging == NULL) {
+        kshell_printf("gpu amdflip: no RAM for %u KiB staging buffer\n",
+                      (unsigned)(frame_bytes / 1024ull));
+        return 1;
+    }
+
+    /* Normalize GRPH address to a BAR0 offset. */
+    {
+        k_u64_t src = target->address;
+        if (src >= bar0_base && src < bar0_base + info->vram_bytes) {
+            src -= bar0_base;
+        } else if (src >= info->vram_bytes) {
+            kshell_printf("gpu amdflip: source address 0x%x%08x outside VRAM\n",
+                          (unsigned)(target->address >> 32), (unsigned)(k_u32_t)target->address);
+            goto out;
+        }
+        /* Copy current frame from source VRAM surface into RAM staging. */
+        if (!amd_map_vram(bar0_base, src, (k_size_t)frame_bytes)) {
+            kshell_printf("gpu amdflip: could not map source VRAM\n");
+            goto out;
+        }
+        memcpy(staging, (const void *)vram, (k_size_t)frame_bytes);
+    }
+
+    /* Copy staging into our VRAM block. */
+    if (!amd_map_vram(bar0_base, frame_offset, (k_size_t)frame_bytes)) {
+        kshell_printf("gpu amdflip: could not map target VRAM\n");
+        goto out;
+    }
+    memcpy((void *)vram, staging, (k_size_t)frame_bytes);
+
+    /* Verify the VRAM copy before touching scanout registers. */
+    if (memcmp((const void *)vram, staging, (k_size_t)frame_bytes) != 0) {
+        kshell_printf("gpu amdflip: VRAM copy mismatch before flip\n");
+        kerror("gpu amdflip: VRAM copy mismatch before flip");
+        goto out;
+    }
+
+    kinfo("gpu: amdflip: about to point GRPH pipe %u at BAR0+0x%x%08x", (unsigned)target->pipe,
+          (unsigned)(frame_offset >> 32), (unsigned)(k_u32_t)frame_offset);
+    kshell_printf("gpu: amdflip: about to point GRPH at BAR0+0x%x%08x\n",
+                  (unsigned)(frame_offset >> 32), (unsigned)(k_u32_t)frame_offset);
+    k_logfile_flush();
+
+    /* Write only GRPH address/pitch. No timings, PLL, DDI. */
+    {
+        k_u32_t dcp = gpu_amd_dcp_offset(target->pipe);
+        k_u64_t new_addr = frame_offset;
+        k_u32_t new_lo;
+        k_u32_t new_hi;
+
+        /* Preserve the original address format (BAR0 bus address or VRAM offset). */
+        if (target->address >= bar0_base && target->address < bar0_base + info->vram_bytes) {
+            new_addr = bar0_base + frame_offset;
+        }
+        new_lo = (k_u32_t)(new_addr & 0xFFFFFFFFu);
+        new_hi = (k_u32_t)(new_addr >> 32);
+
+        wrote_grph = true;
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp, new_lo);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, new_hi);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, new_pitch);
+
+        if (!amd_wait_vblank(target->pipe)) {
+            kshell_printf("gpu amdflip: vblank wait timed out after flip\n");
+            kerror("gpu amdflip: vblank timeout after flip");
+            goto restore;
+        }
+
+        /* Readback: confirm the surface address took effect. */
+        {
+            k_u32_t rb_lo = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp);
+            k_u32_t rb_hi = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp);
+            k_u32_t rb_pitch = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PITCH + dcp);
+            if (rb_lo != new_lo || rb_hi != new_hi || rb_pitch != new_pitch) {
+                kshell_printf("gpu amdflip: GRPH readback mismatch after flip\n");
+                kerror("gpu amdflip: readback mismatch lo=%08x/%08x hi=%08x/%08x pitch=%08x/%08x",
+                       (unsigned)rb_lo, (unsigned)new_lo, (unsigned)rb_hi, (unsigned)new_hi,
+                       (unsigned)rb_pitch, (unsigned)new_pitch);
+                goto restore;
+            }
+        }
+    }
+
+    /* Verify the displayed block still matches the saved frame. */
+    if (!amd_map_vram(bar0_base, frame_offset, (k_size_t)frame_bytes)) {
+        kshell_printf("gpu amdflip: could not remap target for verify\n");
+        goto restore;
+    }
+    if (memcmp((const void *)vram, staging, (k_size_t)frame_bytes) != 0) {
+        kshell_printf("gpu amdflip: picture verify FAILED (VRAM differs from staging)\n");
+        kerror("gpu amdflip: picture verify failed");
+        goto restore;
+    }
+
+    kshell_printf("gpu amdflip: GRPH readback OK, picture verified same\n");
+    kinfo("gpu amdflip: GRPH readback OK, picture verified same at BAR0+0x%x%08x",
+          (unsigned)(frame_offset >> 32), (unsigned)(k_u32_t)frame_offset);
+
+    if (keep) {
+        kshell_printf(
+            "gpu amdflip: --keep: leaving our surface active (restore manually if needed)\n");
+        kinfo("gpu amdflip: keeping surface at BAR0+0x%x%08x", (unsigned)(frame_offset >> 32),
+              (unsigned)(k_u32_t)frame_offset);
+        ok = true;
+        wrote_grph = false; /* intentional: do not restore */
+        goto out;
+    }
+
+restore:
+    if (wrote_grph) {
+        k_u32_t dcp = gpu_amd_dcp_offset(target->pipe);
+        kinfo("gpu: amdflip: restoring GRPH pipe %u to 0x%x%08x", (unsigned)target->pipe,
+              (unsigned)orig_hi, (unsigned)orig_lo);
+        k_logfile_flush();
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp, orig_lo);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, orig_hi);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, orig_pitch);
+        if (amd_wait_vblank(target->pipe)) {
+            k_u32_t rb_lo = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp);
+            k_u32_t rb_hi = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp);
+            restore_ok = (rb_lo == orig_lo && rb_hi == orig_hi);
+        } else {
+            restore_ok = false;
+        }
+        if (restore_ok) {
+            kshell_printf("gpu amdflip: restored original surface 0x%x%08x\n", (unsigned)orig_hi,
+                          (unsigned)orig_lo);
+            kinfo("gpu amdflip: restored original surface");
+        } else {
+            kshell_printf("gpu amdflip: WARNING restore not confirmed\n");
+            kerror("gpu amdflip: restore not confirmed");
+        }
+    }
+
+    ok = wrote_grph ? restore_ok : false;
+    /* If we never wrote GRPH (failed before write), it's not "ok" as a flip,
+     * but we didn't break anything; return error. If we wrote and restored, ok. */
+
+out:
+    if (staging != NULL) {
+        kmm_free(staging);
+    }
+    if (!confirmed) {
+        return 0;
+    }
+    if (keep && ok) {
+        return 0;
+    }
+    if (wrote_grph) {
+        return ok ? 0 : 1;
+    }
+    return 1;
 }

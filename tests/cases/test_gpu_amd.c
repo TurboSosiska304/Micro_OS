@@ -193,6 +193,83 @@ static void test_scanout_overlap_refuses(void)
     KT_CHECK_INT_EQ((long long)off, 0);
 }
 
+static void test_frame_bytes(void)
+{
+    ktest_begin("gpu_amd: frame size from pitch/height");
+
+    /* 1920x1080x4 */
+    KT_CHECK_INT_EQ((long long)gpu_amd_frame_bytes(1920u, 1080u), 1920ll * 1080ll * 4ll);
+    /* Zero pitch or height is invalid. */
+    KT_CHECK_INT_EQ((long long)gpu_amd_frame_bytes(0u, 1080u), 0);
+    KT_CHECK_INT_EQ((long long)gpu_amd_frame_bytes(1920u, 0u), 0);
+    /* Pitch mask is applied (15 bits). */
+    KT_CHECK_INT_EQ((long long)gpu_amd_frame_bytes(0x8000u | 1920u, 1080u), 1920ll * 1080ll * 4ll);
+}
+
+static void test_frame_offset_no_fit(void)
+{
+    struct gpu_amd_scanout_region regions[1];
+    k_u64_t vram = 256ull * 1024ull * 1024ull;
+    k_u64_t off;
+
+    ktest_begin("gpu_amd: frame block that does not fit is refused");
+
+    memset(regions, 0, sizeof(regions));
+    regions[0].enabled = true;
+    regions[0].address = 16ull * 1024ull * 1024ull;
+    regions[0].size_bytes = 240ull * 1024ull * 1024ull;
+
+    off = gpu_amd_choose_frame_offset(vram, 8ull * 1024ull * 1024ull, regions, 1);
+    KT_CHECK_INT_EQ((long long)off, 0);
+
+    /* Frame larger than VRAM is refused. */
+    off = gpu_amd_choose_frame_offset(vram, vram + 1u, NULL, 0);
+    KT_CHECK_INT_EQ((long long)off, 0);
+
+    /* Zero frame is refused. */
+    off = gpu_amd_choose_frame_offset(vram, 0u, NULL, 0);
+    KT_CHECK_INT_EQ((long long)off, 0);
+}
+
+static void test_frame_offset_finds_safe(void)
+{
+    struct gpu_amd_scanout_region regions[1];
+    k_u64_t vram = 512ull * 1024ull * 1024ull;
+    k_u64_t frame = 8ull * 1024ull * 1024ull;
+    k_u64_t off;
+
+    ktest_begin("gpu_amd: frame offset is outside scanout and 16 MiB floor");
+
+    memset(regions, 0, sizeof(regions));
+    regions[0].enabled = true;
+    regions[0].primary = true;
+    regions[0].address = 64ull * 1024ull * 1024ull;
+    regions[0].size_bytes = 32ull * 1024ull * 1024ull;
+
+    off = gpu_amd_choose_frame_offset(vram, frame, regions, 1);
+    KT_CHECK(off != 0u);
+    KT_CHECK(off >= GPU_AMD_VRAM_TEST_MIN_OFFSET);
+    KT_CHECK(off + frame <= vram);
+    KT_CHECK(!gpu_amd_scanout_overlaps(off, frame, regions, 1));
+}
+
+static void test_address_pitch_encoding(void)
+{
+    k_u64_t addr = 0x00000001ABCDEF00ull;
+    k_u32_t pitch = 1920u;
+    k_u32_t pitch_reg = pitch & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK;
+
+    ktest_begin("gpu_amd: GRPH address/pitch encoding");
+
+    KT_CHECK_INT_EQ((long long)(k_u32_t)(addr & 0xFFFFFFFFu), (long long)0xABCDEF00u);
+    KT_CHECK_INT_EQ((long long)(k_u32_t)(addr >> 32), (long long)0x00000001u);
+    KT_CHECK_INT_EQ((long long)pitch_reg, 1920);
+
+    /* Pitch field is 15 bits wide. */
+    KT_CHECK_INT_EQ((long long)(0xFFFFu & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK), 0x7FFF);
+    KT_CHECK_INT_EQ((long long)(GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK), 1);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -207,4 +284,8 @@ void test_gpu_amd(void)
     test_scanout_size_decode();
     test_scanout_overlap();
     test_scanout_overlap_refuses();
+    test_frame_bytes();
+    test_frame_offset_no_fit();
+    test_frame_offset_finds_safe();
+    test_address_pitch_encoding();
 }
