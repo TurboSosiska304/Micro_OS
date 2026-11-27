@@ -1619,23 +1619,32 @@ static void file_cursor_forget(struct mfs_file *file)
 }
 
 /*
- * Bring a descriptor of an open file up to the volume after a growth of the
- * table of the records (ADR 0038). The growth moves the blocks of the chains
- * and patches the pointers of the chains, so the record of the object is the
- * truth about the head of the chain and the cursors of the descriptor are
- * not: the descriptor takes the head of its record again and walks from it.
- * The number of the blocks of the chain does not change, and neither does
- * the size the descriptor holds - a write that grew the chain past the
- * record has that number in the descriptor, not on the medium yet.
- *
- * A descriptor of a volume that did not grow pays one comparison.
+ * Bring a descriptor of an open file up to the volume. The page-cache path
+ * writes through mfs_write_at and commits the inode directly; an open handle
+ * must pick up that on-disk state before it reads, truncates or closes, or
+ * it would operate on stale size/first_block and leak the blocks the cache
+ * just published. A dirty handle has in-RAM state that is authoritative
+ * until close commits it.
  */
 static int file_refresh(struct mfs_file *file)
 {
     struct mfs_inode inode;
     int rc;
 
-    if (file->generation == g.generation) {
+    if (file->dirty) {
+        if (file->generation == g.generation) {
+            return MFS_OK;
+        }
+        rc = inode_read(file->inode, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        /* Dirty handle keeps its own size/first_block; only generation moves. */
+        if (file->first_block != inode.first_block) {
+            file->first_block = inode.first_block;
+            file_cursor_forget(file);
+        }
+        file->generation = g.generation;
         return MFS_OK;
     }
 
@@ -1644,8 +1653,14 @@ static int file_refresh(struct mfs_file *file)
         return rc;
     }
 
-    file->first_block = inode.first_block;
-    file_cursor_forget(file);
+    if (file->first_block != inode.first_block || file->size != inode.size ||
+        file->pending != ((inode.flags & MFS_INODE_PENDING) != 0u)) {
+        file->first_block = inode.first_block;
+        file->size = inode.size;
+        file->pending = (inode.flags & MFS_INODE_PENDING) != 0u;
+        file_cursor_forget(file);
+        file->chain_blocks_valid = false;
+    }
     file->generation = g.generation;
 
     return MFS_OK;
@@ -4184,6 +4199,7 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     inode.size = new_size;
     inode.first_block = file->first_block;
+    inode.flags &= ~MFS_INODE_PENDING;
     inode_stamp(&inode);
 
     rc = inode_write(file->inode, &inode);
@@ -4193,6 +4209,7 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     file->size = new_size;
     file->dirty = false;
+    file->pending = false;
     file->chain_blocks = needed;
     file->chain_blocks_valid = true;
 
