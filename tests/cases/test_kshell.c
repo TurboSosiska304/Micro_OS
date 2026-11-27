@@ -1517,6 +1517,40 @@ static void test_rm_guards(void)
     ls_teardown();
 }
 
+static void test_rm_many(void)
+{
+    static struct mfs_ram_device volume;
+    static struct k_blockdev device;
+    struct vfs_stat info;
+    char name[32];
+    int i;
+
+    KT_CHECK_INT_EQ(mfs_ram_init(&volume, 512), 0);
+    mfs_ram_device(&volume, &device);
+    KT_CHECK_INT_EQ(mfs_format(&device, 512), 0);
+    KT_CHECK_INT_EQ(mfs_mount(&device), 0);
+    KT_CHECK_INT_EQ(mfs_vfs_register("/"), 0);
+
+    KT_CHECK_INT_EQ(vfs_mkdir("/many"), 0);
+
+    for (i = 0; i < 320; i++) {
+        struct vfs_file file;
+        k_u8_t data[VFS_FILE_DATA_SIZE];
+
+        snprintf(name, sizeof(name), "/many/f%03d", i);
+        KT_CHECK_INT_EQ(vfs_open(name, VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &file, data), 0);
+        KT_CHECK_INT_EQ(vfs_write(&file, "x", 1), 1);
+        KT_CHECK_INT_EQ(vfs_close(&file), 0);
+    }
+
+    KT_CHECK_INT_EQ(kshell_execute("rm -r /many"), KSHELL_OK);
+    KT_CHECK(vfs_stat("/many", &info) != 0);
+
+    vfs_umount("/");
+    mfs_unmount();
+    mfs_ram_free(&volume);
+}
+
 void test_kshell(void)
 { /* The built in commands are registered by the shell itself. */
     KT_CHECK_INT_EQ(kshell_init(), KSHELL_OK);
@@ -1534,6 +1568,7 @@ void test_kshell(void)
     test_mfetch();
     test_ls();
     test_rm_guards();
+    test_rm_many();
     test_ls_color();
     test_attr();
     test_help_programs();

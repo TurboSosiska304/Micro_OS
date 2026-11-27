@@ -1,63 +1,41 @@
 /*
- * Micro OS — the read-only Intel GPU probe of the x86-64 port.
+ * Micro OS — the Intel GPU probe and read-only framebuffer inspection.
  *
- * Provenance: PCI identities and Kaby Lake display/register facts were learned
- * from Intel's public hardware documentation and the GPL-licensed Linux i915
- * driver. No i915 source text, macros, control flow or data-structure
- * expression was copied; this implementation and its layout are original.
+ * Facts from drivers/gpu/drm/i915/i915_reg.h,
+ * drivers/gpu/drm/i915/gt/intel_ggtt.c,
+ * drivers/gpu/drm/i915/display/skl_universal_plane.c,
+ * drivers/gpu/drm/i915/display/skl_universal_plane_regs.h and
+ * drivers/gpu/drm/i915/display/intel_cursor_regs.h (GPL-2.0, Linux v6.12);
+ * code written here for Micro OS (MIT).
  *
- * The probe never writes a display MMIO register. PCI memory decode is the only
- * control write, and even that is skipped until PMCSR says the card is in D0.
+ * The probe path never writes a display MMIO register. PCI memory decode is the
+ * only control write there. The sole display-register write path is the
+ * owner-confirmed `gpu flip --yes` experiment below.
  */
 #include "gpu_intel.h"
+
+#include "kernel/kmm.h"
+#include "kernel/log.h"
+#include "kshell/kshell.h"
+#include "port_x86_64.h"
+#include "port_x86_64_pci.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include "kernel/log.h"
-#include "port_x86_64.h"
-
-#define PCI_INTEL_VENDOR 0x8086u
-#define PCI_STATUS 0x06u
-#define PCI_SUBSYSTEM_VENDOR 0x2Cu
-#define PCI_SUBSYSTEM_DEVICE 0x2Eu
-#define PCI_CAP_POINTER 0x34u
-#define PCI_CAP_ID_POWER 0x01u
-#define PCI_CAP_LIST 0x0010u
-#define PCI_PM_STATE_MASK 0x0003u
-#define PCI_PM_D0 0u
-
-#define GPU_INTEL_MMIO_BYTES 0x80000u
-#define GPU_INTEL_MMIO_PAGE 0x200000u
-
-/* Read-only state and identity registers. */
-#define GPU_INTEL_SKL_FUSE_STATUS 0x42000u
-#define GPU_INTEL_GEN8_DE_PORT_ISR 0x44440u
-#define GPU_INTEL_GEN8_DE_MISC_ISR 0x44460u
-#define GPU_INTEL_HSW_PWR_WELL_CTL1 0x45400u
-#define GPU_INTEL_HSW_PWR_WELL_CTL2 0x45404u
-#define GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP 0x6F400u
-#define GPU_INTEL_TRANS_HTOTAL_EDP 0x6F000u
-#define GPU_INTEL_TRANS_VTOTAL_EDP 0x6F00Cu
-#define GPU_INTEL_TRANSCONF_EDP 0x7F008u
-
-#define GPU_INTEL_PW1_STATE (1u << 28)
-#define GPU_INTEL_DDI_ENABLE (1u << 31)
-#define GPU_INTEL_TRANS_ENABLE (1u << 31)
-#define GPU_INTEL_ACTIVE_MASK 0xFFFFu
-#define GPU_INTEL_EDP_INPUT_MASK (7u << 12)
-#define GPU_INTEL_DIMENSION_MAX 16384u
+#define GPU_INTEL_MMIO_WINDOW (16u * 1024u * 1024u)
+#define GPU_INTEL_GTT_ALIAS_OFFSET (8u * 1024u * 1024u)
+#define GPU_INTEL_GTT_APERTURE_SIZE (256u * 1024u * 1024u)
+#define GPU_INTEL_GTT_APERTURE_ENTRIES (GPU_INTEL_GTT_APERTURE_SIZE / GPU_INTEL_GTT_PAGE_SIZE)
 
 /* The laptop first, then nearby Kaby Lake-R/Whiskey Lake identities. */
 static const struct gpu_intel_id g_gpu_intel_ids[] = {
-    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, 16u * 1024u * 1024u},
-    {0x8086u, 0x5916u, "Intel HD 620", 9u, 0u, 3u, 4u, 5u, 16u * 1024u * 1024u},
-    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, 16u * 1024u * 1024u},
-    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, 16u * 1024u * 1024u},
-    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 0u, 3u, 4u, 5u, 16u * 1024u * 1024u},
+    {0x8086u, 0x5917u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x5916u, "Intel HD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x3EA0u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x3EA9u, "Intel UHD 620", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
+    {0x8086u, 0x87C0u, "Intel UHD 617", 9u, 0u, 3u, 4u, 5u, GPU_INTEL_MMIO_WINDOW},
 };
-
-static volatile k_u32_t *s_mmio;
 
 const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
 {
@@ -72,6 +50,11 @@ const struct gpu_intel_id *gpu_intel_id_lookup(k_u16_t vendor, k_u16_t device)
     return NULL;
 }
 
+/*
+ * Kaby Lake's PCI revision does not equal either IP stepping. The public
+ * i915 revision table maps rev 07 to display C0 (and GT G0); other KBL
+ * revisions differ. Unknown families/revisions stay explicitly unknown.
+ */
 static const char *const g_gpu_intel_kbl_display_steps[] = {
     NULL, "B0", "B0", "B0", "C0", "B1", "B1", "C0",
 };
@@ -88,11 +71,67 @@ static const char *gpu_intel_display_step(k_u16_t device, k_u8_t revision)
     return "unknown";
 }
 
+#define PCI_INTEL_VENDOR 0x8086u
+#define PCI_STATUS 0x06u
+#define PCI_SUBSYSTEM_VENDOR 0x2Cu
+#define PCI_SUBSYSTEM_DEVICE 0x2Eu
+#define PCI_CAP_POINTER 0x34u
+#define PCI_CAP_ID_POWER 0x01u
+#define PCI_CAP_LIST 0x0010u
+#define PCI_PM_STATE_MASK 0x0003u
+#define PCI_PM_D0 0u
+
+#define GPU_INTEL_MMIO_BYTES GPU_INTEL_MMIO_WINDOW
+#define GPU_INTEL_MMIO_PAGE 0x200000u
+
+/* Read-only state and identity registers justified in the reconnaissance. */
+#define GPU_INTEL_SKL_FUSE_STATUS 0x42000u
+#define GPU_INTEL_GEN8_DE_PORT_ISR 0x44440u
+#define GPU_INTEL_GEN8_DE_MISC_ISR 0x44460u
+#define GPU_INTEL_HSW_PWR_WELL_CTL1 0x45400u
+#define GPU_INTEL_HSW_PWR_WELL_CTL2 0x45404u
+#define GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP 0x6F400u
+#define GPU_INTEL_TRANS_HTOTAL_EDP 0x6F000u
+#define GPU_INTEL_TRANS_VTOTAL_EDP 0x6F00Cu
+#define GPU_INTEL_TRANSCONF_EDP 0x7F008u
+
+#define GPU_INTEL_PLANE_CTL_BASE 0x70180u
+#define GPU_INTEL_PLANE_STRIDE_BASE 0x70188u
+#define GPU_INTEL_PLANE_SIZE_BASE 0x70190u
+#define GPU_INTEL_PLANE_SURF_BASE 0x7019Cu
+#define GPU_INTEL_PLANE_SURFLIVE_BASE 0x701ACu
+#define GPU_INTEL_PIPE_FRAME_BASE 0x70040u
+#define GPU_INTEL_PIPE_REGISTER_STEP 0x1000u
+#define GPU_INTEL_PLANE_REGISTER_STEP 0x100u
+#define GPU_INTEL_CURSOR_CTL_BASE 0x70080u
+#define GPU_INTEL_CURSOR_SURF_BASE 0x70084u
+#define GPU_INTEL_CURSOR_GUARD_PAGES 64u
+#define GPU_INTEL_APERTURE_PAGE 0x200000u
+
+#define GPU_INTEL_RENDER_DECOMPRESSION (1u << 15)
+#define GPU_INTEL_PW1_STATE (1u << 28)
+#define GPU_INTEL_DDI_ENABLE (1u << 31)
+#define GPU_INTEL_TRANS_ENABLE (1u << 31)
+#define GPU_INTEL_ACTIVE_MASK 0xFFFFu
+#define GPU_INTEL_EDP_INPUT_MASK (7u << 12)
+#define GPU_INTEL_PANEL_PIPE_UNKNOWN 0xFFu
+#define GPU_INTEL_DIMENSION_MAX 16384u
+
+static volatile k_u32_t *s_mmio;
+static volatile k_u64_t *s_gtt_entries;
+static k_u64_t s_aperture_base;
+
 static k_u32_t gpu_intel_mmio_read(k_u32_t offset)
 {
     return s_mmio[offset / sizeof(k_u32_t)];
 }
 
+static void gpu_intel_mmio_write(k_u32_t offset, k_u32_t value)
+{
+    s_mmio[offset / sizeof(k_u32_t)] = value;
+}
+
+/* A bounded, read-only capability walk; a missing power capability is unsafe. */
 static bool gpu_intel_power_state(const struct port_x86_64_pci_device *card, k_u8_t *state)
 {
     k_u16_t status = port_x86_64_pci_read16(card, PCI_STATUS);
@@ -104,6 +143,7 @@ static bool gpu_intel_power_state(const struct port_x86_64_pci_device *card, k_u
     }
 
     pointer = (k_u8_t)(port_x86_64_pci_read32(card, PCI_CAP_POINTER) & 0xFCu);
+
     for (guard = 0; guard < 32u && pointer >= 0x40u; guard++) {
         k_u32_t head = port_x86_64_pci_read32(card, pointer);
         k_u8_t next = (k_u8_t)((head >> 8) & 0xFCu);
@@ -148,50 +188,597 @@ static bool gpu_intel_map(const struct port_x86_64_pci_device *card, k_u64_t *ba
 
     if (s_mmio == NULL) {
         offset = window & (GPU_INTEL_MMIO_PAGE - 1u);
-        if (port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VIRT, window - offset,
+        if (port_x86_64_paging_map_mmio(PORT_X86_64_GPU_INTEL_VIRT, window - offset,
                                         (k_size_t)(offset + GPU_INTEL_MMIO_BYTES)) == 0u) {
             return false;
         }
-        s_mmio = (volatile k_u32_t *)(uintptr_t)(PORT_X86_64_GPU_VIRT + offset);
+        s_mmio = (volatile k_u32_t *)(uintptr_t)(PORT_X86_64_GPU_INTEL_VIRT + offset);
+        s_gtt_entries = (volatile k_u64_t *)(uintptr_t)(PORT_X86_64_GPU_INTEL_VIRT + offset +
+                                                        GPU_INTEL_GTT_ALIAS_OFFSET);
     }
 
     *base = window;
     return true;
 }
 
-static void gpu_intel_fill_common(struct gpu_info *out, const struct port_x86_64_pci_device *pci,
-                                  k_u16_t vendor, k_u16_t device, k_u8_t revision,
-                                  const struct gpu_intel_id *id)
+static void gpu_intel_address(k_u64_t address, char *text, k_size_t text_size)
 {
-    out->present = true;
-    out->vendor = vendor;
-    out->device = device;
-    out->revision = revision;
-    out->bus = pci->bus;
-    out->slot = pci->slot;
-    out->function = pci->function;
-    out->vram_bytes = 0u;
-    if (id != NULL) {
-        snprintf(out->name, sizeof(out->name), "%s", id->name);
-        out->mmio_size = (k_u32_t)id->mmio_size;
-        out->display_gen = id->display_gen;
-        out->display_rel = id->display_rel;
-        snprintf(out->display_step, sizeof(out->display_step), "%s",
-                 gpu_intel_display_step(device, revision));
+    k_u32_t high = (k_u32_t)(address >> 32);
+    k_u32_t low = (k_u32_t)(address & 0xFFFFFFFFu);
+
+    if (high == 0u) {
+        (void)snprintf(text, text_size, "%x", (unsigned)low);
     } else {
-        snprintf(out->name, sizeof(out->name), "Intel display controller");
+        (void)snprintf(text, text_size, "%x%08x", (unsigned)high, (unsigned)low);
     }
+}
+
+static bool gpu_intel_aperture(const struct port_x86_64_pci_device *card,
+                               struct gpu_intel_info *info)
+{
+    k_u32_t bar = port_x86_64_pci_read32(card, PCI_BAR2);
+    k_u32_t high = 0u;
+    k_u64_t base;
+
+    if ((bar & PCI_BAR_IO) != 0u || (bar & ~0x0Fu) == 0u) {
+        return false;
+    }
+    if (((bar >> 1) & 3u) == 2u) {
+        high = port_x86_64_pci_read32(card, PCI_BAR3);
+    }
+
+    base = ((k_u64_t)high << 32) | (k_u64_t)(bar & ~0x0Fu);
+    if (base == 0u || (bar & ~0x0Fu) == 0xFFFFFFF0u) {
+        return false;
+    }
+
+    info->gtt_aperture_base = base;
+    info->gtt_aperture_size = GPU_INTEL_GTT_APERTURE_SIZE;
+    info->common.vram_bytes = GPU_INTEL_GTT_APERTURE_SIZE;
+    s_aperture_base = base;
+    return true;
+}
+
+static k_u32_t gpu_intel_pipe_register(k_u8_t pipe, k_u32_t base)
+{
+    return base + (k_u32_t)pipe * GPU_INTEL_PIPE_REGISTER_STEP;
+}
+
+static bool gpu_intel_read_framebuffer(struct gpu_intel_info *info)
+{
+    k_u32_t control_offset;
+    k_u32_t stride_offset;
+    k_u32_t size_offset;
+    k_u32_t surface_offset;
+    k_u32_t plane_size;
+    k_u32_t width;
+    k_u32_t height;
+    enum gpu_intel_ggtt_result rc;
+    char physical[24];
+
+    if (info->panel_pipe == GPU_INTEL_PANEL_PIPE_UNKNOWN || s_gtt_entries == NULL) {
+        return false;
+    }
+
+    control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    size_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SIZE_BASE);
+    surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+
+    info->plane_control = gpu_intel_mmio_read(control_offset);
+    info->plane_stride = gpu_intel_mmio_read(stride_offset);
+    info->plane_surface = gpu_intel_mmio_read(surface_offset);
+    plane_size = gpu_intel_mmio_read(size_offset);
+    if (info->plane_control == 0xFFFFFFFFu || info->plane_stride == 0xFFFFFFFFu ||
+        info->plane_surface == 0xFFFFFFFFu || plane_size == 0xFFFFFFFFu) {
+        return false;
+    }
+
+    width = (plane_size & 0xFFFFu) + 1u;
+    height = (plane_size >> 16) + 1u;
+    if (width != info->common.panel_width || height != info->common.panel_height) {
+        return false;
+    }
+
+    rc = gpu_intel_ggtt_decode_fb(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->plane_surface, info->plane_stride, info->plane_control,
+                                  width, height, &info->framebuffer);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kinfo("gpu: ggtt framebuffer is not readable (rc=%d)", (int)rc);
+        return false;
+    }
+
+    info->framebuffer_known = true;
+    gpu_intel_address(info->framebuffer.phys, physical, sizeof(physical));
+    kinfo("gpu: ggtt framebuffer at 0x%s, %ux%u, pitch %u, %u bytes%s", physical,
+          (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height,
+          (unsigned)info->framebuffer.pitch, (unsigned)info->framebuffer.bytes,
+          info->framebuffer.contiguous ? "" : ", fragmented");
+    return true;
+}
+
+static bool gpu_intel_add_range(struct gpu_intel_gtt_range *ranges, k_size_t *count,
+                                k_size_t capacity, k_u32_t start, k_u32_t pages)
+{
+    if (*count >= capacity || (k_u64_t)start + (k_u64_t)pages > GPU_INTEL_GTT_APERTURE_ENTRIES) {
+        return false;
+    }
+    ranges[*count].start = start;
+    ranges[*count].count = pages;
+    (*count)++;
+    return true;
+}
+
+static bool gpu_intel_collect_exclusions(const struct gpu_intel_info *info,
+                                         struct gpu_intel_gtt_range *ranges, k_size_t capacity,
+                                         k_size_t *out_count)
+{
+    k_size_t count = 0u;
+    k_u8_t pipe;
+    k_u8_t plane;
+
+    if (!info->framebuffer_known ||
+        !gpu_intel_add_range(ranges, &count, capacity, info->framebuffer.pte_start,
+                             info->framebuffer.pte_count)) {
+        return false;
+    }
+
+    for (pipe = 0u; pipe < 3u; pipe++) {
+        for (plane = 0u; plane < 3u; plane++) {
+            k_u32_t base = gpu_intel_pipe_register(pipe, GPU_INTEL_PLANE_CTL_BASE) +
+                           (k_u32_t)plane * GPU_INTEL_PLANE_REGISTER_STEP;
+            k_u32_t control = gpu_intel_mmio_read(base);
+            struct gpu_intel_fb surface;
+
+            if (control == 0xFFFFFFFFu) {
+                return false;
+            }
+            if ((control & GPU_INTEL_PLANE_ENABLE) != 0u) {
+                k_u32_t stride = gpu_intel_mmio_read(base + 8u);
+                k_u32_t size = gpu_intel_mmio_read(base + 16u);
+                k_u32_t address = gpu_intel_mmio_read(base + 28u);
+                enum gpu_intel_ggtt_result rc;
+
+                if (stride == 0xFFFFFFFFu || size == 0xFFFFFFFFu || address == 0xFFFFFFFFu) {
+                    return false;
+                }
+                rc = gpu_intel_ggtt_decode_fb(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                              address, stride, control, (size & 0xFFFFu) + 1u,
+                                              (size >> 16) + 1u, &surface);
+                if (rc != GPU_INTEL_GGTT_OK ||
+                    !gpu_intel_add_range(ranges, &count, capacity, surface.pte_start,
+                                         surface.pte_count)) {
+                    return false;
+                }
+            }
+        }
+
+        {
+            k_u32_t control =
+                gpu_intel_mmio_read(gpu_intel_pipe_register(pipe, GPU_INTEL_CURSOR_CTL_BASE));
+            k_u32_t address;
+
+            if (control == 0xFFFFFFFFu) {
+                return false;
+            }
+            if ((control & GPU_INTEL_PLANE_ENABLE) != 0u) {
+                address =
+                    gpu_intel_mmio_read(gpu_intel_pipe_register(pipe, GPU_INTEL_CURSOR_SURF_BASE));
+                if (address == 0xFFFFFFFFu ||
+                    !gpu_intel_add_range(ranges, &count, capacity,
+                                         (address & GPU_INTEL_PLANE_SURFACE_MASK) >> 12,
+                                         GPU_INTEL_CURSOR_GUARD_PAGES)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    *out_count = count;
+    return true;
+}
+
+static volatile k_u8_t *gpu_intel_map_aperture(k_u64_t offset, k_size_t length)
+{
+    k_u64_t window;
+    k_u64_t within;
+    k_size_t map_length;
+
+    if (offset > GPU_INTEL_GTT_APERTURE_SIZE ||
+        (k_u64_t)length > (k_u64_t)GPU_INTEL_GTT_APERTURE_SIZE - offset) {
+        return NULL;
+    }
+
+    window = offset & ~((k_u64_t)GPU_INTEL_APERTURE_PAGE - 1u);
+    within = offset - window;
+    map_length = (k_size_t)within + length;
+    if (port_x86_64_paging_map_framebuffer(PORT_X86_64_GPU_INTEL_APERTURE_VIRT,
+                                           s_aperture_base + window, map_length) == 0u) {
+        return NULL;
+    }
+
+    return (volatile k_u8_t *)(uintptr_t)(PORT_X86_64_GPU_INTEL_APERTURE_VIRT + within);
+}
+
+static int gpu_intel_ggtt_test(const struct gpu_intel_info *info)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    struct gpu_intel_gtt_run run;
+    k_size_t excluded_count = 0u;
+    void *allocation = NULL;
+    k_u8_t *page = NULL;
+    k_u64_t physical = 0u;
+    volatile k_u32_t *aperture = NULL;
+    k_u64_t neighbor_before;
+    k_u64_t neighbor_after;
+    k_u64_t original;
+    k_u32_t pattern = 0x47545431u;
+    bool installed = false;
+    bool ok = false;
+    bool keep_buffer = false;
+    k_size_t i;
+    enum gpu_intel_ggtt_result rc;
+    char physical_text[24];
+
+    if (s_gtt_entries == NULL ||
+        !gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        kshell_printf("gpu: live display surfaces cannot be excluded safely\n");
+        return -1;
+    }
+
+    allocation = kmm_alloc(2u * GPU_INTEL_GTT_PAGE_SIZE, KMM_PRIORITY_KERNEL);
+    if (allocation == NULL) {
+        kshell_printf("gpu: no RAM page for the GGTT test\n");
+        return -1;
+    }
+    page = (k_u8_t *)(((uintptr_t)allocation + GPU_INTEL_GTT_PAGE_SIZE - 1u) &
+                      ~(uintptr_t)(GPU_INTEL_GTT_PAGE_SIZE - 1u));
+    physical = port_x86_64_bus_phys(page);
+    if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u) {
+        kshell_printf("gpu: the test page has no usable physical address\n");
+        goto out;
+    }
+
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, 1u, excluded,
+                                  excluded_count, &run);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: no guarded free GGTT slot (rc=%d)\n", (int)rc);
+        goto out;
+    }
+
+    original = s_gtt_entries[run.start];
+    neighbor_before = s_gtt_entries[run.start - 1u];
+    neighbor_after = s_gtt_entries[run.start + 1u];
+    rc = gpu_intel_ggtt_borrow(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run, physical,
+                               &original);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: GGTT slot %u did not install (rc=%d)\n", (unsigned)run.start, (int)rc);
+        goto out;
+    }
+    installed = true;
+
+    aperture = (volatile k_u32_t *)gpu_intel_map_aperture(
+        (k_u64_t)run.start * GPU_INTEL_GTT_PAGE_SIZE, GPU_INTEL_GTT_PAGE_SIZE);
+    if (aperture == NULL) {
+        kshell_printf("gpu: BAR2 cannot map GGTT slot %u\n", (unsigned)run.start);
+        goto out;
+    }
+
+    for (i = 0u; i < GPU_INTEL_GTT_PAGE_SIZE / sizeof(k_u32_t); i++) {
+        aperture[i] = pattern + (k_u32_t)i * 0x01010101u;
+    }
+    for (i = 0u; i < GPU_INTEL_GTT_PAGE_SIZE / sizeof(k_u32_t); i++) {
+        k_u32_t expected = pattern + (k_u32_t)i * 0x01010101u;
+
+        if (aperture[i] != expected || ((volatile k_u32_t *)page)[i] != expected) {
+            kshell_printf("gpu: aperture mismatch at word %u\n", (unsigned)i);
+            goto out;
+        }
+    }
+    if (s_gtt_entries[run.start - 1u] != neighbor_before ||
+        s_gtt_entries[run.start + 1u] != neighbor_after) {
+        kshell_printf("gpu: a neighboring GGTT entry changed\n");
+        goto out;
+    }
+
+    ok = true;
+
+out:
+    if (installed) {
+        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run, original) !=
+            GPU_INTEL_GGTT_OK) {
+            kerror("gpu: GGTT slot %u could not be restored; keeping RAM alive",
+                   (unsigned)run.start);
+            ok = false;
+            keep_buffer = true;
+        }
+    }
+    if (allocation != NULL && !keep_buffer) {
+        kmm_free(allocation);
+    }
+    if (ok) {
+        gpu_intel_address(physical, physical_text, sizeof(physical_text));
+        kshell_printf("gpu: ggtt slot %u, aperture 0x%x, physical 0x%s, pattern 0x%08x: PASS\n",
+                      (unsigned)run.start, (unsigned)((k_u64_t)run.start * GPU_INTEL_GTT_PAGE_SIZE),
+                      physical_text, (unsigned)pattern);
+    }
+    return ok ? 0 : -1;
+}
+
+static bool gpu_intel_flip_laptop(const struct gpu_intel_info *info)
+{
+    return info->common.vendor == 0x8086u && info->common.device == 0x5917u &&
+           info->common.revision == 0x07u && info->subsystem_vendor == 0x17AAu &&
+           info->subsystem_device == 0x225Cu;
+}
+
+static bool gpu_intel_wait_frame(const struct gpu_intel_info *info)
+{
+    /* Kaby Lake uses the G4X full frame counter, not the split PIPEFRAME pair. */
+    k_u32_t offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PIPE_FRAME_BASE);
+    k_u32_t before = gpu_intel_mmio_read(offset);
+    k_u64_t deadline = port_x86_64_ticks() + 100u;
+
+    do {
+        if (gpu_intel_mmio_read(offset) != before) {
+            return true;
+        }
+    } while (port_x86_64_ticks() < deadline);
+    return false;
+}
+
+static bool gpu_intel_plane_program(const struct gpu_intel_info *info, k_u32_t control,
+                                    k_u32_t stride, k_u32_t surface)
+{
+    k_u32_t control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    k_u32_t stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    k_u32_t surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+
+    gpu_intel_mmio_write(control_offset, control);
+    gpu_intel_mmio_write(stride_offset, stride);
+    gpu_intel_mmio_write(surface_offset, surface);
+    return gpu_intel_mmio_read(control_offset) == control &&
+           gpu_intel_mmio_read(stride_offset) == stride &&
+           gpu_intel_mmio_read(surface_offset) == surface;
+}
+
+/* The old surface is written first: rollback must not leave the plane armed on new RAM. */
+static bool gpu_intel_plane_restore(const struct gpu_intel_info *info, k_u32_t control,
+                                    k_u32_t stride, k_u32_t surface)
+{
+    k_u32_t control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    k_u32_t stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    k_u32_t surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+
+    gpu_intel_mmio_write(surface_offset, surface);
+    gpu_intel_mmio_write(stride_offset, stride);
+    gpu_intel_mmio_write(control_offset, control);
+    return gpu_intel_mmio_read(surface_offset) == surface &&
+           gpu_intel_mmio_read(stride_offset) == stride &&
+           gpu_intel_mmio_read(control_offset) == control;
+}
+
+static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    struct gpu_intel_gtt_run run;
+    k_size_t excluded_count = 0u;
+    k_u32_t control;
+    k_u32_t stride;
+    k_u32_t surface;
+    k_u32_t new_surface;
+    k_u32_t live_offset;
+    k_u32_t live;
+    void *allocation = NULL;
+    k_u8_t *page = NULL;
+    k_u64_t physical = 0u;
+    k_u64_t saved_gtt = 0u;
+    volatile k_u8_t *source = NULL;
+    bool run_installed = false;
+    bool display_touched = false;
+    bool plane_restored = false;
+    bool keep_buffer = false;
+    bool ok = false;
+    k_size_t i;
+    enum gpu_intel_ggtt_result rc;
+    char source_physical[24];
+    char target_physical[24];
+
+    if (info->common.probe_result != GPU_PROBE_OK || !info->display_ready ||
+        !info->framebuffer_known || info->panel_pipe == GPU_INTEL_PANEL_PIPE_UNKNOWN ||
+        s_gtt_entries == NULL) {
+        kshell_printf("gpu: flip needs an active, readable Intel display\n");
+        return -1;
+    }
+    if (!gpu_intel_flip_laptop(info)) {
+        kshell_printf("gpu: flip is limited to the measured ThinkPad 17aa:225c\n");
+        return -1;
+    }
+    if ((info->plane_surface & ~GPU_INTEL_PLANE_SURFACE_MASK) != 0u ||
+        (info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) != 0u ||
+        (info->plane_control & 3u) != 0u) {
+        kshell_printf("gpu: flip refuses surface flags, compression or rotation\n");
+        return -1;
+    }
+
+    control =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE));
+    stride =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE));
+    surface =
+        gpu_intel_mmio_read(gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE));
+    if (control != info->plane_control || stride != info->plane_stride ||
+        surface != info->plane_surface) {
+        kshell_printf("gpu: the display changed after the probe; run gpu info again\n");
+        return -1;
+    }
+    if (!gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        kshell_printf("gpu: flip cannot exclude every live display surface\n");
+        return -1;
+    }
+
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->framebuffer.pte_count, excluded, excluded_count, &run);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: no guarded GGTT run for %u pages (rc=%d)\n",
+                      (unsigned)info->framebuffer.pte_count, (int)rc);
+        return -1;
+    }
+    new_surface = run.start * GPU_INTEL_GTT_PAGE_SIZE;
+    live_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURFLIVE_BASE);
+
+    gpu_intel_address(info->framebuffer.phys, source_physical, sizeof(source_physical));
+    kshell_printf("gpu: flip %s: source 0x%s, ggtt 0x%x, %ux%u, pitch %u, %u bytes\n",
+                  confirmed ? "plan" : "dry-run", source_physical,
+                  (unsigned)info->framebuffer.surface, (unsigned)info->framebuffer.width,
+                  (unsigned)info->framebuffer.height, (unsigned)info->framebuffer.pitch,
+                  (unsigned)info->framebuffer.bytes);
+    kshell_printf("gpu: flip %s: target ggtt 0x%x, slot %u, %u page(s), ctl 0x%08x, "
+                  "stride 0x%x\n",
+                  confirmed ? "plan" : "dry-run", (unsigned)new_surface, (unsigned)run.start,
+                  (unsigned)run.count, (unsigned)control, (unsigned)stride);
+    if (!confirmed) {
+        kshell_printf("gpu: flip dry-run: nothing written; use gpu flip --yes on the laptop\n");
+        return 0;
+    }
+
+    allocation = kmm_alloc((k_size_t)info->framebuffer.bytes + GPU_INTEL_GTT_PAGE_SIZE - 1u,
+                           KMM_PRIORITY_KERNEL);
+    if (allocation == NULL) {
+        kshell_printf("gpu: flip has no contiguous RAM for %u bytes\n",
+                      (unsigned)info->framebuffer.bytes);
+        goto out;
+    }
+    page = (k_u8_t *)(((uintptr_t)allocation + GPU_INTEL_GTT_PAGE_SIZE - 1u) &
+                      ~(uintptr_t)(GPU_INTEL_GTT_PAGE_SIZE - 1u));
+    physical = port_x86_64_bus_phys(page);
+    if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u) {
+        kshell_printf("gpu: flip RAM has no aligned physical address\n");
+        goto out;
+    }
+    for (i = 0u; i < info->framebuffer.pte_count; i++) {
+        if (port_x86_64_bus_phys(page + i * GPU_INTEL_GTT_PAGE_SIZE) !=
+            physical + i * GPU_INTEL_GTT_PAGE_SIZE) {
+            kshell_printf("gpu: flip RAM is not physically contiguous\n");
+            goto out;
+        }
+    }
+
+    source = gpu_intel_map_aperture(info->framebuffer.surface, info->framebuffer.bytes);
+    if (source == NULL) {
+        kshell_printf("gpu: flip cannot map the source aperture\n");
+        goto out;
+    }
+    memcpy(page, (const void *)source, info->framebuffer.bytes);
+    if (memcmp(page, (const void *)source, info->framebuffer.bytes) != 0) {
+        kshell_printf("gpu: flip copy does not match the source\n");
+        goto out;
+    }
+
+    rc = gpu_intel_ggtt_borrow(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run, physical,
+                               &saved_gtt);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: flip GGTT install failed (rc=%d)\n", (int)rc);
+        goto out;
+    }
+    run_installed = true;
+
+    if (!gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out waiting for vblank\n");
+        goto out;
+    }
+    display_touched = true;
+    if (!gpu_intel_plane_program(info, control, stride, new_surface)) {
+        kshell_printf("gpu: flip plane registers did not read back\n");
+        goto out;
+    }
+    if (!gpu_intel_wait_frame(info) || !gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out waiting for scanout\n");
+        goto out;
+    }
+
+    live = gpu_intel_mmio_read(live_offset);
+    if ((live & GPU_INTEL_PLANE_SURFACE_MASK) != new_surface ||
+        memcmp(page, (const void *)source, info->framebuffer.bytes) != 0) {
+        kshell_printf("gpu: flip scanout or pixel copy is not the same\n");
+        goto out;
+    }
+    gpu_intel_address(physical, target_physical, sizeof(target_physical));
+    kshell_printf("gpu: flip active at physical 0x%s, SURFLIVE 0x%08x: copy verified\n",
+                  target_physical, (unsigned)live);
+
+    if (!gpu_intel_wait_frame(info)) {
+        kshell_printf("gpu: flip timed out before restore\n");
+        goto out;
+    }
+    plane_restored = gpu_intel_plane_restore(info, control, stride, surface);
+    if (!plane_restored) {
+        kerror("gpu: flip could not restore the original plane; retrying rollback");
+        goto out;
+    }
+    if (!gpu_intel_wait_frame(info) ||
+        (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != surface) {
+        kshell_printf("gpu: original surface did not become live again\n");
+        plane_restored = false;
+        goto out;
+    }
+
+    kshell_printf("gpu: flip restored original surface 0x%08x\n", (unsigned)surface);
+    ok = true;
+
+out:
+    if (display_touched && !plane_restored) {
+        if (gpu_intel_plane_restore(info, control, stride, surface) && gpu_intel_wait_frame(info) &&
+            (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) == surface) {
+            plane_restored = true;
+        } else {
+            kerror("gpu: flip rollback is not live; keeping new GGTT mapping and RAM alive");
+            keep_buffer = true;
+            run_installed = false;
+        }
+    }
+    if (run_installed) {
+        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &run,
+                                   saved_gtt) != GPU_INTEL_GGTT_OK) {
+            kerror("gpu: flip could not restore GGTT slot %u; keeping RAM alive",
+                   (unsigned)run.start);
+            ok = false;
+            keep_buffer = true;
+        }
+    }
+    if (allocation != NULL && !keep_buffer) {
+        kmm_free(allocation);
+    }
+    if (!ok) {
+        kshell_printf("gpu: flip aborted; original plane %s\n",
+                      plane_restored ? "restored" : "not confirmed");
+    }
+    return ok ? 0 : -1;
+}
+
+static struct gpu_intel_info g_gpu_intel;
+
+static enum gpu_probe_result gpu_intel_finish(struct gpu_intel_info *info, struct gpu_info *out,
+                                              enum gpu_probe_result result)
+{
+    info->common.probe_result = result;
+    if (out != NULL) {
+        *out = info->common;
+    }
+    return result;
 }
 
 enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
                                       struct gpu_info *out)
 {
+    struct gpu_intel_info *info = &g_gpu_intel;
+    const struct gpu_intel_id *identity;
+    k_u8_t power_state;
+    k_u16_t command;
+    k_u16_t class_code;
     k_u16_t vendor;
     k_u16_t device;
     k_u8_t revision;
-    const struct gpu_intel_id *id;
-    k_u8_t power_state;
-    k_u16_t command;
     k_u32_t combined_wells;
     k_u32_t edp_conf;
     k_u32_t htotal;
@@ -199,40 +786,60 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
     k_u32_t width;
     k_u32_t height;
 
-    if (pci == NULL || out == NULL) {
-        return GPU_PROBE_NONE;
+    memset(info, 0, sizeof(*info));
+    info->panel_pipe = GPU_INTEL_PANEL_PIPE_UNKNOWN;
+    if (pci == NULL) {
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
     }
 
     vendor = port_x86_64_pci_read16(pci, PCI_VENDOR);
+    if (vendor != PCI_INTEL_VENDOR) {
+        return gpu_intel_finish(info, out, GPU_PROBE_NONE);
+    }
+
     device = port_x86_64_pci_read16(pci, PCI_DEVICE);
     revision = (k_u8_t)(port_x86_64_pci_read16(pci, PCI_REVISION) & 0xFFu);
+    info->common.present = true;
+    info->common.vendor = vendor;
+    info->common.device = device;
+    info->common.revision = revision;
+    info->common.bus = pci->bus;
+    info->common.slot = pci->slot;
+    info->common.function = pci->function;
+    info->subsystem_vendor = port_x86_64_pci_read16(pci, PCI_SUBSYSTEM_VENDOR);
+    info->subsystem_device = port_x86_64_pci_read16(pci, PCI_SUBSYSTEM_DEVICE);
 
-    if (vendor != PCI_INTEL_VENDOR) {
-        return GPU_PROBE_NONE;
+    identity = gpu_intel_id_lookup(vendor, device);
+    if (identity == NULL) {
+        snprintf(info->common.name, sizeof(info->common.name), "Intel unknown");
+        return gpu_intel_finish(info, out, GPU_PROBE_UNKNOWN_DEV);
     }
 
-    id = gpu_intel_id_lookup(vendor, device);
-    if (id == NULL) {
-        gpu_intel_fill_common(out, pci, vendor, device, revision, NULL);
-        out->known = false;
-        out->probe_result = GPU_PROBE_UNKNOWN_DEV;
-        return GPU_PROBE_UNKNOWN_DEV;
-    }
+    info->common.known = true;
+    snprintf(info->common.name, sizeof(info->common.name), "%s", identity->name);
+    info->common.mmio_size = (k_u32_t)identity->mmio_size;
+    info->common.display_gen = identity->display_gen;
+    info->common.display_rel = identity->display_rel;
+    snprintf(info->common.display_step, sizeof(info->common.display_step), "%s",
+             gpu_intel_display_step(device, revision));
+    info->pipes = identity->pipes;
+    info->transcoders = identity->transcoders;
+    info->ports = identity->ports;
 
-    gpu_intel_fill_common(out, pci, vendor, device, revision, id);
-    out->known = true;
+    class_code = port_x86_64_pci_read16(pci, PCI_CLASS);
+    if (pci->function != 0u || (k_u8_t)(class_code >> 8) != 0x03u ||
+        (k_u8_t)(class_code & 0xFFu) != 0x00u) {
+        kerror("gpu: Intel PCI identity/class mismatch (GPU_PROBE_FAIL)");
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
+    }
 
     if (!gpu_intel_power_state(pci, &power_state)) {
-        kinfo("gpu: Intel %04x:%04x power state is not readable; MMIO not touched",
-              (unsigned)vendor, (unsigned)device);
-        out->probe_result = GPU_PROBE_DEGRADED;
-        return GPU_PROBE_DEGRADED;
+        kinfo("gpu: Intel power state is not readable; MMIO not touched (GPU_PROBE_DEGRADED)");
+        return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
     }
     if (power_state != PCI_PM_D0) {
-        kinfo("gpu: Intel %04x:%04x is in D%u; MMIO not touched (KMOD_DEGRADED)", (unsigned)vendor,
-              (unsigned)device, (unsigned)power_state);
-        out->probe_result = GPU_PROBE_DEGRADED;
-        return GPU_PROBE_DEGRADED;
+        kinfo("gpu: Intel is in D%u; MMIO not touched (GPU_PROBE_DEGRADED)", (unsigned)power_state);
+        return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
     }
 
     command = port_x86_64_pci_read16(pci, PCI_COMMAND);
@@ -240,57 +847,102 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
         port_x86_64_pci_enable(pci, PCI_COMMAND_MEMORY);
     }
 
-    if (!gpu_intel_map(pci, &out->mmio_base)) {
-        kerror("gpu: Intel BAR0 is not a mappable memory window (KMOD_FAIL)");
-        out->probe_result = GPU_PROBE_FAIL;
-        return GPU_PROBE_FAIL;
+    if (!gpu_intel_map(pci, &info->common.mmio_base)) {
+        kerror("gpu: Intel BAR0 is not a mappable memory window (GPU_PROBE_FAIL)");
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
+    }
+    if (!gpu_intel_aperture(pci, info)) {
+        kinfo("gpu: Intel BAR2 is not a mappable graphics aperture (GPU_PROBE_DEGRADED)");
+        return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
     }
 
-    {
-        k_u32_t fuse = gpu_intel_mmio_read(GPU_INTEL_SKL_FUSE_STATUS);
-        k_u32_t pw1 = gpu_intel_mmio_read(GPU_INTEL_HSW_PWR_WELL_CTL1);
-        k_u32_t pw2 = gpu_intel_mmio_read(GPU_INTEL_HSW_PWR_WELL_CTL2);
+    info->fuse_status = gpu_intel_mmio_read(GPU_INTEL_SKL_FUSE_STATUS);
+    info->power_well_bios = gpu_intel_mmio_read(GPU_INTEL_HSW_PWR_WELL_CTL1);
+    info->power_well_driver = gpu_intel_mmio_read(GPU_INTEL_HSW_PWR_WELL_CTL2);
+    if (info->fuse_status == 0xFFFFFFFFu || info->power_well_bios == 0xFFFFFFFFu ||
+        info->power_well_driver == 0xFFFFFFFFu) {
+        kerror("gpu: Intel MMIO did not answer (GPU_PROBE_FAIL)");
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
+    }
+    info->mmio_responded = true;
 
-        if (fuse == 0xFFFFFFFFu || pw1 == 0xFFFFFFFFu || pw2 == 0xFFFFFFFFu) {
-            kerror("gpu: Intel MMIO did not answer (KMOD_FAIL)");
-            out->probe_result = GPU_PROBE_FAIL;
-            return GPU_PROBE_FAIL;
-        }
+    combined_wells = info->power_well_bios | info->power_well_driver;
+    info->display_ready = (combined_wells & GPU_INTEL_PW1_STATE) != 0u;
+    if (!info->display_ready) {
+        return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
+    }
 
-        combined_wells = pw1 | pw2;
-        if ((combined_wells & GPU_INTEL_PW1_STATE) == 0u) {
-            out->probe_result = GPU_PROBE_DEGRADED;
-            return GPU_PROBE_DEGRADED;
-        }
+    info->de_port_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_PORT_ISR);
+    info->de_misc_isr = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_MISC_ISR);
+    if (info->de_port_isr == 0xFFFFFFFFu || info->de_misc_isr == 0xFFFFFFFFu) {
+        kerror("gpu: Intel display MMIO did not answer (GPU_PROBE_FAIL)");
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
+    }
 
-        {
-            k_u32_t de_port = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_PORT_ISR);
-            k_u32_t de_misc = gpu_intel_mmio_read(GPU_INTEL_GEN8_DE_MISC_ISR);
-            k_u32_t edp_ctl = gpu_intel_mmio_read(GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP);
+    info->edp_ctl = gpu_intel_mmio_read(GPU_INTEL_TRANS_DDI_FUNC_CTL_EDP);
+    if (info->edp_ctl == 0xFFFFFFFFu) {
+        kerror("gpu: Intel eDP state did not answer (GPU_PROBE_FAIL)");
+        return gpu_intel_finish(info, out, GPU_PROBE_FAIL);
+    }
 
-            if (de_port == 0xFFFFFFFFu || de_misc == 0xFFFFFFFFu || edp_ctl == 0xFFFFFFFFu) {
-                kerror("gpu: Intel display MMIO did not answer (KMOD_FAIL)");
-                out->probe_result = GPU_PROBE_FAIL;
-                return GPU_PROBE_FAIL;
-            }
-
-            if ((edp_ctl & GPU_INTEL_DDI_ENABLE) != 0u) {
-                edp_conf = gpu_intel_mmio_read(GPU_INTEL_TRANSCONF_EDP);
-                htotal = gpu_intel_mmio_read(GPU_INTEL_TRANS_HTOTAL_EDP);
-                vtotal = gpu_intel_mmio_read(GPU_INTEL_TRANS_VTOTAL_EDP);
-                if (edp_conf != 0xFFFFFFFFu && htotal != 0xFFFFFFFFu && vtotal != 0xFFFFFFFFu &&
-                    (edp_conf & GPU_INTEL_TRANS_ENABLE) != 0u) {
-                    width = (htotal & GPU_INTEL_ACTIVE_MASK) + 1u;
-                    height = (vtotal & GPU_INTEL_ACTIVE_MASK) + 1u;
-                    if (width <= GPU_INTEL_DIMENSION_MAX && height <= GPU_INTEL_DIMENSION_MAX) {
-                        out->panel_width = (k_u16_t)width;
-                        out->panel_height = (k_u16_t)height;
-                    }
+    if ((info->edp_ctl & GPU_INTEL_DDI_ENABLE) != 0u) {
+        edp_conf = gpu_intel_mmio_read(GPU_INTEL_TRANSCONF_EDP);
+        htotal = gpu_intel_mmio_read(GPU_INTEL_TRANS_HTOTAL_EDP);
+        vtotal = gpu_intel_mmio_read(GPU_INTEL_TRANS_VTOTAL_EDP);
+        if (edp_conf != 0xFFFFFFFFu && htotal != 0xFFFFFFFFu && vtotal != 0xFFFFFFFFu &&
+            (edp_conf & GPU_INTEL_TRANS_ENABLE) != 0u) {
+            width = (htotal & GPU_INTEL_ACTIVE_MASK) + 1u;
+            height = (vtotal & GPU_INTEL_ACTIVE_MASK) + 1u;
+            if (width <= GPU_INTEL_DIMENSION_MAX && height <= GPU_INTEL_DIMENSION_MAX) {
+                info->common.panel_width = (k_u16_t)width;
+                info->common.panel_height = (k_u16_t)height;
+                switch (info->edp_ctl & GPU_INTEL_EDP_INPUT_MASK) {
+                case 0u:
+                case 4u << 12:
+                    info->panel_pipe = 0u;
+                    break;
+                case 5u << 12:
+                    info->panel_pipe = 1u;
+                    break;
+                case 6u << 12:
+                    info->panel_pipe = 2u;
+                    break;
+                default:
+                    break;
                 }
             }
         }
     }
 
-    out->probe_result = GPU_PROBE_OK;
-    return GPU_PROBE_OK;
+    if ((info->common.panel_width != 0u || info->common.panel_height != 0u) &&
+        !gpu_intel_read_framebuffer(info)) {
+        return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
+    }
+
+    return gpu_intel_finish(info, out, GPU_PROBE_OK);
+}
+
+int gpu_intel_command(int argc, char **argv)
+{
+    if (argc == 2 && strcmp(argv[1], "ggtt-test") == 0) {
+        if (g_gpu_intel.common.probe_result != GPU_PROBE_OK || !g_gpu_intel.framebuffer_known ||
+            !gpu_intel_flip_laptop(&g_gpu_intel)) {
+            kshell_printf("gpu: a readable ThinkPad framebuffer is required\n");
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_ggtt_test(&g_gpu_intel) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
+    if ((argc == 2 && strcmp(argv[1], "flip") == 0) ||
+        (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0)) {
+        if (g_gpu_intel.common.probe_result != GPU_PROBE_OK) {
+            kshell_printf("gpu: flip refused: probe result %d\n",
+                          (int)g_gpu_intel.common.probe_result);
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_flip(&g_gpu_intel, argc == 3) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
+    kshell_printf("usage: gpu [info|ggtt-test|flip [--yes]]\n");
+    return KSHELL_USAGE;
 }

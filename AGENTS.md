@@ -264,7 +264,10 @@ organisation,
 (every entry marked `Free` with a zero price), and `tools.opencode.models(type:
 "chat")` filtered by a zero price is the same list as the harness sees it. The
 only exception is an instruction from the owner for that run: "use this model"
-or "the same model as yours". The brief names the files, the constraints and
+or "the same model as yours". **A lane that spawns its own subagents passes
+`model` on every call**, with an `opencode-go/*-free` name: a call without the
+field can rise on a paid default, and one such call spends the limit of the
+owner - the same rule as a lane of the pilot, one level down. The brief names the files, the constraints and
 the command that decides "done"; the answer is a report, not a transcript.
 
 ## Tool economy (measured, 24 November 2026)

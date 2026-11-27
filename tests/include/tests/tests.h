@@ -19,6 +19,7 @@ void test_render(void);
 void test_boot(void);
 void test_version(void);
 void test_gpu_intel(void);
+void test_gpu_intel_ggtt(void);
 void test_board(void);
 void test_task(void);
 void test_guard(void);
