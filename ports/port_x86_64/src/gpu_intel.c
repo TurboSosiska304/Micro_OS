@@ -1100,6 +1100,38 @@ static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
     return ok;
 }
 
+/* Read-only part of the plan: a dry-run must say whether the device path can
+ * actually reserve a slot, instead of promising a flip that will fall back. */
+static void gpu_intel_display_ggtt_plan(const struct gpu_intel_info *info)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    struct gpu_intel_ggtt_stats stats;
+    struct gpu_intel_gtt_run run;
+    k_size_t excluded_count = 0u;
+
+    gpu_intel_ggtt_stats(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &stats);
+    kshell_printf("gpu: display enable plan: GGTT %u mapped, %u unmapped, %u identity pages\n",
+                  (unsigned)stats.present, (unsigned)stats.unmapped, (unsigned)stats.identity);
+    if (!info->framebuffer_known) {
+        kshell_printf("gpu: display enable plan: no decoded framebuffer, no slot estimate\n");
+        return;
+    }
+    if (!gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        kshell_printf("gpu: display enable plan: live surfaces cannot be excluded\n");
+        return;
+    }
+    if (gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                 info->framebuffer.pte_count, excluded, excluded_count,
+                                 &run) == GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: display enable plan: a guarded run of %u pages is at entry %u\n",
+                      (unsigned)info->framebuffer.pte_count, (unsigned)run.start);
+    } else {
+        kshell_printf("gpu: display enable plan: no guarded run of %u pages outside the live "
+                      "surfaces; present will use the software copy\n",
+                      (unsigned)info->framebuffer.pte_count);
+    }
+}
+
 static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
 {
     struct k_fb_surface screen;
@@ -1122,18 +1154,37 @@ static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
     }
 
     if (!confirmed) {
+        kshell_printf("gpu: display enable dry-run: plane %s %s, %ux%u, pitch %u, %u pages, "
+                      "CTL 0x%08x, STRIDE 0x%x\n",
+                      gpu_intel_format_name(info->framebuffer.format),
+                      gpu_intel_tiling_name(info->framebuffer.tiling),
+                      (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height,
+                      (unsigned)info->framebuffer.pitch, (unsigned)info->framebuffer.pte_count,
+                      (unsigned)info->plane_control, (unsigned)info->plane_stride);
         if (info->framebuffer.tiling == GPU_INTEL_TILE_LINEAR) {
-            kshell_printf("gpu: display enable dry-run: plane is already linear %s, %ux%u\n",
-                          gpu_intel_format_name(info->framebuffer.format),
-                          (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
+            kshell_printf("gpu: display enable dry-run: plane is already linear; no register "
+                          "write needed on this machine\n");
         } else {
-            kshell_printf("gpu: display enable dry-run: would run plane-linear %s %s -> linear, "
-                          "then verify k_blit_present returns device\n",
-                          gpu_intel_format_name(info->framebuffer.format),
-                          gpu_intel_tiling_name(info->framebuffer.tiling));
+            kshell_printf("gpu: display enable dry-run: would write PLANE_CTL/STRIDE/SURF for a "
+                          "linear %s plane\n",
+                          gpu_intel_format_name(info->framebuffer.format));
+            kshell_printf("gpu: display enable dry-run: each write is logged and flushed first; "
+                          "failure restores CTL/STRIDE/SURF\n");
         }
-        kshell_printf(
-            "gpu: display enable dry-run: nothing written; use gpu display enable --yes\n");
+        if (port_x86_64_fb_surface(&screen)) {
+            kshell_printf("gpu: display enable plan: device fb pitch %u, plane pitch %u\n",
+                          (unsigned)(screen.pitch * fb_pixel_bytes(screen.format)),
+                          (unsigned)info->framebuffer.pitch);
+            if ((k_u64_t)screen.pitch * fb_pixel_bytes(screen.format) != info->framebuffer.pitch) {
+                kshell_printf("gpu: display enable plan: pitch mismatch; the device present will "
+                              "refuse and copy\n");
+            }
+        }
+        gpu_intel_display_ggtt_plan(info);
+        kshell_printf("gpu: display enable dry-run: would verify one present through the device "
+                      "(rc=0), then release its GGTT slot\n");
+        kshell_printf("gpu: display enable dry-run: nothing written; use gpu display enable "
+                      "--yes\n");
         kshell_printf("gpu: owner checklist: if the laptop shows a black screen, reboot restores "
                       "the firmware plane\n");
         return 0;
@@ -1231,9 +1282,26 @@ static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
     }
 
     kshell_printf("gpu: display enable: present verified (device path, rc=0)\n");
+    /* The plane now at info->plane_* is the enabled one. Releasing the backend
+     * returns it to that plane, not to the tiled firmware state, and frees both
+     * reserved GGTT runs for the compositor. */
+    k_logfile_flush();
+    rc = k_blit_present_release();
+    if (rc != 0) {
+        kerror("gpu: display enable: could not release the verification slot (rc=%d)", rc);
+        kshell_printf("gpu: display enable: verification slot kept alive; reboot clears it\n");
+        return -1;
+    }
+    if (s_linear.active) {
+        /* The plane-linear rollback state is now obsolete: its original plane
+         * was deliberately replaced by the verified linear one. */
+        k_logfile_flush();
+        memset(&s_linear, 0, sizeof(s_linear));
+    }
+    kmm_free(allocation);
+    kshell_printf("gpu: display enable: verification slot released, plane remains linear\n");
     kshell_printf("gpu: owner checklist: if the laptop shows a black screen, reboot restores the "
                   "firmware plane\n");
-    /* The verification buffer remains mapped as a present slot; keep it alive. */
     return 0;
 }
 
