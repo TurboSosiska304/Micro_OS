@@ -15,10 +15,9 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 ### The release
 
 - 2.3.0 "The disk answers": the installer learns to read a disk before it
-  writes one, the page cache keeps the hot blocks in memory, the WiFi port
-  contract grows a DMA and a 8265 driver through its second stage, and the
-  x86-64 machine boots with its cores on by default on the medium that can
-  afford them.
+  writes one, the WiFi port contract grows a DMA and a 8265 driver through its
+  second stage, and the x86-64 machine boots with its cores on by default on the
+  medium that can afford it.
 
 ### Added
 
@@ -28,11 +27,6 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
   entry to both copies of the table, saves the old tables in memory, verifies
   the write, and restores on a mismatch. `install --dry-run` on x86-64 prints
   the inventory and the plan without writing a byte to the disk.
-- The page cache: a bounded cache of file blocks in the kernel, wired into
-  VFS reads and writes, with `fsync` bringing the data and the metadata of an
-  open file to the medium. MicroFS writes go through the journal with barriers
-  and a durable write order; the cache keeps the hot path in memory and the
-  medium honest on sync.
 - Intel 8265 WiFi stage 1 and 2 on x86-64: PCI attach, CSR/power-up, firmware
   file loading and the virtual device proof. The port DMA contract is recorded
   as port contract 1.16; the driver reaches the stage 2 boundary but does not
@@ -58,6 +52,15 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 - ESP32 DRAM: the logfile console batch buffers are allocated from the heap on
   the kernel, not in static DRAM, because the 8 KiB program-data window left no
   safe margin; allocation failure is reported as `KERR_NOMEM`.
+
+### Deferred
+
+- The page cache (feature/pc2) was merged, then reverted: it broke
+  `uefi-stick-smoke` (power-cut persistence, fixed by periodic writeback) and
+  then broke `x86-cut-smoke` (72/105 integrity failures after journal cut
+  points; with the writeback tick the symptom became a shell hang in baseline).
+  2.3.0 ships without it. It returns when background writeback is proven not to
+  interfere with journal recovery and cut-point semantics.
 
 ## [2.2.0] - 2026-11-27
 
