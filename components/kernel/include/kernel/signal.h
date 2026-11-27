@@ -39,6 +39,19 @@ typedef void (*task_signal_fn)(int);
 #define K_SIG_ERR ((task_signal_fn) - 1) /* a refused task_signal_set() */
 
 /*
+ * The sender of a signal, as the provenance log names it: a pid, or one of
+ * the two sources that are not a task (the kernel itself and the tty that
+ * turned a byte into a signal).
+ */
+#define K_SIG_SRC_KERNEL ((k_u32_t)0xFFFFFFFFu)
+#define K_SIG_SRC_TTY ((k_u32_t)0xFFFFFFFEu)
+
+/* si_code in the provenance log (a small stable set, not the POSIX table). */
+#define K_SI_USER 0
+#define K_SI_KERNEL 1
+#define K_SI_TTY 2
+
+/*
  * Send `sig` to the task `pid`. Only a positive pid names one task: the two
  * meanings of POSIX for 0 and -1 are not offered by this call and are
  * answered EINVAL; task_signal_pgrp() and task_signal_job() are the group
@@ -47,6 +60,13 @@ typedef void (*task_signal_fn)(int);
  * Returns 0, or a negative error code.
  */
 int task_signal_send(k_u32_t pid, int sig);
+
+/*
+ * task_signal_send with provenance: from_pid is the sender pid or
+ * K_SIG_SRC_KERNEL/K_SIG_SRC_TTY, si_code is one of K_SI_*. Every delivery
+ * is logged as one line so a spurious signal can be traced after the fact.
+ */
+int task_signal_send_ex(k_u32_t pid, int sig, k_u32_t from_pid, int si_code);
 
 /*
  * Set the disposition of `sig` for the task and answer the previous one, or

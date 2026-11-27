@@ -1244,8 +1244,8 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
             if (own_console && !k_tty_console_claimed()) {
                 int key = k_console_poll();
 
-                if (key == 3) {
-                    (void)task_signal_send(program->pid, K_SIGINT);
+                if (key == 3 && k_tty_console_isig()) {
+                    (void)task_signal_send_ex(program->pid, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
                 }
             }
 
@@ -1263,7 +1263,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
                  * writing the volume behind it, or the next line of the
                  * shell is a second writer of the same files.
                  */
-                (void)task_signal_send(program->pid, K_SIGINT);
+                (void)task_signal_send_ex(program->pid, K_SIGINT, K_SIG_SRC_KERNEL, K_SI_KERNEL);
                 rc = task_wait(program->pid, &status, PORT_EXEC_STOP_MS);
                 break;
             }
@@ -1281,7 +1281,7 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
          */
         int tries;
 
-        (void)task_signal_send(program->pid, K_SIGTERM);
+        (void)task_signal_send_ex(program->pid, K_SIGTERM, K_SIG_SRC_KERNEL, K_SI_KERNEL);
         for (tries = 0; tries < (int)(PORT_EXEC_STOP_MS / 5u); tries++) {
             if (task_wait(program->pid, &status, 5) != -2) {
                 break;

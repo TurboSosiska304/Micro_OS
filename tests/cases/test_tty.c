@@ -328,6 +328,8 @@ static void test_tty_pgrp_ctrlc(void)
         return;
     }
 
+    task_signal_set(t1, K_SIGINT, K_SIG_IGN);
+    task_signal_set(t2, K_SIGINT, K_SIG_IGN);
     KT_CHECK_INT_EQ(task_setpgid(t1->pid, t1->pid), 0);
     KT_CHECK_INT_EQ(task_setpgid(t2->pid, t1->pid), 0);
 
@@ -382,6 +384,68 @@ static void test_tty_pgrp_ctrlc(void)
     KT_CHECK_INT_EQ(task_wait(t2->pid, NULL, 2000), 0);
 }
 
+static void test_tty_aux_bytes_no_sigint(void)
+{
+    struct k_tty_termios mode;
+    char line[8];
+    int count;
+    /* The first bytes a PS/2 touchpad emits on the AUX port. They must
+     * never be read as Ctrl+C, even when ISIG is on. */
+    static const char aux[] = {0x23, (char)0xa3};
+
+    ktest_begin("tty: AUX bytes do not generate SIGINT");
+
+    use_script(aux, sizeof(aux));
+    k_tty_defaults(&mode);
+    KT_CHECK_INT_EQ(k_tty_ioctl(K_TTY_TCSETS, (k_u64_t)(uintptr_t)&mode), 0);
+
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK(count != KERR_INTR);
+    KT_CHECK((task_signal_pending(task_self()) & (1u << (K_SIGINT - 1))) == 0u);
+
+    drop_terminal();
+}
+
+static volatile int g_tty_ctrlc_seen;
+
+static void tty_ctrlc_handler(int sig)
+{
+    if (sig == K_SIGINT) {
+        g_tty_ctrlc_seen = 1;
+    }
+}
+
+static void test_tty_ctrlc_still_works(void)
+{
+    struct k_tty_termios mode;
+    char line[8];
+    int count;
+    struct task *self = task_self();
+    task_signal_fn old;
+    k_u32_t old_job = task_get_job(self);
+
+    ktest_begin("tty: Ctrl+C from keyboard still generates SIGINT");
+
+    task_set_job(self, TASK_JOB_NONE);
+    old = task_signal_set(self, K_SIGINT, tty_ctrlc_handler);
+    g_tty_ctrlc_seen = 0;
+    __atomic_fetch_and(&self->sig_pending, ~(1u << (K_SIGINT - 1)), __ATOMIC_RELAXED);
+    use_text("\x03");
+    k_tty_defaults(&mode);
+    KT_CHECK_INT_EQ(k_tty_ioctl(K_TTY_TCSETS, (k_u64_t)(uintptr_t)&mode), 0);
+
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK_INT_EQ(count, KERR_INTR);
+    /* The handler runs on the next signal check; force one here. */
+    task_signal_check(self, 0, false);
+    KT_CHECK(g_tty_ctrlc_seen == 1);
+
+    __atomic_fetch_and(&self->sig_pending, ~(1u << (K_SIGINT - 1)), __ATOMIC_RELAXED);
+    task_signal_set(self, K_SIGINT, old);
+    task_set_job(self, old_job);
+    drop_terminal();
+}
+
 static void test_tty_session_release(void)
 {
     k_u32_t pgid;
@@ -408,5 +472,7 @@ void test_tty(void)
     test_tty_raw();
     test_tty_winsize();
     test_tty_pgrp_ctrlc();
+    test_tty_aux_bytes_no_sigint();
+    test_tty_ctrlc_still_works();
     test_tty_session_release();
 }

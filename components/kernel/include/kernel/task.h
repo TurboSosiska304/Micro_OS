@@ -431,6 +431,7 @@ k_i32_t task_getpgid(k_u32_t pid);
  * of a tty.
  */
 int task_signal_pgrp(k_u32_t pgid, int sig);
+int task_signal_pgrp_ex(k_u32_t pgid, int sig, k_u32_t from_pid, int si_code);
 
 /*
  * Send a signal to every living task of a job except the caller, which is
@@ -438,6 +439,7 @@ int task_signal_pgrp(k_u32_t pgid, int sig);
  * least one task was named, and ESRCH when the job has no other task.
  */
 int task_signal_job(k_u32_t job, int sig);
+int task_signal_job_ex(k_u32_t job, int sig, k_u32_t from_pid, int si_code);
 
 /*
  * Send a signal to every living task of the machine except `except` (the
@@ -448,6 +450,7 @@ int task_signal_job(k_u32_t job, int sig);
  * shutdown waits a bounded time for it.
  */
 int task_signal_all(const struct task *except, int sig);
+int task_signal_all_ex(const struct task *except, int sig, k_u32_t from_pid, int si_code);
 
 /*
  * The living tasks of the machine except `except`: what the shutdown reads

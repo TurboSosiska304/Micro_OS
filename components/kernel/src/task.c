@@ -1226,6 +1226,9 @@ static bool signal_controls_state(int sig)
  * may, and then the task goes on - the limit is a mark and not a kill from
  * the timer, which would end a task from the context of another.
  */
+static void signal_log_delivery(int sig, k_u32_t to_pid, k_u32_t to_pgid, k_u32_t from_pid,
+                                 int si_code);
+
 bool task_cpu_tick(struct task *t)
 {
     k_u64_t now;
@@ -1253,6 +1256,7 @@ bool task_cpu_tick(struct task *t)
         if (!t->cpu_limit_signalled && t->cpu_ms >= t->limit_cpu_ms) {
             t->cpu_limit_signalled = true;
             __atomic_fetch_or(&t->sig_pending, signal_bit(K_SIGTERM), __ATOMIC_RELAXED);
+            signal_log_delivery(K_SIGTERM, t->pid, t->pgid, K_SIG_SRC_KERNEL, K_SI_KERNEL);
             marked = true;
         }
     }
@@ -1321,9 +1325,25 @@ k_u32_t task_signal_pending(const struct task *t)
     return t != NULL ? __atomic_load_n(&t->sig_pending, __ATOMIC_RELAXED) : 0u;
 }
 
-int task_signal_send(k_u32_t pid, int sig)
+static void signal_log_delivery(int sig, k_u32_t to_pid, k_u32_t to_pgid, k_u32_t from_pid,
+                                 int si_code)
+{
+    if (from_pid == K_SIG_SRC_KERNEL) {
+        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=kernel si_code=%d", sig,
+              (unsigned)to_pid, (unsigned)to_pgid, si_code);
+    } else if (from_pid == K_SIG_SRC_TTY) {
+        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=tty si_code=%d", sig, (unsigned)to_pid,
+              (unsigned)to_pgid, si_code);
+    } else {
+        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=pid:%u si_code=%d", sig,
+              (unsigned)to_pid, (unsigned)to_pgid, (unsigned)from_pid, si_code);
+    }
+}
+
+int task_signal_send_ex(k_u32_t pid, int sig, k_u32_t from_pid, int si_code)
 {
     struct task *t;
+    k_u32_t pgid;
 
     if (signal_slot(sig) < 0 && !signal_controls_state(sig)) {
         return KERR_INVAL;
@@ -1343,13 +1363,16 @@ int task_signal_send(k_u32_t pid, int sig)
         k_port_exit_critical();
         return KERR_SRCH;
     }
+    pgid = t->pgid;
     k_port_exit_critical();
 
     if (sig == K_SIGCONT) {
+        signal_log_delivery(sig, pid, pgid, from_pid, si_code);
         return k_sched_continue(t) ? 0 : KERR_SRCH;
     }
 
     if (sig == K_SIGSTOP || sig == K_SIGTSTP) {
+        signal_log_delivery(sig, pid, pgid, from_pid, si_code);
         return k_sched_stop(t) ? 0 : KERR_SRCH;
     }
 
@@ -1359,6 +1382,7 @@ int task_signal_send(k_u32_t pid, int sig)
      * atomic, because the critical section of a port is the interrupts of
      * one core and not a lock of the machine (ADR 0012).
      */
+    signal_log_delivery(sig, pid, pgid, from_pid, si_code);
     __atomic_fetch_or(&t->sig_pending, signal_bit(sig), __ATOMIC_RELAXED);
 
     /* A task that waits for an event or a timer may come back at once: the
@@ -1368,13 +1392,20 @@ int task_signal_send(k_u32_t pid, int sig)
     return 0;
 }
 
+int task_signal_send(k_u32_t pid, int sig)
+{
+    struct task *self = task_self();
+
+    return task_signal_send_ex(pid, sig, self != NULL ? self->pid : K_SIG_SRC_KERNEL, K_SI_USER);
+}
+
 /*
  * The signal of a process group: every living task whose pgid matches.
  * PIDs are collected under the lock and signals sent outside it, same
  * shape as task_signal_job. This is the delivery path for Ctrl+C on a tty
  * with a foreground process group.
  */
-int task_signal_pgrp(k_u32_t pgid, int sig)
+int task_signal_pgrp_ex(k_u32_t pgid, int sig, k_u32_t from_pid, int si_code)
 {
     k_u32_t pids[TASK_MAX_TASKS];
     k_size_t count = 0;
@@ -1404,12 +1435,19 @@ int task_signal_pgrp(k_u32_t pgid, int sig)
     k_port_exit_critical();
 
     for (i = 0; i < count; i++) {
-        if (task_signal_send(pids[i], sig) == 0) {
+        if (task_signal_send_ex(pids[i], sig, from_pid, si_code) == 0) {
             sent++;
         }
     }
 
     return (sent > 0) ? 0 : KERR_SRCH;
+}
+
+int task_signal_pgrp(k_u32_t pgid, int sig)
+{
+    struct task *self = task_self();
+
+    return task_signal_pgrp_ex(pgid, sig, self != NULL ? self->pid : K_SIG_SRC_KERNEL, K_SI_USER);
 }
 
 /*
@@ -1421,7 +1459,7 @@ int task_signal_pgrp(k_u32_t pgid, int sig)
  * change while the signals are sent; task_signal_send() checks the state of
  * each task again, so a task that ended in between is simply passed over.
  */
-int task_signal_job(k_u32_t job, int sig)
+int task_signal_job_ex(k_u32_t job, int sig, k_u32_t from_pid, int si_code)
 {
     struct task *self = task_self();
     k_u32_t pids[TASK_MAX_TASKS];
@@ -1452,12 +1490,19 @@ int task_signal_job(k_u32_t job, int sig)
     k_port_exit_critical();
 
     for (i = 0; i < count; i++) {
-        if (task_signal_send(pids[i], sig) == 0) {
+        if (task_signal_send_ex(pids[i], sig, from_pid, si_code) == 0) {
             sent++;
         }
     }
 
     return (sent > 0) ? 0 : KERR_SRCH;
+}
+
+int task_signal_job(k_u32_t job, int sig)
+{
+    struct task *self = task_self();
+
+    return task_signal_job_ex(job, sig, self != NULL ? self->pid : K_SIG_SRC_KERNEL, K_SI_USER);
 }
 
 /*
@@ -1466,7 +1511,7 @@ int task_signal_job(k_u32_t job, int sig)
  * the job above; the signal itself goes out through task_signal_send(),
  * which checks the state again.
  */
-int task_signal_all(const struct task *except, int sig)
+int task_signal_all_ex(const struct task *except, int sig, k_u32_t from_pid, int si_code)
 {
     k_u32_t pids[TASK_MAX_TASKS];
     k_size_t count = 0;
@@ -1496,12 +1541,19 @@ int task_signal_all(const struct task *except, int sig)
     k_port_exit_critical();
 
     for (i = 0; i < count; i++) {
-        if (task_signal_send(pids[i], sig) == 0) {
+        if (task_signal_send_ex(pids[i], sig, from_pid, si_code) == 0) {
             sent++;
         }
     }
 
     return sent;
+}
+
+int task_signal_all(const struct task *except, int sig)
+{
+    struct task *self = task_self();
+
+    return task_signal_all_ex(except, sig, self != NULL ? self->pid : K_SIG_SRC_KERNEL, K_SI_USER);
 }
 
 k_size_t task_count_living_except(const struct task *except)
@@ -1613,6 +1665,7 @@ void task_signal_notify_parent(struct task *self)
         /* The parent may be on another core and reads its marks without the
          * lock: the bit is added atomically. */
         __atomic_fetch_or(&parent->sig_pending, signal_bit(K_SIGCHLD), __ATOMIC_RELAXED);
+        signal_log_delivery(K_SIGCHLD, parent->pid, parent->pgid, K_SIG_SRC_KERNEL, K_SI_KERNEL);
     }
 }
 
@@ -1654,6 +1707,8 @@ void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
             if (!signal_ends_by_default(sig)) {
                 continue;
             }
+            kinfo("sig: default sig=%d ends pid:%u pgid:%u", sig, (unsigned)t->pid,
+                  (unsigned)t->pgid);
             task_exit(128 + sig);
             return;
         }
@@ -1668,6 +1723,7 @@ void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
         if (rc < 0) {
             /* The frame of the task cannot carry the handler: the signal ends
              * it, as it does when the handler cannot be called at all. */
+            kinfo("sig: frame sig=%d ends pid:%u pgid:%u", sig, (unsigned)t->pid, (unsigned)t->pgid);
             task_exit(128 + sig);
             return;
         }
