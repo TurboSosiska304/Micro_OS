@@ -471,9 +471,9 @@ static int nvme_rw_dma(k_u32_t opcode, k_u64_t lba, k_size_t bytes, const k_u8_t
     command.prp1_high = (k_u32_t)(prp1 >> 32);
     command.prp2_low = (k_u32_t)prp2;
     command.prp2_high = (k_u32_t)(prp2 >> 32);
-    command.cdw10 = (k_u32_t)lba;                               /* the low half of the address */
-    command.cdw11 = (k_u32_t)(lba >> 32);                       /* the high half */
-    command.cdw12 = (k_u32_t)(bytes / g_lba_size - 1u);         /* 0-based */
+    command.cdw10 = (k_u32_t)lba;                       /* the low half of the address */
+    command.cdw11 = (k_u32_t)(lba >> 32);               /* the high half */
+    command.cdw12 = (k_u32_t)(bytes / g_lba_size - 1u); /* 0-based */
 
     return nvme_submit(&g_io, &command);
 }
@@ -550,7 +550,7 @@ static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 
         if (chunk == 0u || nvme_read_dma(lba, chunk, dst) != 0) {
             kerror("nvme0: the read of %u byte(s) at LBA %llu failed", (unsigned)chunk,
-                  (unsigned long long)lba);
+                   (unsigned long long)lba);
             rc = -1;
             break;
         }
@@ -627,7 +627,7 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
 
         if (chunk == 0u || nvme_write_dma(lba, chunk, source) != 0) {
             kerror("nvme0: the write of %u byte(s) at LBA %llu failed", (unsigned)chunk,
-                  (unsigned long long)lba);
+                   (unsigned long long)lba);
             rc = -1;
             break;
         }
@@ -1065,8 +1065,8 @@ void port_x86_64_nvme_init(void)
     }
 
     kinfo("nvme0: %u MB, %u-byte sectors, %u entries in the pair of the I/O queues",
-          (unsigned)(((k_u64_t)g_sectors * g_lba_size) / (1024u * 1024u)),
-          (unsigned)g_lba_size, (unsigned)g_io.entries);
+          (unsigned)(((k_u64_t)g_sectors * g_lba_size) / (1024u * 1024u)), (unsigned)g_lba_size,
+          (unsigned)g_io.entries);
 
     /*
      * The cache of the block layer, write-through: the disk is read-only and

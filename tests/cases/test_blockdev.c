@@ -623,10 +623,10 @@ void test_partition(void)
         memcpy(hdr, "EFI PART", 8);
         put_le32(hdr + 8, 0x00010000u);
         put_le32(hdr + 12, 92u);
-        put_le64(hdr + 24, 1u);                  /* current LBA */
-        put_le64(hdr + 32, 1000214191ull);        /* alternate LBA */
-        put_le64(hdr + 40, 2048u);                /* first usable */
-        put_le64(hdr + 48, last_usable);          /* last usable */
+        put_le64(hdr + 24, 1u);            /* current LBA */
+        put_le64(hdr + 32, 1000214191ull); /* alternate LBA */
+        put_le64(hdr + 40, 2048u);         /* first usable */
+        put_le64(hdr + 48, last_usable);   /* last usable */
         put_le64(hdr + 72, PART_GPT512_ENTRIES_LBA);
         put_le32(hdr + 80, 128u);
         put_le32(hdr + 84, 128u);
