@@ -305,8 +305,16 @@ def main(argv: list) -> int:
         after_second = digest(run_image)
         if args.verbose:
             print(machine.transcript.decode("utf-8", errors="replace"))
+        # The bytes of the image after the second boot are not the bytes of the
+        # first: the machine keeps its own log now (`/etc/bootlog.log`,
+        # `run.log`), and a boot that writes a log is a boot that changes the
+        # volume. The promise of the check is the note of the first boot, so the
+        # bytes of the note are what is read.
+        with open(run_image, "rb") as image:
+            after_second_bytes = image.read()
         expect(checks, "the file of the first boot is in the bytes of the image",
-               after_second == after_first, f"before {after_first}, after {after_second}")
+               NOTE_TEXT.encode() in after_second_bytes,
+               f"the note of the first boot is not in the image after the second")
 
         # The third boot: the same tree, and /etc/volumes that names nothing.
         build_unnamed(unnamed_image, args.build, args.mkfs)
