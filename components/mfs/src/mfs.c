@@ -41,6 +41,10 @@ static struct {
     k_u32_t journal_sequence;    /* the number of the last transaction */
     k_u32_t journal_replayed;    /* the blocks the mount restored */
     k_u8_t *bitmap_dirty_blocks; /* one byte per block of the map */
+    k_u8_t *bitmap_txn_bitmap;   /* snapshot of the map at txn begin, for rollback */
+    k_u8_t *bitmap_txn_dirty;    /* snapshot of dirty-block flags at txn begin */
+    bool bitmap_txn_was_dirty;   /* bitmap_dirty at txn begin */
+    bool bitmap_txn_active;      /* snapshot is valid for the current outermost txn */
     k_u32_t txn_depth;
     bool txn_open;             /* the journal holds a transaction in progress */
     k_u32_t txn_slots;         /* the slots it has written */
@@ -699,9 +703,50 @@ static void mfs_at_cursor_invalidate(void)
     g_at_cursor.valid = false;
 }
 
+static void bitmap_txn_snapshot(void)
+{
+    k_size_t size;
+
+    if (g.bitmap == NULL || g.bitmap_txn_bitmap == NULL || g.bitmap_txn_dirty == NULL) {
+        g.bitmap_txn_active = false;
+        return;
+    }
+
+    size = (k_size_t)g.bitmap_blocks * MFS_BLOCK_SIZE;
+    memcpy(g.bitmap_txn_bitmap, g.bitmap, size);
+    memcpy(g.bitmap_txn_dirty, g.bitmap_dirty_blocks, g.bitmap_blocks);
+    g.bitmap_txn_was_dirty = g.bitmap_dirty;
+    g.bitmap_txn_active = true;
+}
+
+static void bitmap_txn_rollback(void)
+{
+    k_size_t size;
+
+    if (!g.bitmap_txn_active || g.bitmap == NULL || g.bitmap_txn_bitmap == NULL ||
+        g.bitmap_txn_dirty == NULL) {
+        g.bitmap_txn_active = false;
+        return;
+    }
+
+    size = (k_size_t)g.bitmap_blocks * MFS_BLOCK_SIZE;
+    memcpy(g.bitmap, g.bitmap_txn_bitmap, size);
+    memcpy(g.bitmap_dirty_blocks, g.bitmap_txn_dirty, g.bitmap_blocks);
+    g.bitmap_dirty = g.bitmap_txn_was_dirty;
+    g.bitmap_txn_active = false;
+}
+
+static void bitmap_txn_discard(void)
+{
+    g.bitmap_txn_active = false;
+}
+
 static int mfs_txn_begin(void)
 {
     g_at_cursor.valid = false;
+    if (g.txn_depth == 0u) {
+        bitmap_txn_snapshot();
+    }
     g.txn_depth++;
 
     return MFS_OK;
@@ -720,6 +765,9 @@ static int mfs_txn_commit(void)
 
     if (g.txn_depth == 0u) {
         rc = journal_flush();
+        if (rc == MFS_OK) {
+            bitmap_txn_discard();
+        }
     }
 
     return rc;
@@ -728,6 +776,7 @@ static int mfs_txn_commit(void)
 /* Forget the transaction: the home blocks were never touched. */
 static void mfs_txn_abort(void)
 {
+    bitmap_txn_rollback();
     g.txn_depth = 0u;
     g.txn_open = false;
     g.txn_slots = 0u;
@@ -922,6 +971,18 @@ static void bitmap_release(void)
         g.bitmap_dirty_blocks = NULL;
     }
 
+    if (g.bitmap_txn_bitmap != NULL) {
+        kmm_free(g.bitmap_txn_bitmap);
+        g.bitmap_txn_bitmap = NULL;
+    }
+
+    if (g.bitmap_txn_dirty != NULL) {
+        kmm_free(g.bitmap_txn_dirty);
+        g.bitmap_txn_dirty = NULL;
+    }
+
+    g.bitmap_txn_active = false;
+
     if (g.txn_homes != NULL) {
         kmm_free(g.txn_homes);
         g.txn_homes = NULL;
@@ -972,13 +1033,35 @@ static int bitmap_alloc(k_u32_t blocks)
         return MFS_ENOMEM;
     }
 
+    k_u8_t *snap = (k_u8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
+    k_u8_t *snap_dirty = NULL;
+    if (snap != NULL) {
+        snap_dirty = (k_u8_t *)kmm_alloc(blocks, KMM_PRIORITY_SYSTEM);
+    }
+
+    if (snap == NULL || snap_dirty == NULL) {
+        kerror("mfs: no memory for the bitmap snapshot (%u block(s))", (unsigned)blocks);
+        if (snap != NULL)
+            kmm_free(snap);
+        if (snap_dirty != NULL)
+            kmm_free(snap_dirty);
+        kmm_free(dirty);
+        kmm_free(map);
+        return MFS_ENOMEM;
+    }
+
     memset(map, 0, size);
     memset(dirty, 0, blocks);
+    memset(snap, 0, size);
+    memset(snap_dirty, 0, blocks);
 
     /* A map of an earlier volume cannot describe this one. */
     bitmap_release();
     g.bitmap = map;
     g.bitmap_dirty_blocks = dirty;
+    g.bitmap_txn_bitmap = snap;
+    g.bitmap_txn_dirty = snap_dirty;
+    g.bitmap_txn_active = false;
 
     return MFS_OK;
 }
