@@ -46,6 +46,11 @@ if(MICRO_OS_PLATFORM STREQUAL "ESP32")
             "the private key of the image (default: a key generated in the build directory)" FORCE)
     endif()
 
+    # Unity and CMock are ESP-IDF test helpers; the firmware does not use
+    # them, but they still occupy DRAM BSS if linked. Exclude them so the
+    # DRAM budget stays within the exec-window limit.
+    set(EXCLUDE_COMPONENTS cmock unity)
+
     include($ENV{IDF_PATH}/tools/cmake/project.cmake)
     project(micro_os C)
 

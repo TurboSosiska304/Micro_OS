@@ -608,6 +608,12 @@ if(NOT ESP_PLATFORM)
         )
     endif()
 
+    # The PS/2 mouse decoder is x86-only and lives in ports/port_x86_64; the
+    # host test build still compiles it so test_ps2_mouse keeps its symbols.
+    target_sources(microos_kernel PRIVATE
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/input_ps2_mouse.c"
+    )
+
     set(MICRO_OS_TEST_LIBS
         mkfs_mfs_image
         microos_kernel
