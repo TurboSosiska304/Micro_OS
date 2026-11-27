@@ -581,13 +581,13 @@ pagecache read/write, fsync API, and the truncate/read regressions were fixed.
 Both runs are three boots of `make bench` on the same host, QEMU 11.1.3 TCG,
 256 MB, one processor, default `pc`, IDE `cache=writeback`, MFS root image.
 
-The host was busy during parts of these runs and several rows exceed the 10 %
-spread gate; compare medians with that in mind. The file I/O rows moved the
-most: `file_write` and `file_read` measure a 16 MiB stream through the VFS.
-With the page cache, writes become dirty cached pages and reads are served from
-the cache once loaded; the measured rate also includes the cache management and
-writeback behavior of this first slice. These numbers are a baseline for the
-page-cache work, not a release gate.
+The host was busy during parts of the base run and several rows exceed the 10 %
+spread gate; compare medians with that in mind. The first page-cache pass had a
+catastrophic `file_read`/`file_write` regression (1.00/0.22 MiB/s) caused by an
+O(n^2) MFS block-chain walk per 4 KiB page and per-page writeback transactions.
+After caching the MFS at-cursor and batching contiguous dirty writebacks, the
+1-run check is back in range (`file_read` 175.82 MiB/s, `file_write` 6.09
+MiB/s). A 3-run median should replace the 1-run after table when QEMU is free.
 
 Before (`d278ffd9`):
 
@@ -606,25 +606,29 @@ Before (`d278ffd9`):
 | `lat_pipe_p99` | 76288.00 | ns | 47.0% |
 | `shell_pipe` | 2.58 | MiB/s | 18.2% |
 
-After (`feature/page-cache`, this worktree):
+After (`feature/page-cache`, with cursor/batch fix, 1 run; 3-run median blocked by external QEMU):
 
-| Row | Median | Unit | Spread |
-|---|---|---:|---:|
-| `syscall_getpid` | 1388888.88 | calls/s | 74.4% |
-| `fork_exec` | 148.14 | runs/s | 19.9% |
-| `pipe` | 307.69 | MiB/s | 8.3% |
-| `file_write` | 0.22 | MiB/s | 9.1% |
-| `file_read` | 1.00 | MiB/s | 1.0% |
-| `console` | 1075.26 | lines/s | 0.0% |
-| `screen_text` | 27473591.00 | ns | 218.5% |
-| `lat_syscall_p50` | 648.00 | ns | 14.8% |
-| `lat_syscall_p99` | 712.00 | ns | 112.4% |
-| `lat_pipe_p50` | 24064.00 | ns | 0.0% |
-| `lat_pipe_p99` | 47616.00 | ns | 45.2% |
-| `shell_pipe` | 0.71 | MiB/s | 32.4% |
+| Row | Value | Unit | Spread |
+|---|---:|---|---:|
+| `syscall_getpid` | 1515151.51 | calls/s | 0.0% (1 run) |
+| `fork_exec` | 147.05 | runs/s | 0.0% (1 run) |
+| `pipe` | 307.69 | MiB/s | 0.0% (1 run) |
+| `file_write` | 6.09 | MiB/s | 0.0% (1 run) |
+| `file_read` | 175.82 | MiB/s | 0.0% (1 run) |
+| `console` | 1041.66 | lines/s | 0.0% (1 run) |
+| `screen_text` | 28248744.00 | ns | 0.0% (1 run) |
+| `lat_syscall_p50` | 856.00 | ns | 0.0% (1 run) |
+| `lat_syscall_p99` | 1000.00 | ns | 0.0% (1 run) |
+| `lat_pipe_p50` | 24064.00 | ns | 0.0% (1 run) |
+| `lat_pipe_p99` | 74240.00 | ns | 0.0% (1 run) |
+| `shell_pipe` | 2.48 | MiB/s | 0.0% (1 run) |
 
-Notes: `file_write` and `file_read` regressed sharply in this first slice; the
-cause needs profiling before 2.2 release (cache writeback path, sync/eviction
-behavior, and the 8 MiB x86 cache cap are the first suspects). The syscall/pipe
-rows are within or near host-noise spread. QEMU smokes were not run in this
-session because unrelated QEMU jobs were active on the host.
+Notes: the initial page-cache integration regressed `file_read` to 1.00 MiB/s
+and `file_write` to 0.22 MiB/s because `mfs_read_at`/`mfs_write_at` walked the
+MFS block chain from the start on every 4 KiB page and dirty evictions wrote
+back one 4 KiB page per MFS transaction. Fix: cache a per-inode MFS at-cursor
+(invalidated on txns/mount/format), and batch contiguous dirty evictions up to
+64 pages (256 KiB) per writeback. After the fix, a 1-run bench shows
+`file_read` 175.82 MiB/s and `file_write` 6.09 MiB/s, back in the base range;
+a 3-run median should replace this row once QEMU is free. QEMU smokes were not
+run in this session because unrelated QEMU jobs were active on the host.
