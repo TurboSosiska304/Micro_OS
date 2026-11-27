@@ -1145,6 +1145,7 @@ static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed)
 
 out:
     if (!ok && display_touched) {
+        k_logfile_flush();
         if (!gpu_intel_plane_restore(info, control, stride, surface) ||
             !gpu_intel_wait_frame(info) ||
             (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != surface) {
@@ -1339,6 +1340,7 @@ static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
 
 out:
     if (display_touched && !plane_restored) {
+        k_logfile_flush();
         if (gpu_intel_plane_restore(info, control, stride, surface) && gpu_intel_wait_frame(info) &&
             (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) == surface) {
             plane_restored = true;

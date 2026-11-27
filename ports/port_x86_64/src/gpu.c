@@ -398,13 +398,16 @@ static int cmd_gpu(int argc, char **argv)
          (argc == 2 && strcmp(argv[1], "flip") == 0) ||
          (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0) ||
          (argc == 2 && strcmp(argv[1], "plane-linear") == 0) ||
-         (argc == 3 && strcmp(argv[1], "plane-linear") == 0 && strcmp(argv[2], "--yes") == 0))) {
+         (argc == 3 && strcmp(argv[1], "plane-linear") == 0 && strcmp(argv[2], "--yes") == 0) ||
+         (argc == 3 && strcmp(argv[1], "display") == 0 && strcmp(argv[2], "enable") == 0) ||
+         (argc == 4 && strcmp(argv[1], "display") == 0 && strcmp(argv[2], "enable") == 0 &&
+          strcmp(argv[3], "--yes") == 0))) {
         return gpu_intel_command(argc, argv);
     }
 
     kshell_printf("usage: gpu [info|vramtest [--write]|vrammap|vramalloc <kib>|vramfill <id> <pat>|"
                   "vramread <id>|vramfree <id>|vramdump|amdflip [--yes] [--keep]|"
-                  "ggtt-test|flip [--yes]|plane-linear [--yes]]\n");
+                  "ggtt-test|flip [--yes]|plane-linear [--yes]|display enable [--yes]\n");
     return KSHELL_USAGE;
 }
 
@@ -414,13 +417,13 @@ int port_x86_64_gpu_register(void)
         .summary = "display controller probe",
         .usage = "gpu "
                  "[info|vramtest|vrammap|vramalloc|vramfill|vramread|vramfree|vramdump|amdflip|"
-                 "ggtt-test|flip|plane-linear]",
+                 "ggtt-test|flip|plane-linear|display enable]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
                   "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a block;\n"
                   "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
                   "releases it; vramdump lists blocks. amdflip [--yes] [--keep] copies\n"
                   "a frame to VRAM and flips the scanout. Intel: ggtt-test, flip [--yes],\n"
-                  "plane-linear [--yes].\n",
+                  "plane-linear [--yes], display enable [--yes].\n",
     };
     int rc;
 
