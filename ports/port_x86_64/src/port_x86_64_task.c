@@ -1000,7 +1000,26 @@ bool k_port_task_sleep_cuttable(void)
 #define PORT_SLEEP_DUMP_GAP_MS 10000u
 #define PORT_SLEEP_HARD_MS 30000u
 
-static void sleep_stall_dump(k_u32_t ms, k_u64_t deadline_us)
+/*
+ * A clock that keeps running when the tick of the boot does not. The port's
+ * uptime is counted in ticks, so a stopped tick would also stop the deadline
+ * of a diagnosis that used it; the TSC is calibrated by the boot and does
+ * not depend on an interrupt arriving.
+ */
+static k_u64_t stall_clock_us(void)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+    k_u64_t per_us;
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return k_port_uptime_us();
+    }
+
+    per_us = info->cpu_hz / 1000000u;
+    return (per_us != 0u) ? port_rdtsc() / per_us : k_port_uptime_us();
+}
+
+static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
 {
     static k_u64_t last_us;
     struct k_sched_sleeper sleepers[TASK_MAX_TASKS];
@@ -1013,7 +1032,7 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t deadline_us)
     char buf[384];
     int len;
 
-    now = k_port_uptime_us();
+    now = stall_clock_us();
     if (now - last_us < (k_u64_t)PORT_SLEEP_DUMP_GAP_MS * 1000u) {
         return;
     }
@@ -1028,8 +1047,8 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t deadline_us)
     len = snprintf(buf, sizeof(buf),
                    "\r\n[SLPDBG] sleep of %u ms over its deadline by %llu us, ticks %u, "
                    "%u sleeper(s)\r\n",
-                   (unsigned)ms, (unsigned long long)(now - deadline_us), (unsigned)k_sched_ticks(),
-                   (unsigned)count);
+                   (unsigned)ms, (unsigned long long)(now - stall_deadline_us),
+                   (unsigned)k_sched_ticks(), (unsigned)count);
     if (len > 0) {
         port_x86_64_debug_write(buf, (k_size_t)len);
     }
@@ -1075,6 +1094,7 @@ void k_port_task_sleep_ms(k_u32_t ms)
     struct port_task *current = this_cpu()->current;
     struct task *self = current != NULL ? current->task : NULL;
     k_u64_t deadline_us;
+    k_u64_t stall_deadline_us;
     k_u32_t ticks;
 
     if (ms == 0) {
@@ -1088,6 +1108,7 @@ void k_port_task_sleep_ms(k_u32_t ms)
     }
 
     deadline_us = k_port_uptime_us() + (k_u64_t)ms * 1000u;
+    stall_deadline_us = stall_clock_us() + (k_u64_t)ms * 1000u;
 
     if (self == NULL) {
         /* Not in a task: there is nothing to switch to, only time to pass. */
@@ -1106,10 +1127,10 @@ void k_port_task_sleep_ms(k_u32_t ms)
     ticks = k_sched_ticks();
 
     for (;;) {
-        k_u64_t now = k_port_uptime_us();
+        k_u64_t now = stall_clock_us();
 
-        if (now > deadline_us + (k_u64_t)PORT_SLEEP_STALL_MS * 1000u) {
-            sleep_stall_dump(ms, deadline_us);
+        if (now > stall_deadline_us + (k_u64_t)PORT_SLEEP_STALL_MS * 1000u) {
+            sleep_stall_dump(ms, stall_deadline_us);
         }
 
         /*
@@ -1117,7 +1138,7 @@ void k_port_task_sleep_ms(k_u32_t ms)
          * The kernel loop above checks its own deadline when this returns and
          * puts the task back in its queue; the line says a wake was lost.
          */
-        if (now > deadline_us + (k_u64_t)PORT_SLEEP_HARD_MS * 1000u) {
+        if (now > stall_deadline_us + (k_u64_t)PORT_SLEEP_HARD_MS * 1000u) {
             char buf[80];
             int len = snprintf(buf, sizeof(buf),
                                "[SLPDBG] pid=%u: sleep of %u ms forced past its wake\r\n",
