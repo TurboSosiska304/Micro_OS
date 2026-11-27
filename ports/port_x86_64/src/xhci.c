@@ -62,6 +62,7 @@
 #include "kernel/port_task.h"
 #include "port_x86_64.h"
 #include "port_x86_64_apic.h"
+#include "port_x86_64_bt.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_pci.h"
@@ -1226,6 +1227,7 @@ enum xhci_usb_class {
     XHCI_USB_STORAGE,
     XHCI_USB_NET,
     XHCI_USB_HUB,
+    XHCI_USB_BT,
 };
 
 struct xhci_endpoint_state {
@@ -1332,6 +1334,14 @@ static enum xhci_usb_class classify_configuration(const k_u8_t *descriptor, k_u3
 
             if (base == 2u && sub == 6u) {
                 return XHCI_USB_NET;
+            }
+
+            /* A Bluetooth controller of the HCI transport of the USB: the
+             * Wireless Controller class, the Radio Frequency sub-class, the
+             * Bluetooth protocol. It answers Reset and the read commands of
+             * the HCI on the control and the interrupt endpoints (M1). */
+            if (base == 0xE0u && sub == 0x01u && protocol == 0x01u) {
+                return XHCI_USB_BT;
             }
         }
 
@@ -1515,6 +1525,10 @@ static int endpoint_add(struct port_x86_64_usb_device *device, k_u8_t address, b
             device->bulk_out_dci = (k_u8_t)dci;
             device->bulk_out_packet = max_packet;
         }
+    } else if ((address & 0x80u) != 0u) {
+        device->interrupt_in_dci = (k_u8_t)dci;
+        device->interrupt_in_packet = max_packet;
+        device->interrupt_in_interval = interval;
     }
 
     return 0;
@@ -1651,6 +1665,93 @@ int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *
     }
 
     rc = bulk_transfer(device, in, buffer, length, timeout_ms, moved);
+
+    k_mutex_unlock(&g_xhci_lock);
+
+    return rc;
+}
+
+static int interrupt_transfer(struct port_x86_64_usb_device *device, void *buffer, k_u32_t length,
+                              k_u32_t timeout_ms, k_u32_t *moved)
+{
+    struct xhci_class_device *class_device;
+    struct xhci_endpoint_state *endpoint;
+    struct xhci_trb trb;
+    k_u32_t done = 0;
+    k_u8_t code = 0;
+    k_u32_t left = 0;
+
+    if (device == NULL || buffer == NULL || moved == NULL) {
+        return -1;
+    }
+
+    *moved = 0;
+
+    class_device = class_device_of(device->slot);
+    endpoint = class_endpoint(class_device, device->interrupt_in_dci);
+
+    if (class_device == NULL || endpoint == NULL) {
+        return -1;
+    }
+
+    __asm__ volatile("" : : : "memory");
+
+    while (done < length) {
+        k_u64_t address = (k_u64_t)(uintptr_t)((const k_u8_t *)buffer + done);
+        k_size_t inside = (k_size_t)(address & (XHCI_PAGE - 1u));
+        k_size_t piece = XHCI_PAGE - inside;
+        k_u64_t physical;
+        bool last;
+
+        if (piece > (k_size_t)(length - done)) {
+            piece = (k_size_t)(length - done);
+        }
+
+        physical = usb_phys(address);
+
+        if (physical == 0u) {
+            return -1;
+        }
+
+        last = done + piece >= length;
+        trb.param = physical;
+        trb.status = (k_u32_t)piece;
+        trb.control = XHCI_TRB_TYPE(XHCI_TRB_NORMAL) | (last ? XHCI_TRB_IOC : XHCI_TRB_CHAIN);
+        (void)endpoint_put(endpoint, &trb);
+
+        done += (k_u32_t)piece;
+    }
+
+    __asm__ volatile("" : : : "memory");
+    doorbell(device->slot, endpoint->dci);
+
+    if (!wait_transfer(device->slot, endpoint->dci, timeout_ms, &code, &left)) {
+        return -1;
+    }
+
+    if (code != XHCI_CODE_SUCCESS && code != XHCI_CODE_SHORT) {
+        return -1;
+    }
+
+    *moved = left <= length ? length - left : length;
+
+    return 0;
+}
+
+int port_x86_64_xhci_interrupt(struct port_x86_64_usb_device *device, void *buffer, k_u32_t length,
+                               k_u32_t timeout_ms, k_u32_t *moved)
+{
+    int rc;
+
+    if (device == NULL) {
+        return -1;
+    }
+
+    if (k_mutex_lock(&g_xhci_lock) != 0) {
+        return -1;
+    }
+
+    rc = interrupt_transfer(device, buffer, length, timeout_ms, moved);
 
     k_mutex_unlock(&g_xhci_lock);
 
@@ -2220,8 +2321,15 @@ static bool class_attach(enum xhci_usb_class kind, k_u32_t slot, const struct xh
     config.length = length;
     config.value = g_config[5];
 
-    attached = kind == XHCI_USB_STORAGE ? port_x86_64_usb_storage_attach(&device->view, &config)
-                                        : port_x86_64_usb_net_attach(&device->view, &config);
+    if (kind == XHCI_USB_STORAGE) {
+        attached = port_x86_64_usb_storage_attach(&device->view, &config);
+    } else if (kind == XHCI_USB_NET) {
+        attached = port_x86_64_usb_net_attach(&device->view, &config);
+    } else if (kind == XHCI_USB_BT) {
+        attached = port_x86_64_usb_bt_attach(&device->view, &config);
+    } else {
+        attached = false;
+    }
 
     if (!attached) {
         device->used = false;
@@ -2242,6 +2350,8 @@ static void class_detach(struct xhci_class_device *device)
         port_x86_64_usb_storage_detach(&device->view);
     } else if (device->kind == XHCI_USB_NET) {
         port_x86_64_usb_net_detach(&device->view);
+    } else if (device->kind == XHCI_USB_BT) {
+        port_x86_64_usb_bt_detach(&device->view);
     }
 
     device->used = false;
@@ -2489,7 +2599,7 @@ static bool enumerate_device(const struct xhci_where *where, k_u32_t speed)
         return true;
     }
 
-    if ((kind == XHCI_USB_STORAGE || kind == XHCI_USB_NET) &&
+    if ((kind == XHCI_USB_STORAGE || kind == XHCI_USB_NET || kind == XHCI_USB_BT) &&
         class_attach(kind, slot, where, speed, vendor, product, chosen)) {
         return true;
     }
@@ -3799,6 +3909,8 @@ void port_x86_64_xhci_init(void)
     memset(g_class_device, 0, sizeof(g_class_device));
     memset(g_hubs, 0, sizeof(g_hubs));
     memset(g_slot_pool, 0, sizeof(g_slot_pool));
+
+    port_x86_64_bt_init();
 
     if (!port_x86_64_pci_find_class(0x0Cu, 0x03u, 0x30u, &device)) {
         kdebug("xhci: the machine has no USB 3.0 controller");

@@ -875,6 +875,47 @@ static int cmd_abi(int argc, char **argv)
     return KSHELL_OK;
 }
 
+static const struct kmod *bt_find_kmod(void)
+{
+    k_size_t i;
+    k_size_t count = kmod_count();
+
+    for (i = 0; i < count; i++) {
+        const struct kmod *mod = kmod_get(i);
+
+        if (mod != NULL && mod->name != NULL && strcmp(mod->name, "bt") == 0) {
+            return mod;
+        }
+    }
+
+    return NULL;
+}
+
+static int cmd_bt(int argc, char **argv)
+{
+    const struct kmod *mod;
+
+    if (argc > 1 && strcmp(argv[1], "info") != 0) {
+        kshell_printf("bt: usage: bt [info]\n");
+        return KSHELL_ERROR;
+    }
+
+    mod = bt_find_kmod();
+
+    if (mod == NULL) {
+        kshell_printf("bt: module not registered\n");
+        kshell_printf("bt: state unknown\n");
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("bt: state %s\n", kmod_state_name(mod->state));
+    if (mod->info[0] != '\0') {
+        kshell_printf("bt: %s\n", mod->info);
+    }
+
+    return mod->state == KMOD_OK || mod->state == KMOD_SKIP ? KSHELL_OK : KSHELL_ERROR;
+}
+
 static int cmd_modules(int argc, char **argv)
 {
     int problems;
@@ -1231,6 +1272,13 @@ static const struct builtin_command {
       .detail = "Runs the doctor of the modules and prints its report; the status is an\n"
                 "error when it found a problem.\n"},
      cmd_modules},
+    {"bt",
+     {.summary = "Bluetooth controller handshake status",
+      .usage = "bt [info]",
+      .detail = "Shows the BT module state (ok/unknown/skip/fail) and, when the\n"
+                "controller answered the HCI handshake, its version, revision,\n"
+                "manufacturer and BD_ADDR.\n"},
+     cmd_bt},
     {"abi",
      {.summary = "the system calls of the kernel",
       .usage = "abi",

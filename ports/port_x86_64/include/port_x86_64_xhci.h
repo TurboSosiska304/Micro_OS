@@ -64,9 +64,10 @@ void port_x86_64_usb_capture(bool on);
 /*
  * A device a class driver drives. The class driver - `src/usb_storage.c` for
  * a stick of the class 08/06/50, `src/usb_net.c` for a wire of the class
- * 02/06 - is handed one of these by the enumeration and asks the controller
- * for the transfers of its class through the calls below. It never sees a
- * ring, a TRB or a doorbell.
+ * 02/06, `src/usb_bt.c` for a Bluetooth controller of the class E0/01/01 -
+ * is handed one of these by the enumeration and asks the controller for the
+ * transfers of its class through the calls below. It never sees a ring, a
+ * TRB or a doorbell.
  */
 struct port_x86_64_usb_device {
     k_u8_t slot;
@@ -80,6 +81,9 @@ struct port_x86_64_usb_device {
     k_u8_t bulk_out_dci;
     k_u16_t bulk_in_packet;
     k_u16_t bulk_out_packet;
+    k_u8_t interrupt_in_dci;
+    k_u16_t interrupt_in_packet;
+    k_u8_t interrupt_in_interval;
 };
 
 /* The configuration a class driver reads while it attaches: the bytes of the
@@ -102,6 +106,8 @@ bool port_x86_64_usb_storage_attach(struct port_x86_64_usb_device *device,
                                     const struct port_x86_64_usb_config *config);
 bool port_x86_64_usb_net_attach(struct port_x86_64_usb_device *device,
                                 const struct port_x86_64_usb_config *config);
+bool port_x86_64_usb_bt_attach(struct port_x86_64_usb_device *device,
+                               const struct port_x86_64_usb_config *config);
 
 /*
  * The device left (a hub port lost it, or the controller did): the class
@@ -111,6 +117,7 @@ bool port_x86_64_usb_net_attach(struct port_x86_64_usb_device *device,
  */
 void port_x86_64_usb_storage_detach(struct port_x86_64_usb_device *device);
 void port_x86_64_usb_net_detach(struct port_x86_64_usb_device *device);
+void port_x86_64_usb_bt_detach(struct port_x86_64_usb_device *device);
 
 /*
  * Turn one endpoint of the device on: its address is the one of the
@@ -139,5 +146,13 @@ int port_x86_64_xhci_control(struct port_x86_64_usb_device *device, k_u8_t reque
  */
 int port_x86_64_xhci_bulk(struct port_x86_64_usb_device *device, bool in, void *buffer,
                           k_u32_t length, k_u32_t timeout_ms, k_u32_t *moved);
+
+/*
+ * One interrupt IN transfer, for an endpoint the class driver turned on with
+ * `port_x86_64_xhci_endpoint(..., false, ...)`. Same contract as bulk: 0 on
+ * success, bytes moved in `moved`, negative on a stall or a timeout.
+ */
+int port_x86_64_xhci_interrupt(struct port_x86_64_usb_device *device, void *buffer, k_u32_t length,
+                               k_u32_t timeout_ms, k_u32_t *moved);
 
 #endif /* MICRO_OS_PORT_X86_64_XHCI_H */
