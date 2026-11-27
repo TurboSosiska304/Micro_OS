@@ -940,7 +940,6 @@ static void gpu_intel_detile_x(const k_u8_t *src, k_u8_t *dst, k_u32_t width, k_
     }
 }
 
-
 static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed);
 
 static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
@@ -964,8 +963,7 @@ static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
     if (!gpu_intel_plane_restore(info, s_linear.old_control, s_linear.old_stride,
                                  s_linear.old_surface) ||
         !gpu_intel_wait_frame(info) || !gpu_intel_wait_frame(info) ||
-        (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) !=
-            s_linear.old_surface) {
+        (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) != s_linear.old_surface) {
         kerror("gpu: display enable: original plane is not live after rollback");
         return false;
     }
@@ -998,8 +996,7 @@ static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
                               (k_u8_t)(info->framebuffer.bpp * 8u));
 
     if (ok) {
-        kinfo("gpu: plane-linear: restored original plane 0x%08x",
-              (unsigned)info->plane_surface);
+        kinfo("gpu: plane-linear: restored original plane 0x%08x", (unsigned)info->plane_surface);
     }
 
     return ok;
@@ -1037,7 +1034,8 @@ static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
                           gpu_intel_format_name(info->framebuffer.format),
                           gpu_intel_tiling_name(info->framebuffer.tiling));
         }
-        kshell_printf("gpu: display enable dry-run: nothing written; use gpu display enable --yes\n");
+        kshell_printf(
+            "gpu: display enable dry-run: nothing written; use gpu display enable --yes\n");
         kshell_printf("gpu: owner checklist: if the laptop shows a black screen, reboot restores "
                       "the firmware plane\n");
         return 0;
@@ -1046,7 +1044,8 @@ static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
     if (info->framebuffer.tiling != GPU_INTEL_TILE_LINEAR) {
         rc = gpu_intel_plane_linear(info, true);
         if (rc != 0) {
-            kshell_printf("gpu: display enable: plane-linear failed; plane not changed to linear\n");
+            kshell_printf(
+                "gpu: display enable: plane-linear failed; plane not changed to linear\n");
             return -1;
         }
     }
@@ -1110,8 +1109,8 @@ static int gpu_intel_display_enable(struct gpu_intel_info *info, bool confirmed)
 
     rc = k_blit_present(&screen, &src);
     if (rc != 0) {
-        const char *why = (rc == 1) ? "k_blit_present returned kernel copy"
-                                    : "k_blit_present returned an error";
+        const char *why =
+            (rc == 1) ? "k_blit_present returned kernel copy" : "k_blit_present returned an error";
 
         kerror("gpu: display enable: present verification failed: %s (rc=%d)", why, rc);
         kshell_printf("gpu: display enable: %s (rc=%d); restoring plane\n", why, rc);
