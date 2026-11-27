@@ -1,0 +1,23 @@
+/*
+ * Micro OS — the AP trampoline as bytes of the kernel image.
+ *
+ * The BIOS loader copies ap_trampoline.S to the physical page 0x7000 before it
+ * enters the kernel, but a firmware loader cannot do that: it has left the
+ * boot services and has no place to put the bytes it did not carry. The kernel
+ * carries the same blob and installs it while the identity map of the loader
+ * is still writable, before its own page tables mark the page executable and
+ * read-only. Both boots therefore hand an AP the same code, and the signature
+ * at 0x7F00 tells the bring-up that the page is really there.
+ *
+ * The file is generated because .incbin needs the path of the binary the
+ * custom command of CMake links; the bytes are never typed twice.
+ */
+    .section .rodata.ap_trampoline, "a", @progbits
+    .balign 4096
+    .global port_x86_64_ap_trampoline_image
+port_x86_64_ap_trampoline_image:
+    .incbin "@AP_TRAMPOLINE_BIN@"
+    .global port_x86_64_ap_trampoline_image_end
+port_x86_64_ap_trampoline_image_end:
+
+    .section .note.GNU-stack, "", @progbits

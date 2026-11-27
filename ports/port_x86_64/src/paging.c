@@ -37,6 +37,7 @@
 
 #include "kernel/log.h"
 #include "kernel/mm.h"
+#include "kernel/port/cpu.h"
 #include "kernel/port/lock.h"
 #include "port_x86_64_task.h"
 
@@ -101,25 +102,26 @@
 
 /*
  * The two bits of CR4 that keep the kernel out of the memory of a program
- * (ADR 0052). SMEP refuses a fetch of a page of ring 3 from ring 0: the
- * kernel is entered with the CR3 of the program, and without it a stray jump
- * into the window would run the bytes of the program with the privilege of
- * the kernel. SMAP refuses a read or a write of such a page unless AC of
- * RFLAGS is set, which is what makes every copy through a pointer of a
- * program an explicit window (port_x86_64_user_access_begin).
+ * (ADR 0052). SMEP refuses a fetch of a page of ring 3 from ring 0 and SMAP
+ * refuses a read or a write of one unless AC of RFLAGS is set. The bits are
+ * the right boundary for a kernel whose address space is separate from the
+ * program's, which is the promise of ADR 0052.
  *
- * Neither bit exists on every processor: the port asks CPUID at the boot and
- * turns on what it finds, so a machine of QEMU with the bits of 2014 behaves
- * as one and a processor without them keeps the supervisor bit of every
- * kernel page as the boundary between the two worlds.
+ * This port does not keep that promise yet on real metal: the kernel enters
+ * a program on tables that still share the low map with it, and on a Ryzen
+ * machine the first program took a general protection fault from these bits
+ * before it printed a byte. The boot therefore clears both bits on every
+ * core and says the CR4 it read and the one it wrote; the supervisor bit of
+ * the pages and the checks of the copy edge are the boundary until there is
+ * a separate map for the kernel (the debt of docs/debts.md, ADR 0052). A
+ * processor that does not advertise either bit loses nothing.
  */
 #define CR4_SMEP ((k_u64_t)1u << 20)
 #define CR4_SMAP ((k_u64_t)1u << 21)
 
-/* What the boot found and turned on: the two answers of the two calls of the
- * header. A core of a two-core machine probes the same bits and writes the
- * same number, so the pair is not a race that matters: it is a fact about the
- * processor, not a state of one core. */
+/* What the boot found and left on: always false while the policy above
+ * holds. A core of a many-core machine probes the same bits and writes the
+ * same number, so the pair is a fact about the processor, not a race. */
 static bool g_smep_on;
 static bool g_smap_on;
 
@@ -832,10 +834,12 @@ void port_x86_64_paging_init_cpu(void)
     __asm__ volatile("movq %0, %%cr0" : : "r"(cr0) : "memory");
 
     /*
-     * SMEP and SMAP (ADR 0052), when the processor advertises them. CPUID
-     * leaf 7 is only there when the highest basic leaf is at least 7; the bit
-     * 7 of EBX is SMEP and the bit 20 is SMAP. A CR4 bit a processor does not
-     * know is a general protection fault, so the question comes first.
+     * SMEP and SMAP (ADR 0052) are cleared here, not enabled. CPUID leaf 7
+     * is only there when the highest basic leaf is at least 7; the bit 7 of
+     * EBX is SMEP and the bit 20 is SMAP. A CR4 bit a processor does not
+     * know is a general protection fault, so clearing the two is safe on
+     * every machine, while a firmware that left them on is the case that
+     * stopped the first program on a Ryzen desktop.
      */
     smep = false;
     smap = false;
@@ -873,18 +877,28 @@ void port_x86_64_paging_init_cpu(void)
 
     __asm__ volatile("movq %%cr4, %0" : "=r"(cr4));
 
-    if (smep) {
-        cr4 |= CR4_SMEP;
+    {
+        k_u64_t before = cr4;
+
+        cr4 &= ~(CR4_SMEP | CR4_SMAP);
+        __asm__ volatile("movq %0, %%cr4" : : "r"(cr4) : "memory");
+
+        /*
+         * The line is on the screen and COM1 before the first program runs,
+         * so a machine whose firmware set the bits says what the port did
+         * about it. Only the boot prints: an application processor makes the
+         * same change to its own register in silence.
+         */
+        if (k_port_cpu_id() == 0u) {
+            kinfo("x86-64: cr4 0x%08x%08x -> 0x%08x%08x (smep/smap off, advertised %d/%d)",
+                  (unsigned)(before >> 32), (unsigned)before, (unsigned)(cr4 >> 32), (unsigned)cr4,
+                  smep ? 1 : 0, smap ? 1 : 0);
+        }
     }
 
-    if (smap) {
-        cr4 |= CR4_SMAP;
-    }
-
-    __asm__ volatile("movq %0, %%cr4" : : "r"(cr4) : "memory");
-
-    g_smep_on = smep;
-    g_smap_on = smap;
+    /* The CPUID answers are kept for the log; the bits are off by policy. */
+    g_smep_on = false;
+    g_smap_on = false;
 
     /*
      * PAT is per core too. Entry 5 is reserved for the framebuffer and the

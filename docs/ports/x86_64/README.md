@@ -598,10 +598,15 @@ port allocates a 64 KiB stack, writes four words at the physical page
 `port_x86_64_ap_entry()` and the kernel number of the core), and sends the
 sequence of the PC through the local APIC: INIT, ten milliseconds, the
 start-up IPI with vector 7, two hundred microseconds, the start-up IPI again.
-Vector 7 names the page `0x7000`, where the loader copied the trampoline of
-`ap_trampoline.S`: sixteen-bit code that opens A20, loads a temporary GDT,
-turns on PAE and long mode with the kernel's page tables and calls the C
-entry on the stack from the parameter page.
+Vector 7 names the page `0x7000` with the trampoline of `ap_trampoline.S`:
+sixteen-bit code that opens A20, loads a temporary GDT, turns on PAE and long
+mode with the kernel's page tables and calls the C entry on the stack from
+the parameter page. The BIOS loader copies the trampoline there; a firmware
+loader does not carry it, so the kernel carries the same bytes and installs
+them before its own page tables make the page executable and read-only. The
+bring-up checks the signature at `0x7F00` and sends no SIPI to a page that
+does not have it. Each phase is printed to the screen and COM1 as it happens,
+and the `smp` command and `dmesg` name the last phase of every core afterwards.
 
 The C of the core (`src/smp.c`) sets its identity first, then builds its GDT,
 TSS and IST (`src/gdt.c`), loads the table of the interrupts the boot built,

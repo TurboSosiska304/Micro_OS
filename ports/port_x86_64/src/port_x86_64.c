@@ -33,6 +33,7 @@
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_apic.h"
+#include "port_x86_64_smp.h"
 #include "port_x86_64_acpi.h"
 #include "port_x86_64_ahci.h"
 #include "port_x86_64_e1000e.h"
@@ -2947,6 +2948,12 @@ void port_x86_64_init(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys
      */
     memory_bring_up(info);
     heap_init(info);
+    /*
+     * Put the AP trampoline in low memory while the identity map of the
+     * loader still lets the kernel write there. The BIOS loader has already
+     * done it and the signature makes that a no-op; a UEFI loader did not.
+     */
+    port_x86_64_ap_trampoline_install();
     port_x86_64_paging_init();
 
     /*

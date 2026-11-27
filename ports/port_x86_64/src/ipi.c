@@ -43,6 +43,32 @@
  */
 #define LAPIC_ICR_TIMEOUT_US 10000u
 
+/* The command the last wait was for, and how long it waited before giving up.
+ * The bring-up reads both to say at which step a core was lost. */
+static k_u32_t g_icr_step;
+static k_u32_t g_icr_waited_us;
+
+void port_x86_64_apic_last_icr(k_u32_t *step, k_u32_t *waited_us)
+{
+    if (step != NULL) {
+        *step = g_icr_step;
+    }
+    if (waited_us != NULL) {
+        *waited_us = g_icr_waited_us;
+    }
+}
+
+static k_u32_t icr_elapsed_us(k_u64_t start)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return 0u;
+    }
+
+    return (k_u32_t)(((port_rdtsc() - start) * 1000000u) / info->cpu_hz);
+}
+
 /* The page of the APIC, owned by src/lapic.c (see the comment there). */
 extern volatile k_u32_t *port_x86_64_apic_page(void);
 
@@ -93,6 +119,7 @@ static bool icr_wait(k_u32_t timeout_us)
     k_u64_t start;
 
     if (info == NULL || !info->tsc_calibrated || info->cpu_hz == 0u) {
+        g_icr_waited_us = 0u;
         return false;
     }
 
@@ -101,10 +128,13 @@ static bool icr_wait(k_u32_t timeout_us)
 
     do {
         if ((lapic_read(LAPIC_REG_ICR_LOW) & LAPIC_ICR_DELIVERY_STATUS) == 0u) {
+            g_icr_step = 0u;
+            g_icr_waited_us = 0u;
             return true;
         }
     } while ((port_rdtsc() - start) < span);
 
+    g_icr_waited_us = icr_elapsed_us(start);
     return false;
 }
 
@@ -125,6 +155,7 @@ void port_x86_64_apic_send_ipi(k_u32_t apic_id, k_u32_t vector)
 
     /* Fixed delivery, physical destination, level asserted: the vector in
      * the low byte is the gate of the other core that runs. */
+    g_icr_step = 4u; /* the wake of a running core */
     icr_send(apic_id, (vector & 0xFFu) | LAPIC_ICR_ASSERT | LAPIC_DELIVERY_FIXED);
     (void)icr_wait(LAPIC_ICR_TIMEOUT_US);
 }
@@ -140,11 +171,13 @@ bool port_x86_64_apic_send_init(k_u32_t apic_id, k_u32_t timeout_us)
      * firmware sends both, and a chipset that sees the level stay asserted
      * would hold the destination in the reset state.
      */
+    g_icr_step = 1u; /* the assert of INIT */
     icr_send(apic_id, LAPIC_ICR_ASSERT | LAPIC_DELIVERY_INIT);
     if (!icr_wait(timeout_us)) {
         return false;
     }
 
+    g_icr_step = 2u; /* the deassert of INIT */
     icr_send(apic_id, LAPIC_ICR_DEASSERT | LAPIC_DELIVERY_INIT);
     return icr_wait(timeout_us);
 }
@@ -156,6 +189,7 @@ bool port_x86_64_apic_send_startup(k_u32_t apic_id, k_u32_t vector, k_u32_t time
     }
 
     /* The vector names the page the core starts from: 0x07 is 0x7000. */
+    g_icr_step = 3u; /* the start-up IPI */
     icr_send(apic_id, LAPIC_ICR_ASSERT | LAPIC_DELIVERY_STARTUP | (vector & 0xFFu));
     return icr_wait(timeout_us);
 }

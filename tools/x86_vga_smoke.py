@@ -3689,9 +3689,9 @@ def run_shell_desktop(
             expect("the shell of the machine is up", machine.wait_serial(PROMPT, timeout),
                    "the shell never printed its prompt")
             boot = machine.read_serial()
-            expect("the machine advertises the two bits",
-                   "x86-64: SMEP and SMAP are on" in boot,
-                   "the boot did not say that SMAP is on: the machine would not check the window")
+            expect("the machine clears the two bits by policy",
+                   "x86-64: cr4 0x" in boot and "smep/smap off" in boot,
+                   "the boot did not say that SMEP/SMAP were cleared; the CR4 line is missing")
 
             machine.type_line("exec /bin/wm")
             expect("the server takes the screen",

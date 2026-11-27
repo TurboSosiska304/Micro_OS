@@ -134,6 +134,15 @@ k_u32_t port_x86_64_ioapic_line_cpu(k_u32_t isa_irq);
 bool port_x86_64_apic_send_init(k_u32_t apic_id, k_u32_t timeout_us);
 bool port_x86_64_apic_send_startup(k_u32_t apic_id, k_u32_t vector, k_u32_t timeout_us);
 
+/*
+ * What happened to the last command register: 0 when it finished, 1 the
+ * assert of INIT, 2 the deassert of INIT, 3 a start-up IPI, 4 a wake IPI. The
+ * second word is how many microseconds the wait spent before it gave up; the
+ * bring-up prints both, so a core that is not there says which command was
+ * left in the air instead of only saying that something failed.
+ */
+void port_x86_64_apic_last_icr(k_u32_t *step, k_u32_t *waited_us);
+
 /* --- the bodies of the vectors, called by interrupts.S --- */
 
 /* The timer of one core: the tick of the kernel, then the scheduler. */
