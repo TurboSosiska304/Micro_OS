@@ -1278,23 +1278,6 @@ int vfs_truncate(struct vfs_file *file, k_u64_t size)
     return rc;
 }
 
-int vfs_fsync(struct vfs_file *file)
-{
-    int rc;
-
-    if (file == NULL || file->ops == NULL) {
-        return KERR_INVAL;
-    }
-
-    if (file->ops->fsync == NULL) {
-        return KERR_NOTSUP;
-    }
-
-    rc = file->ops->fsync(file->fs, file);
-
-    return rc;
-}
-
 int vfs_close(struct vfs_file *file)
 {
     int rc;

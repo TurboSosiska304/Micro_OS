@@ -444,13 +444,6 @@ int vfs_truncate(struct vfs_file *file, k_u64_t size);
  */
 int vfs_fsync(struct vfs_file *file);
 int vfs_close(struct vfs_file *file);
-/*
- * Flush the dirty pages of an open file through the page cache and then ask
- * the filesystem to persist its own metadata. It answers 0, or a negative
- * error when the medium could not be written; it does not promise the medium
- * - that is the guarantee of the journal, which comes after this slice.
- */
-int vfs_fsync(struct vfs_file *file);
 /* Flush the dirty pages of every file in the page cache. */
 int vfs_sync(void);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
