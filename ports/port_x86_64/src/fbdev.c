@@ -120,7 +120,7 @@ static int fbdev_present(k_u64_t argument)
         return KERR_INVAL;
     }
 
-    bytes = (k_u64_t)request.pitch * (k_u64_t)request.height * FB_PIXEL_BYTES;
+    bytes = (k_u64_t)request.pitch * (k_u64_t)request.height * (k_u64_t)fb_pixel_bytes(info.format);
     if (bytes > (k_u64_t)((k_size_t)-1)) {
         return KERR_TOOBIG;
     }
@@ -129,6 +129,8 @@ static int fbdev_present(k_u64_t argument)
     source.width = request.width;
     source.height = request.height;
     source.pitch = request.pitch;
+    source.format = info.format;
+    destination.format = info.format;
 
     return k_blit_present(&destination, &source);
 }

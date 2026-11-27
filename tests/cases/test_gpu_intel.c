@@ -92,6 +92,13 @@ void port_x86_64_frame_release(k_u64_t address)
     (void)address;
 }
 
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp);
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp)
+{
+    (void)format;
+    (void)bpp;
+}
+
 static void test_laptop_identity(void)
 {
     const struct gpu_intel_id *id = gpu_intel_id_lookup(0x8086u, 0x5917u);
