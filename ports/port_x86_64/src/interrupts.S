@@ -168,6 +168,7 @@ isr_exception_common:
     je 2f
     cmpq $0x3b, 32(%rsp)
     je 2f
+    lock incl port_x86_64_bad_ss_clamps(%rip)
     movq $0x23, 32(%rsp)
 2:
     iretq
@@ -247,6 +248,7 @@ isr_exception_common:
     je 2f
     cmpq $0x3b, 32(%rsp)
     je 2f
+    lock incl port_x86_64_bad_ss_clamps(%rip)
     movq $0x23, 32(%rsp)
 2:
     iretq
@@ -569,6 +571,7 @@ ksys_return_iret:
     je 1f
     cmpq $0x3b, 32(%rsp)
     je 1f
+    lock incl port_x86_64_bad_ss_clamps(%rip)
     movq $0x23, 32(%rsp)
 1:
     iretq

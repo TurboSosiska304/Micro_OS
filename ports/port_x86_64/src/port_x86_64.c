@@ -937,6 +937,9 @@ static void com1_put_hex64(k_u64_t value)
     }
 }
 
+/* Count of iretq returns where SS was clamped (defensive, see interrupts.S). */
+k_u32_t port_x86_64_bad_ss_clamps = 0;
+
 static void com1_put_hex16(k_u64_t value)
 {
     static const char digits[] = "0123456789abcdef";
