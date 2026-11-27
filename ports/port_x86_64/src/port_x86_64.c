@@ -2423,7 +2423,7 @@ const char *k_port_arch(void)
 }
 
 #define PORT_API_MAJOR 1u
-#define PORT_API_MINOR 15u
+#define PORT_API_MINOR 16u
 
 _Static_assert(PORT_API_MAJOR == KERNEL_PORT_API_VERSION_MAJOR,
                "port_x86_64 does not speak the contract of this kernel");
