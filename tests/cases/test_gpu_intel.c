@@ -10,6 +10,7 @@
 #include "tests/tests.h"
 
 #include "gpu_intel.h"
+#include "kernel/fb_ops.h"
 #include "port_x86_64.h"
 #include "port_x86_64_pci.h"
 
@@ -97,6 +98,15 @@ void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp)
 {
     (void)format;
     (void)bpp;
+}
+
+bool port_x86_64_fb_surface(struct k_fb_surface *out);
+bool port_x86_64_fb_surface(struct k_fb_surface *out)
+{
+    if (out != NULL) {
+        memset(out, 0, sizeof(*out));
+    }
+    return false;
 }
 
 static void test_laptop_identity(void)

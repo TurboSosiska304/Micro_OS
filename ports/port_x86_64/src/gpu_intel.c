@@ -941,6 +941,8 @@ static void gpu_intel_detile_x(const k_u8_t *src, k_u8_t *dst, k_u32_t width, k_
 }
 
 
+static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed);
+
 static bool gpu_intel_plane_linear_restore(struct gpu_intel_info *info)
 {
     k_u32_t live_offset;

@@ -24,6 +24,7 @@
 
 #include "kernel/blit.h"
 #include "kernel/errno.h"
+#include "kernel/fb.h"
 #include "kernel/fb_ops.h"
 #include "kernel/types.h"
 
@@ -461,10 +462,56 @@ static void test_blit_present(void)
     KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
 }
 
+static void test_blit_present_format(void)
+{
+    struct k_fb_surface dst;
+    struct k_fb_surface src;
+    struct k_fb_ops ops;
+    static k_u32_t dst_px[4 * 2];
+    static k_u32_t src_px[4 * 2];
+    k_size_t i;
+
+    ktest_begin("blit: present chooses device or copy by format");
+
+    for (i = 0u; i < K_ARRAY_SIZE(dst_px); i++) {
+        dst_px[i] = 0u;
+        src_px[i] = 0x00112233u + (k_u32_t)i;
+    }
+    memset(&dst, 0, sizeof(dst));
+    memset(&src, 0, sizeof(src));
+    dst.base = (k_u16_t *)(void *)dst_px;
+    dst.width = 4u;
+    dst.height = 2u;
+    dst.pitch = 4u;
+    dst.format = FB_FORMAT_XRGB8888;
+    src = dst;
+    src.base = (k_u16_t *)(void *)src_px;
+
+    device_reset();
+    memset(&ops, 0, sizeof(ops));
+    ops.present = device_present;
+    g_device.present_rc = 0;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&ops, &g_device), 0);
+    KT_CHECK_INT_EQ(k_blit_present(&dst, &src), 0);
+    KT_CHECK_INT_EQ(g_device.presents, 1);
+
+    g_device.present_rc = KERR_NOTSUP;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&ops, &g_device), 0);
+    KT_CHECK_INT_EQ(k_blit_present(&dst, &src), 1);
+    KT_CHECK_INT_EQ(g_device.presents, 2);
+    KT_CHECK_INT_EQ(memcmp(dst_px, src_px, sizeof(src_px)), 0);
+
+    src.format = FB_FORMAT_RGB565;
+    KT_CHECK_INT_EQ(k_blit_present(&dst, &src), KERR_INVAL);
+
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+}
+
 void test_fb_ops(void)
 {
     test_fb_ops_software();
     test_fb_ops_clip();
     test_fb_ops_device();
     test_blit_present();
+    test_blit_present_format();
 }
