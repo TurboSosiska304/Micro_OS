@@ -48,6 +48,72 @@ static bool gpu_intel_stride_unit(k_u8_t tiling, k_u8_t bpp, k_u32_t *unit, k_u3
     }
 }
 
+const char *gpu_intel_format_name(k_u8_t format)
+{
+    switch (format) {
+    case GPU_INTEL_FORMAT_XRGB_2101010:
+        return "XRGB2101010";
+    case GPU_INTEL_FORMAT_XRGB_8888:
+        return "XRGB8888";
+    case GPU_INTEL_FORMAT_RGB_565:
+        return "RGB565";
+    default:
+        return "unknown";
+    }
+}
+
+const char *gpu_intel_tiling_name(k_u8_t tiling)
+{
+    switch (tiling) {
+    case GPU_INTEL_TILE_LINEAR:
+        return "linear";
+    case GPU_INTEL_TILE_X:
+        return "X-tiled";
+    case GPU_INTEL_TILE_Y:
+        return "Y-tiled";
+    case GPU_INTEL_TILE_YF:
+        return "Yf-tiled";
+    default:
+        return "unknown";
+    }
+}
+
+struct gpu_intel_plane_ctl gpu_intel_plane_ctl_decode(k_u32_t plane_control)
+{
+    struct gpu_intel_plane_ctl out;
+    k_u8_t bpp = 0u;
+    k_u32_t unit = 0u;
+    k_u32_t tile_height = 0u;
+
+    out.format = (k_u8_t)((plane_control & GPU_INTEL_PLANE_FORMAT_MASK) >> 24);
+    out.tiling = (k_u8_t)((plane_control & GPU_INTEL_PLANE_TILE_MASK) >> 10);
+    out.bpp = 0u;
+    out.stride_unit = 0u;
+    out.valid = false;
+
+    if (!gpu_intel_format_bpp(out.format, &bpp) ||
+        !gpu_intel_stride_unit(out.tiling, bpp, &unit, &tile_height)) {
+        return out;
+    }
+
+    out.bpp = bpp;
+    out.stride_unit = unit;
+    out.valid = true;
+    (void)tile_height;
+    return out;
+}
+
+bool gpu_intel_plane_ctl_present_ok(k_u32_t plane_control)
+{
+    struct gpu_intel_plane_ctl ctl = gpu_intel_plane_ctl_decode(plane_control);
+
+    if (!ctl.valid || ctl.tiling != GPU_INTEL_TILE_LINEAR) {
+        return false;
+    }
+
+    return ctl.format == GPU_INTEL_FORMAT_RGB_565 || ctl.format == GPU_INTEL_FORMAT_XRGB_8888;
+}
+
 enum gpu_intel_ggtt_result gpu_intel_ggtt_decode_fb(const volatile k_u64_t *entries,
                                                     k_size_t entry_count, k_u32_t plane_surface,
                                                     k_u32_t plane_stride, k_u32_t plane_control,

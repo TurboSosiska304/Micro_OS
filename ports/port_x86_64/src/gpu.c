@@ -396,13 +396,15 @@ static int cmd_gpu(int argc, char **argv)
     if (gpu_intel_command != NULL &&
         ((argc == 2 && strcmp(argv[1], "ggtt-test") == 0) ||
          (argc == 2 && strcmp(argv[1], "flip") == 0) ||
-         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0))) {
+         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0) ||
+         (argc == 2 && strcmp(argv[1], "plane-linear") == 0) ||
+         (argc == 3 && strcmp(argv[1], "plane-linear") == 0 && strcmp(argv[2], "--yes") == 0))) {
         return gpu_intel_command(argc, argv);
     }
 
     kshell_printf("usage: gpu [info|vramtest [--write]|vrammap|vramalloc <kib>|vramfill <id> <pat>|"
                   "vramread <id>|vramfree <id>|vramdump|amdflip [--yes] [--keep]|"
-                  "ggtt-test|flip [--yes]]\n");
+                  "ggtt-test|flip [--yes]|plane-linear [--yes]]\n");
     return KSHELL_USAGE;
 }
 
@@ -412,12 +414,13 @@ int port_x86_64_gpu_register(void)
         .summary = "display controller probe",
         .usage = "gpu "
                  "[info|vramtest|vrammap|vramalloc|vramfill|vramread|vramfree|vramdump|amdflip|"
-                 "ggtt-test|flip]",
+                 "ggtt-test|flip|plane-linear]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
                   "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a block;\n"
                   "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
                   "releases it; vramdump lists blocks. amdflip [--yes] [--keep] copies\n"
-                  "a frame to VRAM and flips the scanout. Intel: ggtt-test, flip [--yes].\n",
+                  "a frame to VRAM and flips the scanout. Intel: ggtt-test, flip [--yes],\n"
+                  "plane-linear [--yes].\n",
     };
     int rc;
 
