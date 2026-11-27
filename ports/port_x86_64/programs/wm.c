@@ -1049,13 +1049,37 @@ static void flush_pending(void)
             present[present_count++] = cursor;
         }
 
-        present_started = tsc_now();
-        (void)uiprog_present(&g_screen, present, present_count);
-        present_elapsed = tsc_to_ns(tsc_now() - present_started);
-        g_frames.present_calls++;
-        g_frames.present_tsc_ns += present_elapsed;
-        if (present_elapsed > g_frames.slowest_present_tsc_ns) {
-            g_frames.slowest_present_tsc_ns = present_elapsed;
+        {
+            int present_rc;
+            unsigned frame_no = g_frames.frames + 1u;
+
+            if (frame_no <= 32u || (frame_no % 16u) == 0u) {
+                char trace[80];
+                int trace_len =
+                    snprintf(trace, sizeof(trace), "wm: frame %u present...\n", frame_no);
+                if (trace_len > 0) {
+                    (void)write(ULIBC_STDOUT, trace, (size_t)trace_len);
+                }
+            }
+
+            present_started = tsc_now();
+            present_rc = uiprog_present(&g_screen, present, present_count);
+            present_elapsed = tsc_to_ns(tsc_now() - present_started);
+            g_frames.present_calls++;
+            g_frames.present_tsc_ns += present_elapsed;
+            if (present_elapsed > g_frames.slowest_present_tsc_ns) {
+                g_frames.slowest_present_tsc_ns = present_elapsed;
+            }
+
+            if (present_rc != 0 || frame_no <= 32u || (frame_no % 16u) == 0u) {
+                char trace[96];
+                int trace_len =
+                    snprintf(trace, sizeof(trace), "wm: frame %u present rc=%d %llu ns\n", frame_no,
+                             present_rc, (unsigned long long)present_elapsed);
+                if (trace_len > 0) {
+                    (void)write(ULIBC_STDOUT, trace, (size_t)trace_len);
+                }
+            }
         }
     }
     g_damage_count = 0;

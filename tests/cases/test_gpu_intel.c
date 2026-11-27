@@ -16,6 +16,8 @@
 
 #include <string.h>
 
+#include "kernel/fb.h"
+
 static k_u16_t s_vendor;
 static k_u16_t s_device;
 static k_u8_t s_revision;
@@ -98,6 +100,18 @@ void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp)
 {
     (void)format;
     (void)bpp;
+}
+
+bool port_x86_64_fb_info(struct fb_info *out);
+bool port_x86_64_fb_info(struct fb_info *out)
+{
+    if (out == NULL) {
+        return false;
+    }
+    memset(out, 0, sizeof(*out));
+    out->format = FB_FORMAT_RGB565;
+    out->bpp = 16u;
+    return true;
 }
 
 static void test_laptop_identity(void)

@@ -243,6 +243,35 @@ static void present_all(void)
     present_cells(0, s_screen.rows - 1);
 }
 
+/* A rectangle of pixels that changed in the shadow: convert those lines into
+ * the real GOP frame. fbdev writes go through the shadow and bypass the
+ * console screen ops, so nothing else converts them on a 32bpp GOP machine. */
+void port_x86_64_gop_present_rect(int x, int y, int w, int h)
+{
+    int first;
+    int last;
+
+    (void)x;
+    (void)w;
+
+    if (s_direct || s_shadow == NULL || s_frame == NULL || h <= 0) {
+        return;
+    }
+
+    first = y < 0 ? 0 : y;
+    last = y + h;
+    if (last > s_height) {
+        last = s_height;
+    }
+    if (first >= last) {
+        return;
+    }
+
+    for (; first < last; first++) {
+        convert_line(first);
+    }
+}
+
 /* --- the screen of the console --------------------------------------------- */
 
 static void gop_clear(k_u8_t attr)
