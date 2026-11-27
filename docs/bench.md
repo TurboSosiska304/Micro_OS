@@ -500,6 +500,47 @@ second boot with `qemu64,-pat` requires the write-through PTE
 `0x800000000000008b` and the same pixels.
 The owner's laptop is the machine that can measure the real WC gain.
 
+## Two RAM surfaces and the first present (2.1)
+
+The measurement was taken on **27 November 2026** on an AMD Ryzen 5 5600 host
+(AuthenticAMD, 12 logical CPUs), QEMU 11.1.3 TCG, one emulated processor,
+256 MB and `-vga std`. The before tree is `e57cc873`; the after tree is
+`0ad3e424`. Each side booted the shell-started desktop seven times, waited for
+`wm: the desktop is up`, closed its two windows and read the TSC line from
+`frames_report()`. No build or second QEMU ran beside a sample. The one-minute
+load average during the series was 1.2-1.5 rather than the preferred below 1,
+so these are lane numbers, not a release-gate replacement; the full
+`make x86-vga-smoke` gate passed all 284 checks separately.
+
+| Work | Before | After | Change | Spread before / after |
+|---|---:|---:|---:|---:|
+| `wm` first frame | **6.768024 ms** | **5.928155 ms** | -12.41 % | 2.59 % / 9.70 % |
+| `wm` first present | not instrumented | **1.305167 ms** | — | 29.77 % |
+
+The first-frame runs were 6 918 769, 6 815 402, 6 763 261, 6 743 212,
+6 767 082, 6 794 724 and 6 768 024 ns before, and 5 824 633, 5 826 289,
+5 928 155, 5 878 132, 6 001 009, 6 399 792 and 5 972 629 ns after. The first
+present after the change was 1 276 604, 1 305 167, 1 300 157, 1 299 612,
+1 325 247, 1 665 154 and 1 320 421 ns. Its wide spread is the shared host; the
+first-frame medians are the comparison, not the fastest sample.
+
+QEMU has neither Intel nor AMD page-flip callback in this run, so the after
+side took the quiet software fallback. The flip-versus-copy difference itself
+is expected to be small here: the video memory is ordinary RAM and TCG does
+not model a separate VRAM traffic path. The measured first-frame improvement
+is **not** a flip gain. It comes from the fallback's first present: one direct
+whole-surface kernel copy replaces the old sequence of strip writes and the
+userland transfer-buffer copies. After that first answer `uiprog` remembers
+the refusal and later frames use the old damage-copy path.
+
+On the laptop the expected gain is the removal of the steady-state 2 MiB RAM
+copy, and only on the compatible Intel linear-RGB565 path. The first successful
+flip still seeds the spare surface once, and the driver still waits for
+`SURFLIVE`; that vsync wait is part of the measured present. A third surface
+(or a composition task which runs during the wait) remains future work. The
+reconnaissance's X-tiled XRGB8888 plane is incompatible and deliberately takes
+the same copy fallback rather than changing mode or pixel format.
+
 ## Comparing two releases
 
 The JSON is the machine-readable half of the same runs:
