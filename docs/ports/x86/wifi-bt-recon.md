@@ -75,12 +75,26 @@ the live confirmation command above is authoritative for the machine at hand.
   from the live descriptor dump (`lsusb -v -d 8087:0a2b`) when the laptop
   returns. The implementation must not hardcode "probably 0x81"; it reads the
   descriptors.
-* **HCI commands used by the M1 handshake** (Bluetooth Core Spec, Vol 4 Part E):
+* **HCI surface implemented** (Bluetooth Core Spec, Vol 4 Part E):
   * `HCI_Reset`, opcode `0x0C03` (OGF 0x03, OCF 0x0003).
+  * `HCI_Write_Local_Name`, opcode `0x0C13`, with the fixed 248-byte name
+    parameter (`bt name <text>`).
+  * `HCI_Inquiry`, opcode `0x0401`, and `HCI_Inquiry_Cancel`, opcode `0x0402`
+    (`bt scan on|off`). The command is sent and its acceptance is parsed;
+    inquiry results are not collected.
   * `HCI_Read_Local_Version_Information`, opcode `0x1001`.
   * `HCI_Read_BD_ADDR`, opcode `0x1009`.
-  Events come back as `Command Complete` (`0x0E`) with the opcode and return
-  parameters.
+  Events come back on interrupt IN. The parser handles the packets in the
+  table below; a command waiter consumes unrelated valid events instead of
+  mistaking the first packet for its answer.
+
+| Event | Code | Parameter length | What this slice does |
+|---|---:|---:|---|
+| Disconnection Complete | `0x05` | 4 | Parses status, connection handle and reason; logs it. |
+| Command Complete | `0x0E` | 3 + return parameters | Matches the opcode and reads the command status. |
+| Command Status | `0x0F` | 4 | Parses status, command-packet credit and opcode. |
+| Hardware Error | `0x10` | 1 | Parses the hardware code and marks the module failed. |
+| Number Of Completed Packets | `0x13` | 1 + 4 × handles | Parses every handle/count pair and saturates ACL accounting at zero. |
 
 ## Firmware / licenses
 
@@ -106,16 +120,49 @@ the live confirmation command above is authoritative for the machine at hand.
    addressing. Our xHCI work gives us some DMA/physical-address discipline,
    but Wi-Fi brings a much larger, performance-sensitive DMA surface.
 
+## What works, and what does not
+
+The owner's laptop was unavailable for this pass, so **no live `bt info`
+output was captured**. In QEMU, which has no Bluetooth controller, the
+command registers and honestly reports:
+
+```text
+bt: state skip
+bt: no Bluetooth controller found
+bt: ACL data not tested: no controller
+```
+
+What the sources and synthetic tests establish:
+
+* USB class attach, descriptor-driven interrupt/bulk endpoint setup and the
+  Reset / Read Local Version / Read BD_ADDR handshake.
+* `bt info`, `bt reset`, `bt name <text>` and `bt scan on|off` on x86-64.
+  `scan` sends Inquiry or Inquiry Cancel and parses command acceptance only.
+* Interrupt-IN parsing for Command Complete, Command Status, Number Of
+  Completed Packets, Hardware Error and Disconnection Complete, including
+  malformed/truncated packet rejection and an event-table unit test.
+* Both bulk endpoints are configured when the descriptor provides them;
+  `bt info` reports whether each opened. Number Of Completed Packets updates
+  an outstanding counter without underflow. **No ACL packet was sent**, so
+  the data path itself remains unverified.
+
+The honest boundary is still a transport/control slice, not a Bluetooth
+stack: there are no inquiry results, no ACL transmitter/receiver state
+machine, no connection commands, no L2CAP, no ATT and no GATT. The first real
+connection needs ACL framing and flow control over the bulk channels, the HCI
+connection state machine, then L2CAP signaling/channel setup; GATT sits on
+ATT above that and is a separate layer again.
+
 ## What this pass implements
 
 * xHCI: interrupt IN transfer API and BT class attach/detach plumbing.
-* `ports/port_x86_64/src/usb_bt.c`: HCI Reset + Read Local Version + Read
-  BD_ADDR over USB HCI transport, no firmware load, no state change beyond
-  reset.
-* `ports/port_x86_64/src/bt_hci.c`: pure HCI response parsers, host-tested
-  with synthetic Command Complete events.
-* `bt` shell command: `bt info` prints module state and handshake identity.
-* Without hardware (QEMU), the BT module registers as `KMOD_SKIP` with a clear
+* `ports/port_x86_64/src/usb_bt.c`: the handshake, radio controls, event
+  dispatch and ACL endpoint/accounting checks; no firmware load and no ACL
+  data transfer.
+* `ports/port_x86_64/src/bt_hci.c`: pure event-table and response parsers,
+  host-tested with synthetic valid and malformed packets.
+* `bt` shell command: status plus Reset, Write Local Name, Inquiry and Inquiry
+  Cancel. Without hardware (QEMU), the module is `KMOD_SKIP` with a clear
   message.
 
 ## Sources (provenance)
@@ -136,7 +183,9 @@ the live confirmation command above is authoritative for the machine at hand.
   <https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/WHENCE>
   (fetched via raw mirror during recon; confirm on kernel.org when accessible)
 * Bluetooth Core Specification 5.x, Vol 4 Part B (USB Transport Layer) and Vol 4
-  Part E (HCI command/event formats: Reset 0x0C03, Read Local Version 0x1001,
-  Read BD_ADDR 0x1009, Command Complete 0x0E). Normative spec; not copied into
-  repo.
+  Part E (HCI command/event formats: Reset 0x0C03, Write Local Name 0x0C13,
+  Inquiry 0x0401, Inquiry Cancel 0x0402, Read Local Version 0x1001, Read BD_ADDR
+  0x1009; Command Complete 0x0E, Command Status 0x0F, Number Of Completed
+  Packets 0x13, Hardware Error 0x10, Disconnection Complete 0x05). Normative
+  spec; not copied into repo.
 
