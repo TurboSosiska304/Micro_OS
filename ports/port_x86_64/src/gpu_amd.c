@@ -906,10 +906,239 @@ int port_x86_64_gpu_amd_vramdump(void)
         if (b->filled) {
             kshell_printf(" pattern=0x%08x", (unsigned)b->pattern);
         }
+        if (b->name[0] != '\0') {
+            kshell_printf(" name=%s", b->name);
+        }
         kshell_printf("\n");
     }
     if (used == 0) {
         kshell_printf("  (no allocations)\n");
+    }
+    return 0;
+}
+
+static k_u32_t gpu_amd_buf_default_pattern(k_u32_t id)
+{
+    return 0xB0F00000u ^ id;
+}
+
+int port_x86_64_gpu_amd_bufalloc(k_u64_t size_kib, const char *name)
+{
+    k_u32_t id = 0u;
+    k_u64_t offset = 0u;
+    k_u64_t bytes;
+    int rc;
+    const char *use_name = (name != NULL && name[0] != '\0') ? name : "buf";
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu bufalloc: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    if (size_kib == 0u || size_kib > (k_u64_t)(~(k_u32_t)0u)) {
+        kshell_printf("gpu bufalloc: invalid size\n");
+        return 1;
+    }
+    bytes = size_kib * 1024ull;
+    rc = gpu_amd_vram_alloc_named(&g_vram_mgr, bytes, &id, &offset, use_name);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu bufalloc: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    {
+        struct gpu_amd_vram_block *b = gpu_amd_vram_find(&g_vram_mgr, id);
+        kshell_printf("gpu bufalloc: id=%u name=%s offset=0x%x%08x size=%u KiB\n", (unsigned)id,
+                      b != NULL ? b->name : use_name, (unsigned)(offset >> 32),
+                      (unsigned)(k_u32_t)offset,
+                      (unsigned)((b != NULL ? b->size : bytes) / 1024ull));
+    }
+    kinfo("gpu bufalloc: id=%u name=%s offset=0x%x%08x", (unsigned)id, use_name,
+          (unsigned)(offset >> 32), (unsigned)(k_u32_t)offset);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_buffill(k_u32_t id)
+{
+    struct gpu_amd_vram_block *b;
+    k_u64_t bar0_base = 0u;
+    k_u64_t bar0_size = 0u;
+    k_u64_t off;
+    k_u32_t pattern;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu buffill: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    b = gpu_amd_vram_find(&g_vram_mgr, id);
+    if (b == NULL) {
+        kshell_printf("gpu buffill: bad id %u\n", (unsigned)id);
+        return 1;
+    }
+    if (gpu_amd_vram_reserved_overlap(&g_vram_mgr, b->offset, b->size)) {
+        kshell_printf("gpu buffill: refused, block overlaps reserved/scanout\n");
+        return 1;
+    }
+    if (!gpu_amd_get_bar0(&bar0_base, &bar0_size) || bar0_base == 0u) {
+        kshell_printf("gpu buffill: BAR0 not available\n");
+        return 1;
+    }
+    if (b->offset + b->size > bar0_size) {
+        kshell_printf("gpu buffill: block outside BAR0 aperture\n");
+        return 1;
+    }
+
+    pattern = gpu_amd_buf_default_pattern(id);
+    for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
+        volatile k_u32_t *p;
+        k_u32_t pages;
+        k_u64_t chunk = b->size - off;
+        k_u32_t i;
+        k_u32_t words;
+
+        if (chunk > GPU_AMD_VRAM_BLOCK_SIZE) {
+            chunk = GPU_AMD_VRAM_BLOCK_SIZE;
+        }
+        pages = port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + b->offset + off,
+                                            (k_size_t)chunk);
+        if (pages == 0u) {
+            kshell_printf("gpu buffill: map failed at +0x%x\n", (unsigned)(b->offset + off));
+            return 1;
+        }
+        p = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
+        words = (k_u32_t)(chunk / 4u);
+        for (i = 0; i < words; i++) {
+            p[i] = gpu_amd_vram_pattern(pattern, b->offset, (off / 4u) + (k_u64_t)i);
+        }
+    }
+
+    b->pattern = pattern;
+    b->filled = true;
+    kshell_printf("gpu buffill: id=%u name=%s pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
+                  b->name[0] != '\0' ? b->name : "-", (unsigned)pattern,
+                  (unsigned)(b->size / 1024ull));
+    kinfo("gpu buffill: id=%u pattern=0x%08x", (unsigned)id, (unsigned)pattern);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_bufread(k_u32_t id)
+{
+    struct gpu_amd_vram_block *b;
+    k_u64_t bar0_base = 0u;
+    k_u64_t bar0_size = 0u;
+    k_u64_t off;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu bufread: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    b = gpu_amd_vram_find(&g_vram_mgr, id);
+    if (b == NULL) {
+        kshell_printf("gpu bufread: bad id %u\n", (unsigned)id);
+        return 1;
+    }
+    if (!b->filled) {
+        kshell_printf("gpu bufread: id=%u not filled\n", (unsigned)id);
+        return 1;
+    }
+    if (!gpu_amd_get_bar0(&bar0_base, &bar0_size) || bar0_base == 0u) {
+        kshell_printf("gpu bufread: BAR0 not available\n");
+        return 1;
+    }
+    if (b->offset + b->size > bar0_size) {
+        kshell_printf("gpu bufread: block outside BAR0 aperture\n");
+        return 1;
+    }
+
+    for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
+        volatile k_u32_t *p;
+        k_u32_t pages;
+        k_u64_t chunk = b->size - off;
+        k_u32_t i;
+        k_u32_t words;
+
+        if (chunk > GPU_AMD_VRAM_BLOCK_SIZE) {
+            chunk = GPU_AMD_VRAM_BLOCK_SIZE;
+        }
+        pages = port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + b->offset + off,
+                                            (k_size_t)chunk);
+        if (pages == 0u) {
+            kshell_printf("gpu bufread: map failed at +0x%x\n", (unsigned)(b->offset + off));
+            return 1;
+        }
+        p = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
+        words = (k_u32_t)(chunk / 4u);
+        for (i = 0; i < words; i++) {
+            k_u32_t expect = gpu_amd_vram_pattern(b->pattern, b->offset, (off / 4u) + (k_u64_t)i);
+            k_u32_t got = p[i];
+            if (got != expect) {
+                kshell_printf("gpu bufread: mismatch id=%u at +%u: got 0x%08x expect 0x%08x\n",
+                              (unsigned)id, (unsigned)((off + (k_u64_t)i * 4u)), (unsigned)got,
+                              (unsigned)expect);
+                kerror("gpu bufread: mismatch id=%u", (unsigned)id);
+                return 1;
+            }
+        }
+    }
+
+    kshell_printf("gpu bufread: id=%u name=%s pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
+                  b->name[0] != '\0' ? b->name : "-", (unsigned)b->pattern,
+                  (unsigned)(b->size / 1024ull));
+    kinfo("gpu bufread: id=%u ok", (unsigned)id);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_buffree(k_u32_t id)
+{
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu buffree: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    rc = gpu_amd_vram_free(&g_vram_mgr, id);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu buffree: id=%u: %s\n", (unsigned)id, gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    kshell_printf("gpu buffree: id=%u freed\n", (unsigned)id);
+    kinfo("gpu buffree: id=%u", (unsigned)id);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_buflist(void)
+{
+    int i;
+    int used = 0;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu buflist: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+
+    kshell_printf("gpu buflist: id offset size name filled\n");
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        const struct gpu_amd_vram_block *b = &g_vram_mgr.allocs[i];
+        if (b->id == 0u || b->name[0] == '\0') {
+            continue;
+        }
+        used++;
+        kshell_printf("  id=%u off=0x%x%08x size=%uKiB name=%s filled=%s", (unsigned)b->id,
+                      (unsigned)(b->offset >> 32), (unsigned)(k_u32_t)b->offset,
+                      (unsigned)(b->size / 1024ull), b->name, b->filled ? "yes" : "no");
+        if (b->filled) {
+            kshell_printf(" pattern=0x%08x", (unsigned)b->pattern);
+        }
+        kshell_printf("\n");
+    }
+    if (used == 0) {
+        kshell_printf("  (no buffers)\n");
     }
     return 0;
 }
@@ -946,6 +1175,209 @@ static bool amd_map_vram(k_u64_t bar0_base, k_u64_t offset, k_size_t bytes)
     k_u32_t pages =
         port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + offset, bytes);
     return pages != 0u;
+}
+
+int port_x86_64_gpu_amd_bufflip(k_u32_t id, bool confirmed, bool keep)
+{
+    const struct gpu_info *info = port_x86_64_gpu_info();
+    struct gpu_amd_scanout_region regions[12];
+    struct gpu_amd_scanout_region *target = NULL;
+    struct gpu_amd_vram_block *buf;
+    int region_count = 0;
+    int i;
+    int rc;
+    k_u64_t bar0_base = 0u;
+    k_u64_t frame_bytes;
+    k_u32_t orig_lo;
+    k_u32_t orig_hi;
+    k_u32_t orig_pitch;
+    k_u32_t new_pitch;
+    bool wrote_grph = false;
+    bool restore_ok = false;
+    bool ok = false;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu bufflip: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    if (info == NULL || !info->present) {
+        kshell_printf("gpu bufflip: no display controller present\n");
+        return 1;
+    }
+    if (info->vendor != 0x1002u) {
+        kshell_printf("gpu bufflip: not an AMD controller (%04x:%04x)\n", (unsigned)info->vendor,
+                      (unsigned)info->device);
+        return 1;
+    }
+    if (info->mmio_base == 0u || info->mmio_size == 0u) {
+        kshell_printf("gpu bufflip: BAR5 MMIO not mapped\n");
+        return 1;
+    }
+
+    buf = gpu_amd_vram_find(&g_vram_mgr, id);
+    if (buf == NULL) {
+        kshell_printf("gpu bufflip: bad id %u\n", (unsigned)id);
+        return 1;
+    }
+    if (gpu_amd_vram_reserved_overlap(&g_vram_mgr, buf->offset, buf->size)) {
+        kshell_printf("gpu bufflip: refused, buffer overlaps reserved/scanout\n");
+        return 1;
+    }
+
+    {
+        struct port_x86_64_pci_device pci;
+        pci.bus = info->bus;
+        pci.slot = info->slot;
+        pci.function = info->function;
+        bar0_base = bar_base(&pci, PCI_BAR0);
+    }
+    if (bar0_base == 0u || info->vram_bytes == 0u) {
+        kshell_printf("gpu bufflip: BAR0 aperture unknown\n");
+        return 1;
+    }
+    if (buf->offset + buf->size > info->vram_bytes) {
+        kshell_printf("gpu bufflip: buffer outside VRAM\n");
+        return 1;
+    }
+
+    region_count = read_scanout_regions(regions, (int)(sizeof(regions) / sizeof(regions[0])));
+    for (i = 0; i < region_count; i++) {
+        if (regions[i].primary && regions[i].enabled) {
+            target = &regions[i];
+            break;
+        }
+    }
+    if (target == NULL) {
+        kshell_printf("gpu bufflip: no enabled primary GRPH scanout found\n");
+        kerror("gpu bufflip: no primary scanout");
+        return 1;
+    }
+
+    frame_bytes = gpu_amd_frame_bytes(target->pitch_pixels, target->height);
+    if (frame_bytes == 0u) {
+        kshell_printf("gpu bufflip: invalid frame size (pitch %u, height %u)\n",
+                      (unsigned)target->pitch_pixels, (unsigned)target->height);
+        return 1;
+    }
+    if (buf->size < frame_bytes) {
+        kshell_printf("gpu bufflip: buffer id=%u size %u KiB < frame %u KiB\n", (unsigned)id,
+                      (unsigned)(buf->size / 1024ull), (unsigned)(frame_bytes / 1024ull));
+        return 1;
+    }
+
+    orig_lo = (k_u32_t)(target->address & 0xFFFFFFFFu);
+    orig_hi = (k_u32_t)(target->address >> 32);
+    orig_pitch = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PITCH + gpu_amd_dcp_offset(target->pipe));
+    new_pitch = orig_pitch;
+
+    kshell_printf("gpu bufflip: pipe %u %ux%u pitch %u, frame %u KiB\n", (unsigned)target->pipe,
+                  (unsigned)target->pitch_pixels, (unsigned)target->height,
+                  (unsigned)(orig_pitch & GPU_AMD_GRPH_PITCH__GRPH_PITCH_MASK),
+                  (unsigned)(frame_bytes / 1024ull));
+    kshell_printf("gpu bufflip: source 0x%x%08x, buffer id=%u name=%s BAR0+0x%x%08x\n",
+                  (unsigned)orig_hi, (unsigned)orig_lo, (unsigned)id,
+                  buf->name[0] != '\0' ? buf->name : "-", (unsigned)(buf->offset >> 32),
+                  (unsigned)(k_u32_t)buf->offset);
+
+    if (!confirmed) {
+        kshell_printf("gpu bufflip: dry-run, nothing written; pass --yes to flip on the laptop\n");
+        return 0;
+    }
+
+    kinfo("gpu: bufflip: about to point GRPH pipe %u at BAR0+0x%x%08x (id=%u)",
+          (unsigned)target->pipe, (unsigned)(buf->offset >> 32), (unsigned)(k_u32_t)buf->offset,
+          (unsigned)id);
+    kshell_printf("gpu: bufflip: about to point GRPH at BAR0+0x%x%08x\n",
+                  (unsigned)(buf->offset >> 32), (unsigned)(k_u32_t)buf->offset);
+    k_logfile_flush();
+
+    {
+        k_u32_t dcp = gpu_amd_dcp_offset(target->pipe);
+        k_u64_t new_addr = buf->offset;
+        k_u32_t new_lo;
+        k_u32_t new_hi;
+
+        if (target->address >= bar0_base && target->address < bar0_base + info->vram_bytes) {
+            new_addr = bar0_base + buf->offset;
+        }
+        new_lo = (k_u32_t)(new_addr & 0xFFFFFFFFu);
+        new_hi = (k_u32_t)(new_addr >> 32);
+
+        wrote_grph = true;
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp, new_lo);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, new_hi);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, new_pitch);
+
+        if (!amd_wait_vblank(target->pipe)) {
+            kshell_printf("gpu bufflip: vblank wait timed out after flip\n");
+            kerror("gpu bufflip: vblank timeout after flip");
+            goto restore;
+        }
+
+        {
+            k_u32_t rb_lo = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp);
+            k_u32_t rb_hi = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp);
+            k_u32_t rb_pitch = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PITCH + dcp);
+            if (rb_lo != new_lo || rb_hi != new_hi || rb_pitch != new_pitch) {
+                kshell_printf("gpu bufflip: GRPH readback mismatch after flip\n");
+                kerror("gpu bufflip: readback mismatch");
+                goto restore;
+            }
+        }
+    }
+
+    kshell_printf("gpu bufflip: GRPH readback OK\n");
+    kinfo("gpu bufflip: GRPH readback OK at BAR0+0x%x%08x", (unsigned)(buf->offset >> 32),
+          (unsigned)(k_u32_t)buf->offset);
+
+    if (keep) {
+        kshell_printf("gpu bufflip: --keep: leaving buffer surface active\n");
+        kinfo("gpu bufflip: keeping id=%u", (unsigned)id);
+        ok = true;
+        wrote_grph = false;
+        goto out;
+    }
+
+restore:
+    if (wrote_grph) {
+        k_u32_t dcp = gpu_amd_dcp_offset(target->pipe);
+        kinfo("gpu: bufflip: restoring GRPH pipe %u to 0x%x%08x", (unsigned)target->pipe,
+              (unsigned)orig_hi, (unsigned)orig_lo);
+        k_logfile_flush();
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp, orig_lo);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp, orig_hi);
+        amd_mmio_write32(GPU_AMD_MMDCP_GRPH_PITCH + dcp, orig_pitch);
+        if (amd_wait_vblank(target->pipe)) {
+            k_u32_t rb_lo = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS + dcp);
+            k_u32_t rb_hi = amd_mmio_read32(GPU_AMD_MMDCP_GRPH_PRIMARY_SURFACE_ADDRESS_HIGH + dcp);
+            restore_ok = (rb_lo == orig_lo && rb_hi == orig_hi);
+        } else {
+            restore_ok = false;
+        }
+        if (restore_ok) {
+            kshell_printf("gpu bufflip: restored original surface 0x%x%08x\n", (unsigned)orig_hi,
+                          (unsigned)orig_lo);
+            kinfo("gpu bufflip: restored original surface");
+        } else {
+            kshell_printf("gpu bufflip: WARNING restore not confirmed\n");
+            kerror("gpu bufflip: restore not confirmed");
+        }
+    }
+
+    ok = wrote_grph ? restore_ok : false;
+
+out:
+    if (!confirmed) {
+        return 0;
+    }
+    if (keep && ok) {
+        return 0;
+    }
+    if (wrote_grph) {
+        return ok ? 0 : 1;
+    }
+    return 1;
 }
 
 int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep)
