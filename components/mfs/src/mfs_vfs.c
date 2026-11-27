@@ -162,6 +162,34 @@ static int vfs_write_file(void *ctx, struct vfs_file *vfs_file, const void *buf,
     return (rc < 0) ? mfs_to_kerr(rc) : rc;
 }
 
+static int vfs_read_page(void *ctx, k_u32_t inode, k_u64_t offset, void *buf, k_size_t size)
+{
+    int rc;
+
+    K_UNUSED(ctx);
+
+    rc = mfs_read_at(inode, offset, buf, size);
+    return (rc < 0) ? mfs_to_kerr(rc) : rc;
+}
+
+static int vfs_write_page(void *ctx, k_u32_t inode, k_u64_t offset, const void *buf, k_size_t size)
+{
+    int rc;
+
+    K_UNUSED(ctx);
+
+    rc = mfs_write_at(inode, offset, buf, size);
+    return (rc < 0) ? mfs_to_kerr(rc) : rc;
+}
+
+static int vfs_sync_file(void *ctx, k_u32_t inode)
+{
+    K_UNUSED(ctx);
+    K_UNUSED(inode);
+
+    return mfs_to_kerr(mfs_sync());
+}
+
 static int vfs_truncate_file(void *ctx, struct vfs_file *vfs_file, k_u64_t size)
 {
     struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
@@ -191,8 +219,21 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
         return mfs_to_kerr(MFS_EINVAL);
     }
 
-    vfs_file->size = file->file.size;
-    vfs_file->offset = file->file.offset;
+    if (vfs_file->ops != NULL && vfs_file->ops->readpage != NULL && !file->file.dirty) {
+        struct mfs_inode inode;
+
+        file->file.offset = (k_u32_t)vfs_file->offset;
+        file->file.size = (k_u32_t)vfs_file->size;
+        if (mfs_inode_info(vfs_file->inode, &inode) == MFS_OK) {
+            file->file.size = inode.size;
+            file->file.first_block = inode.first_block;
+            file->file.pending = (inode.flags & MFS_INODE_PENDING) != 0u;
+            file->file.dirty = false;
+        }
+    } else {
+        vfs_file->size = file->file.size;
+        vfs_file->offset = file->file.offset;
+    }
 
     return mfs_to_kerr(mfs_close(&file->file));
 }
@@ -429,6 +470,9 @@ static const struct vfs_operations g_mfs_operations = {
     .open = vfs_open_file,
     .read = vfs_read_file,
     .write = vfs_write_file,
+    .readpage = vfs_read_page,
+    .writepage = vfs_write_page,
+    .sync = vfs_sync_file,
     .truncate = vfs_truncate_file,
     .close = vfs_close_file,
     .list = vfs_list_dir,

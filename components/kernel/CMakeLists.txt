@@ -30,6 +30,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/logfile.c"
     "src/mm.c"
     "src/net.c"
+    "src/pagecache.c"
     "src/panic.c"
     "src/partition.c"
     "src/power.c"

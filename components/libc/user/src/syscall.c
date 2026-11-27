@@ -279,6 +279,13 @@ int ftruncate(int fd, long long size)
     return (rc < 0) ? -1 : 0;
 }
 
+int fsync(int fd)
+{
+    long rc = __ulibc_result(__ulibc_syscall6(KSYS_FSYNC, fd, 0, 0, 0, 0, 0));
+
+    return (rc < 0) ? -1 : 0;
+}
+
 long ulibc_readdir(int fd, struct vfs_dirent *entries, size_t count)
 {
     return __ulibc_result(
