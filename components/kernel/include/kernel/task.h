@@ -35,6 +35,7 @@ typedef enum {
     TASK_STATE_RUNNING,  /* executing */
     TASK_STATE_SLEEPING, /* waiting for a timer */
     TASK_STATE_BLOCKED,  /* waiting for an event */
+    TASK_STATE_STOPPED,  /* suspended by SIGSTOP, SIGTSTP or SIGCONT's absence */
     TASK_STATE_ZOMBIE,   /* exited, not reaped yet */
     TASK_STATE_DEAD      /* slot released */
 } task_state_t;

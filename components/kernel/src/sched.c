@@ -638,6 +638,14 @@ bool k_sched_sleep_unless(k_u32_t ms, const bool *stop)
 
         sched_lock();
 
+        /* A stop is not an answer to the wait: the task stays off every
+         * queue until SIGCONT, then resumes the remainder of its sleep. */
+        if (self->state == TASK_STATE_STOPPED) {
+            sched_unlock();
+            k_port_task_stop();
+            continue;
+        }
+
         if (stop != NULL && (*stop || task_signal_interrupts(self))) {
             sched_unlock();
             break;
@@ -804,6 +812,83 @@ void k_sched_unblock(struct task *t)
     }
 
     k_sched_wake_flush();
+}
+
+/*
+ * Stop a task without running a handler in the sender's context. The task
+ * leaves every queue, including the table of sleepers, and only SIGCONT may
+ * make it ready again. A sleeping task is woken once so that its port sleep
+ * ends and it reaches k_port_task_stop(); the scheduler's IPI is still sent,
+ * because on x86-64 that is what takes a running task off its core.
+ */
+bool k_sched_stop(struct task *t)
+{
+    bool was_sleeping;
+
+    if (t == NULL) {
+        return false;
+    }
+
+    sched_lock();
+
+    if (!t->in_use || t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+        sched_unlock();
+        return false;
+    }
+
+    was_sleeping = (t->state == TASK_STATE_SLEEPING);
+    ready_remove(t);
+    sleep_remove_locked(t);
+    t->pending_wake = false;
+    t->pending_block = false;
+    t->wake_state = TASK_STATE_READY;
+    t->state = TASK_STATE_STOPPED;
+    t->cpu_stamp_ms = k_sched_uptime_ms();
+    wake_note_locked(task_cpu(t));
+
+    sched_unlock();
+
+    if (was_sleeping) {
+        k_port_task_wake(t);
+    }
+    k_sched_wake_flush();
+
+    return true;
+}
+
+/* Continue a stopped task. SIGCONT for a living task that is not stopped is
+ * a successful no-op, as POSIX has it. */
+bool k_sched_continue(struct task *t)
+{
+    if (t == NULL) {
+        return false;
+    }
+
+    sched_lock();
+
+    if (!t->in_use || t->state == TASK_STATE_ZOMBIE || t->state == TASK_STATE_DEAD) {
+        sched_unlock();
+        return false;
+    }
+
+    if (t->state != TASK_STATE_STOPPED) {
+        sched_unlock();
+        return true;
+    }
+
+    t->pending_wake = false;
+    t->pending_block = false;
+    t->state = TASK_STATE_READY;
+    t->cpu_stamp_ms = k_sched_uptime_ms();
+    ready_enqueue(t);
+    wake_note_locked(task_cpu(t));
+
+    sched_unlock();
+
+    k_port_task_wake(t);
+    k_sched_wake_flush();
+
+    return true;
 }
 
 /*

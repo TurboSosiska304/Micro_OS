@@ -110,6 +110,7 @@ static void test_tty_defaults(void)
     KT_CHECK_INT_EQ(settings.c_cc[K_TTY_VTIME], 0);
     KT_CHECK_INT_EQ(settings.c_cc[K_TTY_VINTR], 3);
     KT_CHECK_INT_EQ(settings.c_cc[K_TTY_VEOF], 4);
+    KT_CHECK_INT_EQ(settings.c_cc[K_TTY_VSUSP], 26);
     KT_CHECK_INT_EQ(sizeof(settings), 36);
 
     ktest_begin("tty: the raw mode of a screen clears the discipline");
@@ -304,6 +305,9 @@ static void tty_idle_task(void *arg)
     K_UNUSED(arg);
     for (;;) {
         k_sched_sleep_ms(1000);
+        /* A kernel task answers a terminating mark when it comes back to the
+         * kernel, as a program does on its next system call. */
+        task_signal_check(task_self(), 0, false);
     }
 }
 
@@ -357,8 +361,25 @@ static void test_tty_pgrp_ctrlc(void)
     KT_CHECK((task_signal_pending(t1) & 1u) == 0);
     KT_CHECK((task_signal_pending(t2) & 1u) != 0);
 
+    /* Ctrl+Z stops the foreground group without putting a mark on it. */
+    __atomic_fetch_and(&t1->sig_pending, ~1u, __ATOMIC_RELAXED);
+    __atomic_fetch_and(&t2->sig_pending, ~1u, __ATOMIC_RELAXED);
+    KT_CHECK_INT_EQ(task_setpgid(t2->pid, t1->pid), 0);
+    KT_CHECK_INT_EQ(k_tty_set_fg_pgrp(t1->pid), 0);
+    use_text("\x1a");
+    count = k_tty_read(line, sizeof(line));
+    KT_CHECK_INT_EQ(count, KERR_INTR);
+    KT_CHECK_INT_EQ(task_state_of(t1), TASK_STATE_STOPPED);
+    KT_CHECK_INT_EQ(task_state_of(t2), TASK_STATE_STOPPED);
+    KT_CHECK_INT_EQ(task_signal_pgrp(t1->pid, K_SIGCONT), 0);
+
     k_tty_close();
     drop_terminal();
+
+    KT_CHECK_INT_EQ(task_signal_send(t1->pid, K_SIGTERM), 0);
+    KT_CHECK_INT_EQ(task_signal_send(t2->pid, K_SIGTERM), 0);
+    KT_CHECK_INT_EQ(task_wait(t1->pid, NULL, 2000), 0);
+    KT_CHECK_INT_EQ(task_wait(t2->pid, NULL, 2000), 0);
 }
 
 static void test_tty_session_release(void)

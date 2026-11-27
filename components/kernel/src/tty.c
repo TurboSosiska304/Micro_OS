@@ -351,6 +351,34 @@ static void tty_interrupt(struct k_tty *tty)
     (void)task_signal_send(self->pid, K_SIGINT);
 }
 
+/* Ctrl+Z belongs to the foreground job, not to the line reader. At the shell
+ * prompt the foreground group is the shell itself and it has no parent job
+ * table to continue it, so the key only throws the line away. */
+static void tty_suspend(struct k_tty *tty)
+{
+    struct task *self = task_self();
+    k_u32_t job;
+
+    if (tty != NULL && tty->fg_pgrp != 0) {
+        if (self != NULL && task_get_job(self) == TASK_JOB_NONE &&
+            tty->fg_pgrp == task_get_pgid(self)) {
+            return;
+        }
+
+        (void)task_signal_pgrp(tty->fg_pgrp, K_SIGTSTP);
+        return;
+    }
+
+    if (self == NULL) {
+        return;
+    }
+
+    job = task_get_job(self);
+    if (job != TASK_JOB_NONE) {
+        (void)task_signal_job(job, K_SIGTSTP);
+    }
+}
+
 /* The end of the line: the canonical reader has a line to hand out. */
 static void tty_close_line(struct k_tty *tty)
 {
@@ -389,6 +417,17 @@ static int canon_one(struct k_tty *tty, int c)
         tty->position = 0;
         tty->cut = false;
         tty_interrupt(tty);
+        return KERR_INTR;
+    }
+
+    if (c == (int)tty->mode.c_cc[K_TTY_VSUSP] && isig) {
+        if (echo) {
+            tty_echo("^Z\r\n", 4);
+        }
+        tty->length = 0;
+        tty->position = 0;
+        tty->cut = false;
+        tty_suspend(tty);
         return KERR_INTR;
     }
 

@@ -20,7 +20,7 @@ static k_u32_t g_next_pid = 1;
 static k_size_t g_used;
 
 static const char *const g_state_names[] = {
-    "new", "ready", "running", "sleeping", "blocked", "zombie", "dead",
+    "new", "ready", "running", "sleeping", "blocked", "stopped", "zombie", "dead",
 };
 
 const char *task_state_name(task_state_t state)
@@ -1200,6 +1200,13 @@ static k_u32_t signal_bit(int sig)
     return (k_u32_t)1u << (k_u32_t)signal_slot(sig);
 }
 
+/* The job-control signals are operations on the scheduler, not marks with a
+ * disposition. They therefore have no slot in task::sig_handlers. */
+static bool signal_controls_state(int sig)
+{
+    return sig == K_SIGSTOP || sig == K_SIGTSTP || sig == K_SIGCONT;
+}
+
 /*
  * The processor time of a task is the time between the moments it is known
  * to be running. The tick of a port that can see the running task is one
@@ -1312,7 +1319,7 @@ int task_signal_send(k_u32_t pid, int sig)
 {
     struct task *t;
 
-    if (signal_slot(sig) < 0) {
+    if (signal_slot(sig) < 0 && !signal_controls_state(sig)) {
         return KERR_INVAL;
     }
 
@@ -1331,6 +1338,14 @@ int task_signal_send(k_u32_t pid, int sig)
         return KERR_SRCH;
     }
     k_port_exit_critical();
+
+    if (sig == K_SIGCONT) {
+        return k_sched_continue(t) ? 0 : KERR_SRCH;
+    }
+
+    if (sig == K_SIGSTOP || sig == K_SIGTSTP) {
+        return k_sched_stop(t) ? 0 : KERR_SRCH;
+    }
 
     /*
      * The mark is one bit of a word the task itself reads without the lock
@@ -1452,7 +1467,7 @@ int task_signal_all(const struct task *except, int sig)
     k_size_t i;
     int sent = 0;
 
-    if (signal_slot(sig) < 0) {
+    if (signal_slot(sig) < 0 && !signal_controls_state(sig)) {
         return KERR_INVAL;
     }
 

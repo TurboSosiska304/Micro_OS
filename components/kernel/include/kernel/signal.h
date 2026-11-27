@@ -9,10 +9,12 @@
  * the program, and the program returns through the restorer of that frame.
  *
  * The numbers are the numbers of POSIX, and the set is small on purpose: the
- * system does not stop and continue jobs, so there is no SIGSTOP, SIGCONT or
- * SIGTSTP here. SIGPIPE is part of the contract already, because a pipe is
- * the next door of the ABI and a program that writes one has to be able to
- * die of the same signal everywhere.
+ * marks that end a task or call a handler are SIGINT, SIGPIPE, SIGTERM and
+ * SIGCHLD. SIGSTOP, SIGTSTP and SIGCONT are scheduler operations rather than
+ * marks: they cannot be caught, and a stopped task runs only after SIGCONT.
+ * SIGPIPE is part of the contract already, because a pipe is the next door of
+ * the ABI and a program that writes one has to be able to die of the same
+ * signal everywhere.
  */
 #ifndef MICRO_OS_KERNEL_SIGNAL_H
 #define MICRO_OS_KERNEL_SIGNAL_H
@@ -22,6 +24,9 @@
 struct task;
 
 #define K_SIGINT 2   /* the interrupt of the terminal: Ctrl+C */
+#define K_SIGCONT 18 /* continue a stopped task */
+#define K_SIGSTOP 19 /* stop a task; cannot be caught or ignored */
+#define K_SIGTSTP 20 /* the suspend of the terminal: Ctrl+Z */
 #define K_SIGPIPE 13 /* the reader of a pipe is gone */
 #define K_SIGTERM 15 /* ask the task to end */
 #define K_SIGCHLD 17 /* a child of the task finished */
@@ -34,17 +39,20 @@ typedef void (*task_signal_fn)(int);
 #define K_SIG_ERR ((task_signal_fn) - 1) /* a refused task_signal_set() */
 
 /*
- * Send `sig` to the task `pid`. Only a positive pid names one task: the
- * system has no groups, so the two meanings of POSIX for 0 and -1 are not
- * offered and are answered EINVAL. A pid that names no live task is ESRCH.
+ * Send `sig` to the task `pid`. Only a positive pid names one task: the two
+ * meanings of POSIX for 0 and -1 are not offered by this call and are
+ * answered EINVAL; task_signal_pgrp() and task_signal_job() are the group
+ * doors. A pid that names no live task is ESRCH. STOP, TSTP and CONT change
+ * the scheduler state and cannot be caught or ignored.
  * Returns 0, or a negative error code.
  */
 int task_signal_send(k_u32_t pid, int sig);
 
 /*
  * Set the disposition of `sig` for the task and answer the previous one, or
- * KERR_INVAL for a signal the system does not know. A NULL task means the
- * caller.
+ * KERR_INVAL for a signal the system does not know. The state-changing
+ * signals STOP, TSTP and CONT have no disposition and answer K_SIG_ERR. A
+ * NULL task means the caller.
  */
 task_signal_fn task_signal_set(struct task *t, int sig, task_signal_fn handler);
 

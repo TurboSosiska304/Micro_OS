@@ -937,6 +937,18 @@ void k_port_task_yield(void)
     schedule();
 }
 
+void k_port_task_stop(void)
+{
+    struct task *self = k_port_task_current();
+
+    while (self != NULL && task_state_of(self) == TASK_STATE_STOPPED) {
+        schedule();
+        if (task_state_of(self) == TASK_STATE_STOPPED) {
+            wait_for_interrupt();
+        }
+    }
+}
+
 /*
  * Is the sleep of the calling task over? The tick handler is what ends it,
  * by moving the task out of the sleeping state; the clock of the port is the

@@ -29,6 +29,15 @@ void k_port_task_start(struct task *t);
 /* Give up the CPU. */
 void k_port_task_yield(void);
 
+/*
+ * Wait until the calling task is no longer stopped. The kernel calls this
+ * after SIGSTOP or SIGTSTP removed the task from its run queue; SIGCONT puts
+ * it back and wakes the port's door. A port with one stack of its own may
+ * implement this with its scheduler, and a port with threads may wait on a
+ * condition. The weak fallback polls in bounded sleeps.
+ */
+void k_port_task_stop(void);
+
 /* Block the calling task for the given number of milliseconds. */
 void k_port_task_sleep_ms(k_u32_t ms);
 

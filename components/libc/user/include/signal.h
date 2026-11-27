@@ -1,12 +1,13 @@
 /*
  * Micro OS — the signals of a program.
  *
- * The four signals of the ABI (kernel/ksys.h): the interrupt of the terminal,
- * the broken pipe, the end of the task and the end of a child. `signal` is the
- * POSIX shape over the call of the kernel, and `SIG_ERR` is `(void (*)(int))-1`
- * as the standard says; the kernel answers the old disposition with the same
- * value, so the two are told apart by the caller only when it asked for a
- * handler and got an error.
+ * The marks of the ABI (kernel/ksys.h) are the interrupt of the terminal, the
+ * broken pipe, the end of the task and the end of a child. SIGSTOP, SIGTSTP
+ * and SIGCONT are scheduler operations with the same POSIX numbers; they
+ * cannot be caught. `signal` is the POSIX shape over the call of the kernel,
+ * and `SIG_ERR` is `(void (*)(int))-1` as the standard says; the kernel answers
+ * the old disposition with the same value, so the two are told apart by the
+ * caller only when it asked for a handler and got an error.
  *
  * A program that installs a handler of `SIGINT` gets it when the console sends
  * the interrupt; the library of Lua uses the disposition to end a long loop.
@@ -17,6 +18,9 @@
 #include "ulibc.h"
 
 #define SIGINT 2
+#define SIGCONT 18
+#define SIGSTOP 19
+#define SIGTSTP 20
 #define SIGPIPE 13
 #define SIGTERM 15
 #define SIGCHLD 17
