@@ -44,7 +44,7 @@ int fb_rect_parse(const struct fb_info *info, const void *buffer, k_size_t size,
     }
 
     count = (k_u64_t)rect.w * (k_u64_t)rect.h;
-    expected = sizeof(rect) + count * (k_u64_t)FB_PIXEL_BYTES;
+    expected = sizeof(rect) + count * (k_u64_t)fb_pixel_bytes(info->format);
 
     /* The payload is exactly the pixels of the rectangle: a shorter write is
      * a broken frame and a longer one is a caller that believes another

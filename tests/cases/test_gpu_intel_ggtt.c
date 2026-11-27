@@ -216,6 +216,50 @@ static void test_install_fragmented_pages(void)
     }
 }
 
+static void test_plane_ctl_decode(void)
+{
+    k_u32_t xrgb_x_tiled =
+        GPU_INTEL_PLANE_ENABLE | (GPU_INTEL_FORMAT_XRGB_8888 << 24) | (GPU_INTEL_TILE_X << 10);
+    k_u32_t rgb565_linear =
+        GPU_INTEL_PLANE_ENABLE | (GPU_INTEL_FORMAT_RGB_565 << 24) | (GPU_INTEL_TILE_LINEAR << 10);
+    struct gpu_intel_plane_ctl ctl;
+
+    ktest_begin("gpu-intel: PLANE_CTL decode reports format, tiling and bpp");
+
+    ctl = gpu_intel_plane_ctl_decode(xrgb_x_tiled);
+    KT_CHECK(ctl.valid);
+    KT_CHECK_INT_EQ(ctl.format, GPU_INTEL_FORMAT_XRGB_8888);
+    KT_CHECK_INT_EQ(ctl.tiling, GPU_INTEL_TILE_X);
+    KT_CHECK_INT_EQ(ctl.bpp, 4u);
+    KT_CHECK_INT_EQ(ctl.stride_unit, 512u);
+    KT_CHECK_STR_EQ(gpu_intel_format_name(ctl.format), "XRGB8888");
+    KT_CHECK_STR_EQ(gpu_intel_tiling_name(ctl.tiling), "X-tiled");
+
+    ctl = gpu_intel_plane_ctl_decode(rgb565_linear);
+    KT_CHECK(ctl.valid);
+    KT_CHECK_INT_EQ(ctl.format, GPU_INTEL_FORMAT_RGB_565);
+    KT_CHECK_INT_EQ(ctl.tiling, GPU_INTEL_TILE_LINEAR);
+    KT_CHECK_INT_EQ(ctl.bpp, 2u);
+    KT_CHECK_INT_EQ(ctl.stride_unit, 64u);
+}
+
+static void test_plane_ctl_present_ok(void)
+{
+    k_u32_t xrgb_x_tiled =
+        GPU_INTEL_PLANE_ENABLE | (GPU_INTEL_FORMAT_XRGB_8888 << 24) | (GPU_INTEL_TILE_X << 10);
+    k_u32_t xrgb_linear =
+        GPU_INTEL_PLANE_ENABLE | (GPU_INTEL_FORMAT_XRGB_8888 << 24) | (GPU_INTEL_TILE_LINEAR << 10);
+    k_u32_t rgb565_linear =
+        GPU_INTEL_PLANE_ENABLE | (GPU_INTEL_FORMAT_RGB_565 << 24) | (GPU_INTEL_TILE_LINEAR << 10);
+
+    ktest_begin("gpu-intel: page flip refuses tiled planes and accepts linear RGB565/XRGB8888");
+
+    KT_CHECK(!gpu_intel_plane_ctl_present_ok(xrgb_x_tiled));
+    KT_CHECK(gpu_intel_plane_ctl_present_ok(xrgb_linear));
+    KT_CHECK(gpu_intel_plane_ctl_present_ok(rgb565_linear));
+    KT_CHECK(!gpu_intel_plane_ctl_present_ok(0u));
+}
+
 static void test_rejections(void)
 {
     struct gpu_intel_fb fb;
@@ -247,5 +291,7 @@ void test_gpu_intel_ggtt(void)
     test_free_run_requires_guards();
     test_borrow_and_restore();
     test_install_fragmented_pages();
+    test_plane_ctl_decode();
+    test_plane_ctl_present_ok();
     test_rejections();
 }

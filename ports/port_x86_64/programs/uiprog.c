@@ -28,19 +28,32 @@
 #include "ui/wm_protocol.h"
 #include "ulibc.h"
 
+static k_u32_t uiprog_xrgb8888(k_u16_t color)
+{
+    k_u32_t r = (k_u32_t)((color >> 11) & 0x1Fu);
+    k_u32_t g = (k_u32_t)((color >> 5) & 0x3Fu);
+    k_u32_t b = (k_u32_t)(color & 0x1Fu);
+
+    r = (r << 3) | (r >> 2);
+    g = (g << 2) | (g >> 4);
+    b = (b << 3) | (b >> 2);
+    return (r << 16) | (g << 8) | b;
+}
+
 static int blit_strips(struct uiprog *program, int x, int y, int w, int h, const k_u16_t *pixels)
 {
     struct fb_rect header;
     size_t row_bytes;
     int rows;
     int row;
+    k_u8_t pixel_bytes = fb_pixel_bytes(program->info.format);
 
     if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > (int)program->info.width ||
         y + h > (int)program->info.height) {
         return -1;
     }
 
-    row_bytes = (size_t)w * FB_PIXEL_BYTES;
+    row_bytes = (size_t)w * (size_t)pixel_bytes;
     rows = (int)((KSYS_MAX_IO - sizeof(header)) / row_bytes);
     if (rows < 1) {
         return -1;
@@ -56,7 +69,17 @@ static int blit_strips(struct uiprog *program, int x, int y, int w, int h, const
         header.h = (k_u16_t)take;
 
         memcpy(program->transfer, &header, sizeof(header));
-        memcpy(program->transfer + sizeof(header), pixels + (size_t)row * (size_t)w, payload);
+        if (program->info.format == FB_FORMAT_XRGB8888) {
+            k_u32_t *dst = (k_u32_t *)(void *)(program->transfer + sizeof(header));
+            int i;
+            int count = take * w;
+
+            for (i = 0; i < count; i++) {
+                dst[i] = uiprog_xrgb8888(pixels[(size_t)row * (size_t)w + (size_t)i]);
+            }
+        } else {
+            memcpy(program->transfer + sizeof(header), pixels + (size_t)row * (size_t)w, payload);
+        }
 
         if (write(program->fb, program->transfer, sizeof(header) + payload) !=
             (long)(sizeof(header) + payload)) {
@@ -73,14 +96,14 @@ static int fill_strips(struct uiprog *program, int x, int y, int w, int h, k_u16
     size_t row_bytes;
     int rows;
     int row;
-    int column;
+    k_u8_t pixel_bytes = fb_pixel_bytes(program->info.format);
 
     if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > (int)program->info.width ||
         y + h > (int)program->info.height) {
         return -1;
     }
 
-    row_bytes = (size_t)w * FB_PIXEL_BYTES;
+    row_bytes = (size_t)w * (size_t)pixel_bytes;
     rows = (int)((KSYS_MAX_IO - sizeof(header)) / row_bytes);
     if (rows < 1) {
         return -1;
@@ -88,8 +111,8 @@ static int fill_strips(struct uiprog *program, int x, int y, int w, int h, k_u16
 
     for (row = 0; row < h; row += rows) {
         int take = h - row < rows ? h - row : rows;
-        k_u16_t *pixels = (k_u16_t *)(void *)(program->transfer + sizeof(header));
         size_t count = (size_t)take * (size_t)w;
+        size_t i;
 
         header.x = (k_u16_t)x;
         header.y = (k_u16_t)(y + row);
@@ -97,12 +120,23 @@ static int fill_strips(struct uiprog *program, int x, int y, int w, int h, k_u16
         header.h = (k_u16_t)take;
 
         memcpy(program->transfer, &header, sizeof(header));
-        for (column = 0; column < (int)count; column++) {
-            pixels[column] = color;
+        if (program->info.format == FB_FORMAT_XRGB8888) {
+            k_u32_t *pixels = (k_u32_t *)(void *)(program->transfer + sizeof(header));
+            k_u32_t px = uiprog_xrgb8888(color);
+
+            for (i = 0; i < count; i++) {
+                pixels[i] = px;
+            }
+        } else {
+            k_u16_t *pixels = (k_u16_t *)(void *)(program->transfer + sizeof(header));
+
+            for (i = 0; i < count; i++) {
+                pixels[i] = color;
+            }
         }
 
-        if (write(program->fb, program->transfer, sizeof(header) + count * FB_PIXEL_BYTES) !=
-            (long)(sizeof(header) + count * FB_PIXEL_BYTES)) {
+        if (write(program->fb, program->transfer, sizeof(header) + count * (size_t)pixel_bytes) !=
+            (long)(sizeof(header) + count * (size_t)pixel_bytes)) {
             return -1;
         }
     }
@@ -143,6 +177,22 @@ static int backbuffer_fill(struct uiprog *program, int x, int y, int w, int h, k
         return -1;
     }
 
+    if (program->info.format == FB_FORMAT_XRGB8888) {
+        k_u32_t *base = (k_u32_t *)(void *)program->backbuffer;
+        k_u32_t px = uiprog_xrgb8888(color);
+
+        for (row = 0; row < h; row++) {
+            k_u32_t *line = base + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
+            int column;
+
+            for (column = 0; column < w; column++) {
+                line[column] = px;
+            }
+        }
+
+        return 0;
+    }
+
     for (row = 0; row < h; row++) {
         k_u16_t *line = program->backbuffer + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
         int column = 0;
@@ -177,19 +227,38 @@ static int backbuffer_blit(struct uiprog *program, int x, int y, int w, int h,
 {
     int pitch = (int)program->info.pitch;
     int row;
-    size_t row_bytes;
 
     if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > (int)program->info.width ||
         y + h > (int)program->info.height || pixels == NULL) {
         return -1;
     }
 
-    row_bytes = (size_t)w * sizeof(k_u16_t);
-    for (row = 0; row < h; row++) {
-        k_u16_t *dst = program->backbuffer + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
-        const k_u16_t *src = pixels + (size_t)row * (size_t)w;
+    if (program->info.format == FB_FORMAT_XRGB8888) {
+        k_u32_t *base = (k_u32_t *)(void *)program->backbuffer;
 
-        memcpy(dst, src, row_bytes);
+        for (row = 0; row < h; row++) {
+            k_u32_t *dst = base + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
+            const k_u16_t *src = pixels + (size_t)row * (size_t)w;
+            int column;
+
+            for (column = 0; column < w; column++) {
+                dst[column] = uiprog_xrgb8888(src[column]);
+            }
+        }
+
+        return 0;
+    }
+
+    {
+        size_t row_bytes = (size_t)w * sizeof(k_u16_t);
+
+        for (row = 0; row < h; row++) {
+            k_u16_t *dst =
+                program->backbuffer + (k_size_t)(y + row) * (k_size_t)pitch + (k_size_t)x;
+            const k_u16_t *src = pixels + (size_t)row * (size_t)w;
+
+            memcpy(dst, src, row_bytes);
+        }
     }
 
     return 0;
@@ -488,7 +557,7 @@ int uiprog_open(struct uiprog *program, const char *name)
 
     if (read(program->fb, &program->info, sizeof(program->info)) != (long)sizeof(program->info) ||
         program->info.width == 0u || program->info.height == 0u ||
-        program->info.format != FB_FORMAT_RGB565) {
+        (program->info.format != FB_FORMAT_RGB565 && program->info.format != FB_FORMAT_XRGB8888)) {
         message(name, "/dev/fb0 did not answer the shape of the picture");
         (void)close(program->fb);
         program->fb = -1;
@@ -911,7 +980,8 @@ int uiprog_enable_backbuffer(struct uiprog *program)
         return 0;
     }
 
-    bytes = (size_t)program->info.pitch * (size_t)program->info.height * FB_PIXEL_BYTES;
+    bytes = (size_t)program->info.pitch * (size_t)program->info.height *
+            (size_t)fb_pixel_bytes(program->info.format);
     size = (bytes + KSYS_PAGE_SIZE - 1u) / KSYS_PAGE_SIZE * KSYS_PAGE_SIZE;
     if (size < bytes || size > (size_t)-1 / 2u) {
         return -1;
@@ -943,6 +1013,7 @@ static int present_rect(struct uiprog *program, int x, int y, int w, int h)
     int rows;
     int row;
     int pitch = (int)program->info.pitch;
+    k_u8_t pixel_bytes = fb_pixel_bytes(program->info.format);
 
     if (w <= 0 || h <= 0) {
         return 0;
@@ -951,7 +1022,7 @@ static int present_rect(struct uiprog *program, int x, int y, int w, int h)
         return -1;
     }
 
-    row_bytes = (size_t)w * FB_PIXEL_BYTES;
+    row_bytes = (size_t)w * (size_t)pixel_bytes;
     rows = (int)((KSYS_MAX_IO - sizeof(header)) / row_bytes);
     if (rows < 1) {
         return -1;
@@ -969,8 +1040,9 @@ static int present_rect(struct uiprog *program, int x, int y, int w, int h)
         memcpy(program->transfer, &header, sizeof(header));
 
         for (line = 0; line < take; line++) {
-            const k_u16_t *src =
-                program->backbuffer + (k_size_t)(y + row + line) * (k_size_t)pitch + (k_size_t)x;
+            const unsigned char *src =
+                (const unsigned char *)(const void *)program->backbuffer +
+                ((k_size_t)(y + row + line) * (k_size_t)pitch + (k_size_t)x) * (size_t)pixel_bytes;
             unsigned char *dst = program->transfer + sizeof(header) + (size_t)line * row_bytes;
 
             memcpy(dst, src, row_bytes);

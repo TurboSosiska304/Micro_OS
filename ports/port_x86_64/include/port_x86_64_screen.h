@@ -127,6 +127,8 @@ bool port_x86_64_fb_info(struct fb_info *out);
  * has no framebuffer.
  */
 bool port_x86_64_fb_surface(struct k_fb_surface *out);
+/* Override the reported framebuffer format when the display plane changes. */
+void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp);
 void port_x86_64_fb_console_take(void);
 void port_x86_64_fb_console_give(void);
 void port_x86_64_fb_console_force(void);
