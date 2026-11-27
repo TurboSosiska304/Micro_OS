@@ -570,3 +570,61 @@ failure of the tool.
   cache of the host is under both.
 * **The board.** The ESP32 has no QEMU and no such table; its numbers are the
   ones of a session on the board.
+
+
+## 2.2 page cache, before and after
+
+The first slice of "Eternal Peace" routes regular VFS reads and writes through
+a shared 4 KiB page cache. The table below compares the base
+`d278ffd9` (k27 debugcon, 2026-11-27) with `feature/page-cache` after the
+pagecache read/write, fsync API, and the truncate/read regressions were fixed.
+Both runs are three boots of `make bench` on the same host, QEMU 11.1.3 TCG,
+256 MB, one processor, default `pc`, IDE `cache=writeback`, MFS root image.
+
+The host was busy during parts of these runs and several rows exceed the 10 %
+spread gate; compare medians with that in mind. The file I/O rows moved the
+most: `file_write` and `file_read` measure a 16 MiB stream through the VFS.
+With the page cache, writes become dirty cached pages and reads are served from
+the cache once loaded; the measured rate also includes the cache management and
+writeback behavior of this first slice. These numbers are a baseline for the
+page-cache work, not a release gate.
+
+Before (`d278ffd9`):
+
+| Row | Median | Unit | Spread |
+|---|---|---:|---:|
+| `syscall_getpid` | 1923076.92 | calls/s | 22.9% |
+| `fork_exec` | 162.60 | runs/s | 20.0% |
+| `pipe` | 333.33 | MiB/s | 18.8% |
+| `file_write` | 5.21 | MiB/s | 9.2% |
+| `file_read` | 216.21 | MiB/s | 14.3% |
+| `console` | 1081.08 | lines/s | 0.0% |
+| `screen_text` | 27958914.00 | ns | 25.5% |
+| `lat_syscall_p50` | 488.00 | ns | 78.7% |
+| `lat_syscall_p99` | 520.00 | ns | 95.4% |
+| `lat_pipe_p50` | 23040.00 | ns | 22.2% |
+| `lat_pipe_p99` | 76288.00 | ns | 47.0% |
+| `shell_pipe` | 2.58 | MiB/s | 18.2% |
+
+After (`feature/page-cache`, this worktree):
+
+| Row | Median | Unit | Spread |
+|---|---|---:|---:|
+| `syscall_getpid` | 1388888.88 | calls/s | 74.4% |
+| `fork_exec` | 148.14 | runs/s | 19.9% |
+| `pipe` | 307.69 | MiB/s | 8.3% |
+| `file_write` | 0.22 | MiB/s | 9.1% |
+| `file_read` | 1.00 | MiB/s | 1.0% |
+| `console` | 1075.26 | lines/s | 0.0% |
+| `screen_text` | 27473591.00 | ns | 218.5% |
+| `lat_syscall_p50` | 648.00 | ns | 14.8% |
+| `lat_syscall_p99` | 712.00 | ns | 112.4% |
+| `lat_pipe_p50` | 24064.00 | ns | 0.0% |
+| `lat_pipe_p99` | 47616.00 | ns | 45.2% |
+| `shell_pipe` | 0.71 | MiB/s | 32.4% |
+
+Notes: `file_write` and `file_read` regressed sharply in this first slice; the
+cause needs profiling before 2.2 release (cache writeback path, sync/eviction
+behavior, and the 8 MiB x86 cache cap are the first suspects). The syscall/pipe
+rows are within or near host-noise spread. QEMU smokes were not run in this
+session because unrelated QEMU jobs were active on the host.
