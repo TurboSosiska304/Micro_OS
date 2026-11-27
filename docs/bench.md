@@ -611,3 +611,33 @@ failure of the tool.
   cache of the host is under both.
 * **The board.** The ESP32 has no QEMU and no such table; its numbers are the
   ones of a session on the board.
+
+
+## Intel display enable and present verification (2.1, Intel lane)
+
+The measurement was planned on **27 November 2026** on QEMU 11.1.3 TCG,
+`-vga std`, one emulated processor and 256 MB, the same machine as the
+framebuffer and first-present rows above. `gpu display enable --yes` makes the
+plane linear when needed and verifies that `k_blit_present` returns the device
+path (rc=0) rather than the kernel software copy (rc=1). On this QEMU machine
+there is no measured Intel ThinkPad 17aa:225c and the Intel page-flip backend
+is not registered, so the device-present path is not available and the wm keeps
+the software copy fallback. The QEMU delta for this lane is therefore expected
+to be within noise; no QEMU device-present speedup is claimed here.
+
+The number that matters is the laptop: with `gpu display enable --yes` active,
+the 2 MiB-per-frame software copy should disappear from the wm present path.
+The owner checklist is to boot the laptop, run `gpu display enable` (dry-run),
+then `gpu display enable --yes`, confirm the log line `gpu: display enable:
+present verified (device path, rc=0)`, and compare the wm first-present TSC line
+before and after enable. If the screen goes black, reboot restores the firmware
+plane.
+
+| Work | QEMU (no Intel flip backend) | Laptop (owner) |
+|---|---|---|
+| `k_blit_present` path | kernel copy (rc=1) | device (rc=0), after enable |
+| 2 MiB copy per present | present | removed by page flip |
+| `wm` first present | unchanged in character | measure TSC ns before/after |
+
+The next step, not done in this lane: GTT/VM for own RAM buffers and Y/Yf
+tiling, so the detile copy is removed as well.
