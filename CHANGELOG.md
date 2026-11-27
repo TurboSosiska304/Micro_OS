@@ -10,7 +10,39 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
-## [Unreleased]
+## [2.1.0] - 2026-11-27
+
+### The release
+
+- 2.1.0 "Rooks": the thaw after the major. The defects 2.0 left, the debts of
+  `docs/debts.md`, and the first release whose gates boot the medium a person
+  boots - with eight cores still waiting, because a machine that freezes once
+  in a few runs is worse than a slower one.
+
+### Added
+
+- The tty is a file: a session owner, a foreground process group, `getpgid`
+  (52) and `setpgid` (53), and Ctrl+C delivered as `SIGINT` to the foreground
+  group and never as a byte to the reader. `term`, `login`, `su` and the shell
+  share one discipline instead of three.
+- The machine keeps its own log: `/etc/bootlog.log` (the boot, the previous one
+  as `bootlog.1.log`) and `run.log` (the session), rotated at 64 KiB, written
+  in batches by the init loop, closed before `unmount_all()`. **A password is
+  never written**: `session_read_line(..., secret=true)` hides the input from
+  the log, and `login`, `su` and telnet use it. A read-only root keeps the log
+  in RAM and says so.
+- The GPU answers: one interface (`struct gpu_info`, a vendor table, `ok` /
+  `unknown` / `skipped`), an AMD probe that reads the memory controller (exact
+  VRAM, 8192 MiB on the RX 570) and a guarded `gpu vramtest` that finds the
+  scanout and refuses to overwrite it, and an Intel probe that walks the GGTT,
+  borrows a page for a test, and can flip a plane to a copy of the frame with
+  `gpu flip --yes` and a restore.
+- The frame path of 2.1 (phase A of `docs/plan-gpu.md`): a RAM back buffer, one
+  batched blit per frame, damage rectangles, a glyph atlas and word copies.
+- C23: the tree is built as C23 with no GNU extensions; a port that needs one
+  sets `gnu23` on its own target.
+- `mfetch` names the machine, the cores in use, the memory and the disk, and the
+  page cache of 2.2 has its line ready.
 
 ### Fixed
 
