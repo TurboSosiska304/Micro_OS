@@ -410,11 +410,14 @@ for that registration. QEMU and AMD therefore keep the damage-copy path.
 The Intel callback is registered only for the measured ThinkPad identity and
 only when the active primary plane is already linear RGB565 without surface
 flags, rotation or compression. It reserves two guarded GGTT runs, translates
-each RAM page through the caller's page tables, installs the non-contiguous
-pages, flushes the visible CPU cache lines and writes `PLANE_SURF`. It waits
-for `PLANE_SURFLIVE` before the old front may become the next back surface.
-`FBIO_GIVE` and the last close restore the original plane before the two
-mappings are released.
+each RAM page through the caller's page tables, holds a reference to the
+physical frame, installs the non-contiguous pages, flushes the visible CPU
+cache lines and writes `PLANE_SURF`. It waits for `PLANE_SURFLIVE` before the
+old front may become the next back surface. `FBIO_GIVE` and the last close
+restore the original plane before the two mappings and frame references are
+released. If plane rollback itself fails, the references and GGTT mappings
+stay alive so a departing program cannot have its frame reused under the
+display engine.
 
 The reconnaissance measured a firmware-left **X-tiled XRGB8888** plane. A boot
 which still has that state cannot show the compositor's linear RGB565 surface

@@ -652,6 +652,7 @@ static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct
     int slot_index;
     struct gpu_intel_flip_slot *slot;
     k_u64_t saved = 0u;
+    k_size_t held = 0u;
     enum gpu_intel_ggtt_result rc;
 
     for (slot_index = 0; slot_index < (int)GPU_INTEL_FLIP_SURFACES; slot_index++) {
@@ -688,20 +689,17 @@ static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct
             port_x86_64_dma_phys((const k_u8_t *)src->base + index * GPU_INTEL_GTT_PAGE_SIZE);
 
         if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u ||
-            (physical & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u) {
-            kmm_free(slot->physical);
-            slot->physical = NULL;
-            return KERR_NOTSUP;
+            (physical & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u || !port_x86_64_frame_hold(physical)) {
+            goto fail;
         }
         slot->physical[index] = physical;
+        held++;
     }
 
     rc = gpu_intel_ggtt_install(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
                                 slot->physical, &saved);
     if (rc != GPU_INTEL_GGTT_OK) {
-        kmm_free(slot->physical);
-        slot->physical = NULL;
-        return KERR_NOTSUP;
+        goto fail;
     }
 
     slot->mapped = true;
@@ -710,6 +708,14 @@ static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct
     slot->height = src->height;
     slot->pitch = src->pitch;
     return 0;
+
+fail:
+    for (index = 0u; index < held; index++) {
+        port_x86_64_frame_release(slot->physical[index]);
+    }
+    kmm_free(slot->physical);
+    slot->physical = NULL;
+    return KERR_NOTSUP;
 }
 
 /* The display engine reads physical RAM, not the CPU cache of this port. Make
@@ -832,13 +838,13 @@ static int gpu_intel_present_release(void *context)
 {
     const struct gpu_intel_info *info = (const struct gpu_intel_info *)context;
     bool ok = true;
+    k_size_t index;
     int slot_index;
 
     if (!s_flip.reserved) {
         return 0;
     }
-    if ((s_flip.active >= 0 || !gpu_intel_present_is_live(info, info->plane_surface)) &&
-        !gpu_intel_present_restore(info)) {
+    if (!gpu_intel_present_restore(info)) {
         return -1;
     }
 
@@ -852,6 +858,9 @@ static int gpu_intel_present_release(void *context)
                                    slot->run.original) != GPU_INTEL_GGTT_OK) {
             ok = false;
             continue;
+        }
+        for (index = 0u; index < slot->run.count; index++) {
+            port_x86_64_frame_release(slot->physical[index]);
         }
         kmm_free(slot->physical);
         memset(slot, 0, sizeof(*slot));

@@ -81,6 +81,17 @@ k_u64_t port_x86_64_dma_phys(const void *buffer)
     return port_x86_64_bus_phys(buffer);
 }
 
+bool port_x86_64_frame_hold(k_u64_t address)
+{
+    (void)address;
+    return true;
+}
+
+void port_x86_64_frame_release(k_u64_t address)
+{
+    (void)address;
+}
+
 static void test_laptop_identity(void)
 {
     const struct gpu_intel_id *id = gpu_intel_id_lookup(0x8086u, 0x5917u);
