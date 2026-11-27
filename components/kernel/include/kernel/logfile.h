@@ -18,6 +18,14 @@
 #define K_LOGFILE_RUN_PREVIOUS_PATH "/etc/run.1.log"
 #define K_LOGFILE_LIMIT (64u * 1024u)
 
+/* The log of a machine without a volume lives in its RAM: the boundary of a
+ * file stays 64 KiB, the RAM copy keeps the recent lines and says so. */
+#if defined(ESP_PLATFORM)
+#define K_LOGFILE_LIMIT_RAM (2u * 1024u)
+#else
+#define K_LOGFILE_LIMIT_RAM (16u * 1024u)
+#endif
+
 /* The bytes waiting for the next batch, and whether this boot has no volume. */
 k_size_t k_logfile_pending(void);
 bool k_logfile_in_ram(void);

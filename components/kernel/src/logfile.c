@@ -10,16 +10,24 @@
 #include "kernel/sched.h"
 #include "kernel/vfs.h"
 
-/* The producer never waits for the volume: one bounded ring feeds one batch. */
+/* The producer never waits for the volume: one bounded ring feeds one batch.
+ * The ring of the board is small because its DRAM is about a hundred kilobytes
+ * and the log must not be the reason a program cannot run. */
+#if defined(ESP_PLATFORM)
+#define K_LOGFILE_BUFFER_SIZE 512u
+#else
 #define K_LOGFILE_BUFFER_SIZE 4096u
+#endif
 #define K_LOGFILE_FLUSH_MS 1000u
 #define K_LOGFILE_POWER_WAIT_MS 2000u
+
 
 static const char g_rotated[] = "log: rotated at 65536 bytes\n";
 
 struct log_image {
     char *text;
     char *previous;
+    k_size_t limit;
     k_size_t size;
     k_size_t previous_size;
 };
@@ -37,10 +45,11 @@ static bool g_ram;
 static bool g_flushing;
 static k_u64_t g_last_flush_ms;
 
-static int image_alloc(struct log_image *image)
+static int image_alloc(struct log_image *image, k_size_t limit)
 {
-    image->text = kmm_alloc(K_LOGFILE_LIMIT, KMM_PRIORITY_KERNEL);
-    image->previous = kmm_alloc(K_LOGFILE_LIMIT, KMM_PRIORITY_KERNEL);
+    image->limit = limit;
+    image->text = kmm_alloc(limit, KMM_PRIORITY_KERNEL);
+    image->previous = kmm_alloc(limit, KMM_PRIORITY_KERNEL);
 
     if (image->text == NULL || image->previous == NULL) {
         kmm_free(image->text);
@@ -84,11 +93,11 @@ static void image_append(struct log_image *image, const char *data, k_size_t len
         k_size_t room;
         k_size_t chunk;
 
-        if (image->size >= K_LOGFILE_LIMIT) {
+        if (image->size >= image->limit) {
             image_rotate(image);
         }
 
-        room = K_LOGFILE_LIMIT - image->size;
+        room = image->limit - image->size;
         chunk = K_MIN(room, len);
         memcpy(image->text + image->size, data, chunk);
         image->size += chunk;
@@ -97,7 +106,7 @@ static void image_append(struct log_image *image, const char *data, k_size_t len
 
         /* The file image rotates as soon as a generation reaches 64 KiB; RAM
          * follows the same boundary, including the rotation sentence. */
-        if (image->size >= K_LOGFILE_LIMIT) {
+        if (image->size >= image->limit) {
             image_rotate(image);
         } else {
             image->text[image->size] = '\0';
@@ -399,11 +408,11 @@ int k_logfile_start(const char *boot, k_size_t boot_size, bool storage)
     }
 
     if (!disk) {
-        rc = image_alloc(&g_boot);
+        rc = image_alloc(&g_boot, K_LOGFILE_LIMIT_RAM);
         if (rc != 0) {
             return rc;
         }
-        rc = image_alloc(&g_run);
+        rc = image_alloc(&g_run, K_LOGFILE_LIMIT_RAM);
         if (rc != 0) {
             image_free(&g_boot);
             return rc;

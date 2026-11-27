@@ -270,16 +270,16 @@ static void test_read_only_ram(void)
     KT_CHECK_INT_EQ(file_size(K_LOGFILE_RUN_PATH), KERR_NOENT);
 
     /* RAM is a store too: it has the same limit and the same two generations. */
-    KT_CHECK(snapshot.run_size > 0 && snapshot.run_size < K_LOGFILE_LIMIT);
-    fill_run(K_LOGFILE_LIMIT - snapshot.run_size);
+    KT_CHECK(snapshot.run_size > 0 && snapshot.run_size < K_LOGFILE_LIMIT_RAM);
+    fill_run(K_LOGFILE_LIMIT_RAM - snapshot.run_size);
     k_logfile_snapshot(&snapshot);
-    KT_CHECK_INT_EQ((int)snapshot.run_previous_size, (int)K_LOGFILE_LIMIT);
+    KT_CHECK_INT_EQ((int)snapshot.run_previous_size, (int)K_LOGFILE_LIMIT_RAM);
     KT_CHECK_INT_EQ((int)snapshot.run_size, (int)sizeof("log: rotated at 65536 bytes\n") - 1);
     k_console_write("after ram rotation\n", 19);
     KT_CHECK_INT_EQ(k_logfile_flush(), 0);
     k_logfile_snapshot(&snapshot);
     KT_CHECK(strstr(snapshot.run, "after ram rotation\n") != NULL);
-    KT_CHECK(snapshot.run_size < K_LOGFILE_LIMIT);
+    KT_CHECK(snapshot.run_size < K_LOGFILE_LIMIT_RAM);
 
     k_logfile_stop();
     (void)vfs_umount("/");
