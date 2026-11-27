@@ -224,25 +224,26 @@ static void test_unmapped_run_is_free(void)
 
     ktest_begin("gpu-intel: unmapped GGTT pages can be borrowed with unmapped guards");
 
+    /* A firmware PTE with cache bits but no present bit is still unmapped. */
     for (i = 0u; i < 32u; i++) {
-        g_entries[i] = 0u;
+        g_entries[i] = 0x2u;
     }
     KT_CHECK_INT_EQ(gpu_intel_ggtt_find_free(g_entries, 32u, 2u, NULL, 0u, &run),
                     GPU_INTEL_GGTT_OK);
     KT_CHECK_INT_EQ(run.start, 1);
     KT_CHECK_INT_EQ(run.count, 2);
-    KT_CHECK(run.original == 0u);
+    KT_CHECK(run.original == 0x2u);
 
     KT_CHECK_INT_EQ(gpu_intel_ggtt_borrow(g_entries, 32u, &run, 0x000000100000ULL, &saved),
                     GPU_INTEL_GGTT_OK);
-    KT_CHECK(saved == 0u);
-    KT_CHECK(g_entries[0] == 0u);
+    KT_CHECK(saved == 0x2u);
+    KT_CHECK(g_entries[0] == 0x2u);
     KT_CHECK(g_entries[1] == (0x000000100000ULL | GPU_INTEL_GTT_PRESENT));
     KT_CHECK(g_entries[2] == (0x000000101000ULL | GPU_INTEL_GTT_PRESENT));
-    KT_CHECK(g_entries[3] == 0u);
+    KT_CHECK(g_entries[3] == 0x2u);
     KT_CHECK_INT_EQ(gpu_intel_ggtt_restore(g_entries, 32u, &run, saved), GPU_INTEL_GGTT_OK);
     for (i = 0u; i < 32u; i++) {
-        KT_CHECK(g_entries[i] == 0u);
+        KT_CHECK(g_entries[i] == 0x2u);
     }
 }
 

@@ -10,11 +10,11 @@
 #include "gpu_intel_ggtt.h"
 
 /* A run may come from a firmware scratch page or from a never-mapped range.
- * Only the first kind carries a present bit; an unmapped run restores to zero. */
+ * A non-present PTE can still carry cache bits; it is restored byte-for-byte. */
 static bool gpu_intel_gtt_original_ok(k_u64_t original)
 {
     if ((original & GPU_INTEL_GTT_PRESENT) == 0u) {
-        return original == 0u;
+        return true;
     }
     return (original & GPU_INTEL_GTT_ADDRESS_MASK) != 0u;
 }
@@ -279,7 +279,7 @@ void gpu_intel_ggtt_stats(const volatile k_u64_t *entries, k_size_t entry_count,
 }
 
 /* The first choice is a range the firmware never mapped. Installing a PTE in
- * such a slot and restoring it to zero cannot disturb a live translation. */
+ * such a slot and restoring its original value cannot disturb a live one. */
 static enum gpu_intel_ggtt_result
 gpu_intel_ggtt_find_unmapped(const volatile k_u64_t *entries, k_size_t entry_count, k_u32_t needed,
                              const struct gpu_intel_gtt_range *excluded, k_size_t excluded_count,
@@ -288,13 +288,15 @@ gpu_intel_ggtt_find_unmapped(const volatile k_u64_t *entries, k_size_t entry_cou
     k_size_t at = 0u;
 
     while (at < entry_count) {
-        k_size_t end = at;
+        k_u64_t value = entries[at];
+        k_size_t end;
 
-        if (entries[at] != 0u) {
+        if ((value & GPU_INTEL_GTT_PRESENT) != 0u) {
             at++;
             continue;
         }
-        while (end < entry_count && entries[end] == 0u) {
+        end = at + 1u;
+        while (end < entry_count && entries[end] == value) {
             end++;
         }
         if ((k_u64_t)(end - at) >= (k_u64_t)needed + 2u) {
@@ -310,7 +312,7 @@ gpu_intel_ggtt_find_unmapped(const volatile k_u64_t *entries, k_size_t entry_cou
                                               excluded_count)) {
                     out->start = (k_u32_t)candidate;
                     out->count = needed;
-                    out->original = 0u;
+                    out->original = value;
                     return GPU_INTEL_GGTT_OK;
                 }
                 candidate++;

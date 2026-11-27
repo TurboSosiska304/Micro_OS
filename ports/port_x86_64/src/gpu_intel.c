@@ -972,7 +972,14 @@ static int gpu_intel_present_release(void *context)
     k_size_t index;
     int slot_index;
 
-    if (!s_flip.reserved) {
+    /* An identity run needs no reservation, but a slot may still be mapped.
+     * Releasing that slot must return the plane and its frame references. */
+    for (slot_index = 0; slot_index < (int)GPU_INTEL_FLIP_SURFACES; slot_index++) {
+        if (s_flip.slots[slot_index].mapped) {
+            break;
+        }
+    }
+    if (!s_flip.reserved && slot_index == (int)GPU_INTEL_FLIP_SURFACES) {
         return 0;
     }
     if (!gpu_intel_present_restore(info)) {
