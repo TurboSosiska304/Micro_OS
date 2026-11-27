@@ -260,6 +260,12 @@ int port_x86_64_gpu_amd_vramtest(bool do_write);
 
 static int cmd_gpu(int argc, char **argv)
 {
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "info") == 0)) {
+        port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
+        kshell_printf("%s\n", g_gpu_line);
+        return g_gpu.present ? KSHELL_OK : KSHELL_ERROR;
+    }
+
     if (argc >= 2 && strcmp(argv[1], "vramtest") == 0) {
         bool do_write = false;
         if (argc >= 3 && strcmp(argv[2], "--write") == 0) {
@@ -271,16 +277,29 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_vramtest(do_write);
     }
 
-    port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
-    kshell_printf("%s\n", g_gpu_line);
-    return g_gpu.present ? 0 : 1;
+    if (gpu_intel_command != NULL &&
+        ((argc == 2 && strcmp(argv[1], "ggtt-test") == 0) ||
+         (argc == 2 && strcmp(argv[1], "flip") == 0) ||
+         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0))) {
+        return gpu_intel_command(argc, argv);
+    }
+
+    kshell_printf("usage: gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]\n");
+    return KSHELL_USAGE;
 }
 
 int port_x86_64_gpu_register(void)
 {
+    static const struct kshell_help help = {
+        .summary = "display controller probe",
+        .usage = "gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]",
+        .detail = "Without a subcommand, prints the shared display-controller report.\n"
+                  "Intel systems also accept info, ggtt-test and a flip dry-run; the\n"
+                  "flip write path requires the explicit --yes confirmation.\n",
+    };
     int rc;
 
-    rc = kshell_register("gpu", "display controller probe", cmd_gpu);
+    rc = kshell_register_help("gpu", &help, cmd_gpu);
     if (rc == 0) {
         kinfo("gpu: command registered");
     }

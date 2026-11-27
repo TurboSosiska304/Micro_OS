@@ -110,6 +110,9 @@ enum gpu_probe_result port_x86_64_gpu_amd_probe(const struct port_x86_64_pci_dev
 enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
                                       struct gpu_info *out) __attribute__((weak));
 
+/* Optional Intel subcommands for the shared `gpu` command. */
+int gpu_intel_command(int argc, char **argv) __attribute__((weak));
+
 /* Vendor probe table: order matters, first matching vendor wins. Intel probe
  * is weak - NULL when not linked, which means "vendor known, device unknown". */
 static const struct gpu_probe PORT_X86_64_GPU_PROBES[] = {
