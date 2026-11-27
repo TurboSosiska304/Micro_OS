@@ -553,16 +553,26 @@ static bool gpu_intel_flip_laptop(const struct gpu_intel_info *info)
 
 static bool gpu_intel_wait_frame(const struct gpu_intel_info *info)
 {
-    /* Kaby Lake uses the G4X full frame counter, not the split PIPEFRAME pair. */
+    /* Kaby Lake uses the G4X full frame counter, not the split PIPEFRAME pair.
+     * The tick deadline is the fast path; the spin bound keeps a stalled or
+     * missing tick source from turning a frame wait into an infinite loop. */
     k_u32_t offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PIPE_FRAME_BASE);
     k_u32_t before = gpu_intel_mmio_read(offset);
     k_u64_t deadline = port_x86_64_ticks() + 100u;
+    k_u32_t spins = 0u;
 
     do {
         if (gpu_intel_mmio_read(offset) != before) {
             return true;
         }
-    } while (port_x86_64_ticks() < deadline);
+        spins++;
+    } while (port_x86_64_ticks() < deadline && spins < 4000000u);
+
+    if (spins >= 4000000u || port_x86_64_ticks() >= deadline) {
+        kwarn("gpu: frame wait timed out (pipe %u, before 0x%x, now 0x%x, spins %u)",
+              (unsigned)info->panel_pipe, (unsigned)before, (unsigned)gpu_intel_mmio_read(offset),
+              (unsigned)spins);
+    }
     return false;
 }
 
@@ -767,6 +777,7 @@ static bool gpu_intel_present_is_live(const struct gpu_intel_info *info, k_u32_t
 
 static bool gpu_intel_present_restore(const struct gpu_intel_info *info)
 {
+    k_logfile_flush();
     if (!gpu_intel_wait_frame(info) ||
         !gpu_intel_plane_restore(info, info->plane_control, info->plane_stride,
                                  info->plane_surface) ||
@@ -791,9 +802,25 @@ static int gpu_intel_present(void *context, const struct k_fb_surface *dst,
     int slot_index;
     int rc;
 
-    if (!gpu_intel_present_compatible(info, dst, src) || !gpu_intel_present_reserve(info)) {
+    if (!gpu_intel_present_compatible(info, dst, src)) {
+        kwarn("gpu: present incompatible (plane %ux%u fmt %u pitch %u, dst %ux%u fmt %u pitch %u, "
+              "src %ux%u fmt %u pitch %u)",
+              (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height,
+              (unsigned)info->framebuffer.format, (unsigned)info->framebuffer.pitch,
+              dst != NULL ? (unsigned)dst->width : 0u, dst != NULL ? (unsigned)dst->height : 0u,
+              dst != NULL ? (unsigned)dst->format : 0u, dst != NULL ? (unsigned)dst->pitch : 0u,
+              src != NULL ? (unsigned)src->width : 0u, src != NULL ? (unsigned)src->height : 0u,
+              src != NULL ? (unsigned)src->format : 0u, src != NULL ? (unsigned)src->pitch : 0u);
         if (s_flip.active >= 0 && !gpu_intel_present_restore(info)) {
             kerror("gpu: present could not restore the original plane after a refusal");
+        }
+        return KERR_NOTSUP;
+    }
+    if (!gpu_intel_present_reserve(info)) {
+        kwarn("gpu: present reserve failed (no GGTT slot for %u pages)",
+              (unsigned)info->framebuffer.pte_count);
+        if (s_flip.active >= 0 && !gpu_intel_present_restore(info)) {
+            kerror("gpu: present could not restore the original plane after reserve failure");
         }
         return KERR_NOTSUP;
     }
@@ -834,8 +861,11 @@ static int gpu_intel_present(void *context, const struct k_fb_surface *dst,
 
     gpu_intel_present_flush(src);
     display_touched = true;
+    k_logfile_flush();
     if (!gpu_intel_plane_program(info, info->plane_control, info->plane_stride, target_surface) ||
         !gpu_intel_wait_frame(info) || !gpu_intel_present_is_live(info, target_surface)) {
+        kwarn("gpu: present did not go live (target 0x%x, active %d)", (unsigned)target_surface,
+              s_flip.active);
         goto fail;
     }
 
@@ -1128,9 +1158,20 @@ static int gpu_intel_plane_linear(struct gpu_intel_info *info, bool confirmed)
     info->framebuffer.pte_count = s_linear.run.count;
     info->framebuffer.contiguous = true;
 
-    port_x86_64_fb_set_format(ctl.format == GPU_INTEL_FORMAT_RGB_565 ? FB_FORMAT_RGB565
-                                                                     : FB_FORMAT_XRGB8888,
-                              ctl.bpp * 8u);
+    {
+        struct fb_info fbi;
+        k_u8_t plane_format =
+            ctl.format == GPU_INTEL_FORMAT_RGB_565 ? FB_FORMAT_RGB565 : FB_FORMAT_XRGB8888;
+        k_u8_t plane_bpp = ctl.bpp * 8u;
+
+        if (port_x86_64_fb_info(&fbi) && fbi.bpp == plane_bpp) {
+            port_x86_64_fb_set_format(plane_format, plane_bpp);
+        } else if (port_x86_64_fb_info(&fbi) && fbi.bpp != plane_bpp) {
+            kwarn("gpu: fb format %u/%u bpp does not match plane %s/%u bpp; keeping fb format",
+                  (unsigned)fbi.format, (unsigned)fbi.bpp, gpu_intel_format_name(ctl.format),
+                  (unsigned)plane_bpp);
+        }
+    }
     if (gpu_intel_present_ready(info)) {
         k_fb_ops_register(&s_gpu_intel_present_ops, info);
         kinfo("gpu: Intel page-flip backend ready (%ux%u linear %s)",
@@ -1531,9 +1572,24 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
     }
 
     if (gpu_intel_present_ready(info)) {
+        struct fb_info fbi;
+        k_u8_t plane_format = info->framebuffer.format == GPU_INTEL_FORMAT_RGB_565
+                                  ? FB_FORMAT_RGB565
+                                  : FB_FORMAT_XRGB8888;
+        k_u8_t plane_bpp = info->framebuffer.bpp * 8u;
+
+        if (port_x86_64_fb_info(&fbi) && fbi.bpp == plane_bpp) {
+            port_x86_64_fb_set_format(plane_format, plane_bpp);
+        } else if (port_x86_64_fb_info(&fbi) && fbi.bpp != plane_bpp) {
+            kwarn("gpu: fb format %u/%u bpp does not match plane %s/%u bpp; present may fall back",
+                  (unsigned)fbi.format, (unsigned)fbi.bpp,
+                  gpu_intel_format_name(info->framebuffer.format), (unsigned)plane_bpp);
+        }
+
         k_fb_ops_register(&s_gpu_intel_present_ops, info);
-        kinfo("gpu: Intel page-flip backend ready (%ux%u linear RGB565)",
-              (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
+        kinfo("gpu: Intel page-flip backend ready (%ux%u linear %s)",
+              (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height,
+              gpu_intel_format_name(info->framebuffer.format));
     }
 
     return gpu_intel_finish(info, out, GPU_PROBE_OK);

@@ -13,6 +13,7 @@
 
 #include "kernel/errno.h"
 #include "kernel/fb.h"
+#include "kernel/log.h"
 #include "kernel/port/exec.h"
 
 /* A card which cannot flip is not asked once per frame. The identity and
@@ -325,6 +326,7 @@ int k_blit_present(k_blit_surface *dst, const k_blit_surface *src)
         /* A refusal is a capability answer, not a frame error. The copy below
          * is the same software path a machine without a GPU has always used. */
         s_present_failed = true;
+        kwarn("blit: present refused (rc=%d), using software copy fallback", rc);
     } else if (ops == NULL || ops->present == NULL) {
         s_present_failed = true;
     }

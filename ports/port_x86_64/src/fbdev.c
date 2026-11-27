@@ -94,6 +94,7 @@ static int fbdev_write(const char *buf, k_size_t size)
         return rc;
     }
 
+    port_x86_64_gop_present_rect(rect.x, rect.y, rect.w, rect.h);
     return (int)size;
 }
 
@@ -132,7 +133,14 @@ static int fbdev_present(k_u64_t argument)
     source.format = info.format;
     destination.format = info.format;
 
-    return k_blit_present(&destination, &source);
+    {
+        int present_rc = k_blit_present(&destination, &source);
+
+        if (present_rc == 1) {
+            port_x86_64_gop_present_rect(0, 0, (int)info.width, (int)info.height);
+        }
+        return present_rc;
+    }
 }
 
 static int fbdev_ioctl(k_u32_t request, k_u64_t arg)
