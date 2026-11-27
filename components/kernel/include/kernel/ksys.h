@@ -76,7 +76,8 @@
 #define KSYS_CHGRP 51         /* chgrp(path, group) */
 #define KSYS_GETPGID 52       /* getpgid(pid) -> pgid */
 #define KSYS_SETPGID 53       /* setpgid(pid, pgid) */
-#define KSYS_COUNT 54         /* the number of the system calls */
+#define KSYS_FSYNC 54         /* fsync(fd) */
+#define KSYS_COUNT 55         /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -443,6 +444,8 @@ int ksys_chdir(const char *path);
 int ksys_clock_gettime(k_u32_t clock, struct ksys_timespec *out);
 /* The processor time of the calling task: 0, or a negative error. */
 int ksys_getrusage(struct ksys_rusage *out);
+/* Bring the data and the metadata of an open file to the medium. */
+int ksys_fsync(int fd);
 int ksys_kill(int pid, int sig);
 /* The old handler, or K_SIG_ERR when the signal is not one of the system. */
 task_signal_fn ksys_signal(int sig, task_signal_fn handler);

@@ -158,6 +158,7 @@ chose.
 | 51 | `chgrp` | `path, group` | 0, or an error |
 | 52 | `getpgid` | `pid` | the process group of `pid` (0 for the caller), or an error |
 | 53 | `setpgid` | `pid, pgid` | 0, or an error |
+| 54 | `fsync` | `fd` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
@@ -169,8 +170,10 @@ The lane of 1.8 added the directory of a task 48, the clock 49 and the use of
 the processor 50; the three are below. The group of an object took 51 beside
 the owner (ADR 0044). The process group of a task took 52 and 53, the minimal
 slice of job control: a tty has a foreground group and Ctrl+C is delivered to
-it. A call that is not in the table is `ENOSYS`, never a guess at what it
-might have meant.
+it. `fsync` took 54: it brings the data and the metadata of an open file to
+the medium and answers `KERR_NOTSUP` when the medium or the filesystem cannot
+make that promise. A call that is not in the table is `ENOSYS`, never a guess
+at what it might have meant.
 
 ## The control commands of `ioctl`
 

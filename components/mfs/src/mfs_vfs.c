@@ -197,6 +197,19 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
     return mfs_to_kerr(mfs_close(&file->file));
 }
 
+static int vfs_fsync_file(void *ctx, struct vfs_file *vfs_file)
+{
+    struct mfs_vfs_file *file = (struct mfs_vfs_file *)vfs_file->priv;
+
+    K_UNUSED(ctx);
+
+    if (file == NULL) {
+        return mfs_to_kerr(MFS_EINVAL);
+    }
+
+    return mfs_to_kerr(mfs_fsync(&file->file));
+}
+
 static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max,
                         k_size_t *count)
 {
@@ -431,6 +444,7 @@ static const struct vfs_operations g_mfs_operations = {
     .write = vfs_write_file,
     .truncate = vfs_truncate_file,
     .close = vfs_close_file,
+    .fsync = vfs_fsync_file,
     .list = vfs_list_dir,
     .readdir = vfs_readdir_dir,
     .stat = vfs_stat_file,

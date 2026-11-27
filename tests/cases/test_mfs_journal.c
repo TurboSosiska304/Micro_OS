@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "kernel/blockdev.h"
+#include "kernel/errno.h"
 #include "kernel/types.h"
 #include "mfs/mfs.h"
 
@@ -722,6 +723,417 @@ static void test_journal_write_read(void)
     volume_free();
 }
 
+/*
+ * A cut of a create leaves the name absent or the empty file present, never a
+ * half-made record with no directory entry or a directory entry with no record.
+ */
+static void test_journal_cut_create(void)
+{
+    k_u32_t cut;
+    k_u32_t session_writes;
+    k_u32_t absent = 0;
+    k_u32_t present = 0;
+
+    ktest_begin("mfs journal: a cut of a create leaves the file absent or whole");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+
+    g_writes = 0;
+    g_limit = 0xFFFFFFFFu;
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/new.txt"), MFS_OK);
+    session_writes = g_writes;
+    mfs_unmount();
+
+    for (cut = 0; cut <= session_writes; cut++) {
+        struct mfs_check_report report;
+        struct mfs_inode inode;
+        bool has;
+
+        memcpy(g_volume, g_base, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+        g_writes = 0;
+        g_limit = cut;
+
+        KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+        (void)mfs_create("/new.txt");
+        g_limit = 0xFFFFFFFFu;
+
+        if (mfs_mount(&g_device) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: mount failed after create", (unsigned)cut);
+            break;
+        }
+
+        memset(&report, 0, sizeof(report));
+        if (mfs_check(&report) != MFS_OK || report.errors != 0u) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: fsck found %u problem(s): %s", (unsigned)cut,
+                       (unsigned)report.errors, report.first[0] != '\0' ? report.first : "(none)");
+            break;
+        }
+
+        if (!keep_whole()) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: keeper damaged", (unsigned)cut);
+            break;
+        }
+
+        has = mfs_stat("/new.txt", &inode, NULL) == MFS_OK;
+        if (has) {
+            if ((inode.flags & MFS_INODE_DIR) != 0u || inode.size != 0u) {
+                ktest_fail(__FILE__, __LINE__, "cut %u: create left broken inode", (unsigned)cut);
+                break;
+            }
+            present++;
+        } else {
+            absent++;
+        }
+    }
+
+    mfs_unmount();
+    KT_CHECK(absent > 0u);
+    KT_CHECK(present > 0u);
+    KT_CHECK_INT_EQ(absent + present, session_writes + 1u);
+    volume_free();
+}
+
+/* A cut of unlink removes the name or leaves the file whole, never half-freed. */
+static void test_journal_cut_unlink(void)
+{
+    struct mfs_file file;
+    k_u8_t text[KEEP_BYTES];
+    k_u32_t cut;
+    k_u32_t session_writes;
+    k_u32_t gone = 0;
+    k_u32_t kept = 0;
+
+    ktest_begin("mfs journal: a cut of an unlink leaves the file absent or whole");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/victim.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/victim.txt", MFS_O_WRONLY, &file), MFS_OK);
+    pattern(text, 5, sizeof(text));
+    KT_CHECK(mfs_write(&file, text, sizeof(text)) == (int)sizeof(text));
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_sync(), MFS_OK);
+    mfs_unmount();
+    memcpy(g_base, g_volume, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+
+    g_writes = 0;
+    g_limit = 0xFFFFFFFFu;
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_unlink("/victim.txt"), MFS_OK);
+    session_writes = g_writes;
+    mfs_unmount();
+
+    for (cut = 0; cut <= session_writes; cut++) {
+        struct mfs_check_report report;
+        struct mfs_inode inode;
+        bool has;
+
+        memcpy(g_volume, g_base, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+        g_writes = 0;
+        g_limit = cut;
+
+        KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+        (void)mfs_unlink("/victim.txt");
+        g_limit = 0xFFFFFFFFu;
+
+        if (mfs_mount(&g_device) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: mount failed after unlink", (unsigned)cut);
+            break;
+        }
+
+        memset(&report, 0, sizeof(report));
+        if (mfs_check(&report) != MFS_OK || report.errors != 0u) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: fsck found %u problem(s): %s", (unsigned)cut,
+                       (unsigned)report.errors, report.first[0] != '\0' ? report.first : "(none)");
+            break;
+        }
+
+        if (!keep_whole()) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: keeper damaged", (unsigned)cut);
+            break;
+        }
+
+        has = mfs_stat("/victim.txt", &inode, NULL) == MFS_OK;
+        if (has) {
+            struct mfs_file r;
+            k_u8_t back[KEEP_BYTES];
+            k_u8_t want[KEEP_BYTES];
+            pattern(want, 5, sizeof(want));
+            if (inode.size != sizeof(want) || mfs_open("/victim.txt", MFS_O_RDONLY, &r) != MFS_OK ||
+                mfs_read(&r, back, sizeof(back)) != (int)sizeof(back) ||
+                memcmp(back, want, sizeof(want)) != 0) {
+                ktest_fail(__FILE__, __LINE__, "cut %u: victim present but damaged", (unsigned)cut);
+                mfs_close(&r);
+                break;
+            }
+            mfs_close(&r);
+            kept++;
+        } else {
+            gone++;
+        }
+    }
+
+    mfs_unmount();
+    KT_CHECK(gone > 0u);
+    KT_CHECK(kept > 0u);
+    KT_CHECK_INT_EQ(gone + kept, session_writes + 1u);
+    volume_free();
+}
+
+/* A cut of a write past EOF (grow) leaves the file whole or absent. */
+static void test_journal_cut_grow(void)
+{
+    k_u32_t cut;
+    k_u32_t session_writes;
+    k_u32_t absent = 0;
+    k_u32_t whole = 0;
+
+    ktest_begin("mfs journal: a cut of a write past EOF leaves the file whole or absent");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+
+    /* Count writes of a create+append+close session. */
+    g_writes = 0;
+    g_limit = 0xFFFFFFFFu;
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    session_write();
+    session_writes = g_writes;
+    mfs_unmount();
+
+    for (cut = 0; cut <= session_writes; cut++) {
+        struct mfs_check_report report;
+        bool ok = true;
+
+        memcpy(g_volume, g_base, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+        g_writes = 0;
+        g_limit = cut;
+
+        if (mfs_mount(&g_device) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: mount failed", (unsigned)cut);
+            break;
+        }
+        session_write();
+        g_limit = 0xFFFFFFFFu;
+
+        if (mfs_mount(&g_device) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: mount failed after cut", (unsigned)cut);
+            break;
+        }
+
+        memset(&report, 0, sizeof(report));
+        if (mfs_check(&report) != MFS_OK || report.errors != 0u) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: fsck found %u problem(s): %s", (unsigned)cut,
+                       (unsigned)report.errors, report.first[0] != '\0' ? report.first : "(none)");
+            ok = false;
+        }
+        if (!keep_whole()) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: keeper damaged", (unsigned)cut);
+            ok = false;
+        }
+
+        if (draft_absent()) {
+            absent++;
+        } else if (draft_whole()) {
+            whole++;
+        } else {
+            ktest_fail(__FILE__, __LINE__, "cut %u: draft neither whole nor absent", (unsigned)cut);
+            ok = false;
+        }
+        if (!ok) {
+            break;
+        }
+    }
+
+    mfs_unmount();
+    KT_CHECK(absent > 0u);
+    KT_CHECK(whole > 0u);
+    KT_CHECK_INT_EQ(absent + whole, session_writes + 1u);
+    volume_free();
+}
+
+/* A volatile-cache device: writes go to g_volume (cache), sync/flush copies to
+ * stable. A "power cut" discards volatile state and keeps only stable. */
+static k_u8_t *g_stable;
+static bool g_power_lost;
+
+static int vcache_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
+{
+    (void)ctx;
+    if (sector >= CUT_BLOCKS || count > CUT_BLOCKS - sector) {
+        return -1;
+    }
+    memcpy(buf, g_volume + (k_size_t)sector * MFS_BLOCK_SIZE, count * MFS_BLOCK_SIZE);
+    return 0;
+}
+
+static int vcache_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
+{
+    (void)ctx;
+    if (sector >= CUT_BLOCKS || count > CUT_BLOCKS - sector) {
+        return -1;
+    }
+    memcpy(g_volume + (k_size_t)sector * MFS_BLOCK_SIZE, buf, count * MFS_BLOCK_SIZE);
+    return 0;
+}
+
+static int vcache_sync(void *ctx)
+{
+    (void)ctx;
+    if (!g_power_lost) {
+        memcpy(g_stable, g_volume, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    }
+    return 0;
+}
+
+static int vcache_flush(void *ctx)
+{
+    (void)ctx;
+    if (!g_power_lost) {
+        memcpy(g_stable, g_volume, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    }
+    return 0;
+}
+
+static const struct k_blockdev_ops g_vcache_ops = {
+    .read = vcache_read,
+    .write = vcache_write,
+    .sync = vcache_sync,
+    .flush = vcache_flush,
+};
+
+static void test_journal_fsync(void)
+{
+    struct mfs_file file;
+    k_u8_t want[KEEP_BYTES];
+    k_u8_t back[KEEP_BYTES];
+    struct mfs_check_report report;
+    struct k_blockdev dev;
+
+    ktest_begin("mfs journal: fsync makes data durable and survives a cut");
+
+    KT_CHECK(volume_alloc());
+    g_stable = (k_u8_t *)malloc((size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    if (g_volume == NULL || g_base == NULL || g_stable == NULL) {
+        free(g_stable);
+        g_stable = NULL;
+        volume_free();
+        return;
+    }
+
+    memset(g_volume, 0, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    memset(g_stable, 0, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    dev.name = "vcache";
+    dev.sector_size = MFS_BLOCK_SIZE;
+    dev.sectors = CUT_BLOCKS;
+    dev.ops = &g_vcache_ops;
+    dev.ctx = NULL;
+
+    KT_CHECK_INT_EQ(mfs_format_ex(&dev, 256, MFS_FORMAT_JOURNAL), MFS_OK);
+    memcpy(g_stable, g_volume, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    KT_CHECK_INT_EQ(mfs_mount(&dev), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/sync.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/sync.txt", MFS_O_WRONLY, &file), MFS_OK);
+    pattern(want, 9, sizeof(want));
+    KT_CHECK(mfs_write(&file, want, sizeof(want)) == (int)sizeof(want));
+    KT_CHECK_INT_EQ(mfs_fsync(&file), MFS_OK);
+    /* Power cut: lose volatile cache, keep only stable; block further syncs. */
+    g_power_lost = true;
+    memcpy(g_volume, g_stable, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    mfs_unmount();
+    g_power_lost = false;
+    g_limit = 0xFFFFFFFFu;
+
+    KT_CHECK_INT_EQ(mfs_mount(&dev), MFS_OK);
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0u);
+
+    if (mfs_open("/sync.txt", MFS_O_RDONLY, &file) == MFS_OK) {
+        memset(back, 0, sizeof(back));
+        KT_CHECK(mfs_read(&file, back, sizeof(back)) == (int)sizeof(back));
+        KT_CHECK(memcmp(back, want, sizeof(want)) == 0);
+        mfs_close(&file);
+    } else {
+        ktest_fail(__FILE__, __LINE__, "fsync file missing after power cut");
+    }
+
+    mfs_unmount();
+    free(g_stable);
+    g_stable = NULL;
+    volume_free();
+}
+
+static int nosup_sync(void *ctx)
+{
+    (void)ctx;
+    return 0;
+}
+
+static int nosup_flush(void *ctx)
+{
+    (void)ctx;
+    return KERR_NOTSUP;
+}
+
+static void test_journal_fsync_notsup(void)
+{
+    struct mfs_file file;
+    static const struct k_blockdev_ops ops = {
+        .read = cut_read,
+        .write = cut_write,
+        .erase = cut_erase,
+        .sync = nosup_sync,
+        .flush = nosup_flush,
+    };
+    struct k_blockdev dev;
+
+    ktest_begin("mfs journal: fsync on unsupported medium returns ENOTSUP");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    memset(g_volume, 0, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    g_writes = 0;
+    g_limit = 0xFFFFFFFFu;
+    dev.name = "nosup";
+    dev.sector_size = MFS_BLOCK_SIZE;
+    dev.sectors = CUT_BLOCKS;
+    dev.ops = &ops;
+    dev.ctx = NULL;
+
+    KT_CHECK_INT_EQ(mfs_format_ex(&dev, 256, MFS_FORMAT_JOURNAL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&dev), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/x.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/x.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK(mfs_write(&file, "x", 1) == 1);
+    KT_CHECK_INT_EQ(mfs_fsync(&file), MFS_ENOTSUP);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    mfs_unmount();
+    volume_free();
+}
+
 void test_mfs_journal(void)
 {
     test_journal_format();
@@ -729,4 +1141,9 @@ void test_mfs_journal(void)
     test_journal_write_read();
     test_journal_cut();
     test_journal_rename();
+    test_journal_cut_create();
+    test_journal_cut_unlink();
+    test_journal_cut_grow();
+    test_journal_fsync();
+    test_journal_fsync_notsup();
 }

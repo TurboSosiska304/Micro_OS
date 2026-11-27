@@ -43,6 +43,16 @@ struct k_blockdev_ops {
     int (*sync)(void *ctx);
 
     /*
+     * Flush the volatile cache of the device to the medium and wait until the
+     * medium has the bytes. It is the guarantee of fsync: after this returns 0
+     * a power cut keeps the data the device was told to write. NULL means the
+     * device has no such guarantee to make - a volatile cache with no flush
+     * command - and the caller answers KERR_NOTSUP rather than pretending.
+     * A device that writes through or has no volatile cache answers 0.
+     */
+    int (*flush)(void *ctx);
+
+    /*
      * The door of the writes (ADR 0041 §2). A medium whose bytes belong to
      * somebody else opens its writes only when a mount asks for them and
      * the rule of kernel/volume.c says yes; the driver keeps the door
@@ -263,6 +273,14 @@ const struct k_blockdev *k_blockdev_at(k_size_t index);
  * leave the sectors of another in a cache.
  */
 int k_blockdev_sync_all(void);
+
+/*
+ * Bring one device to the medium with the guarantee of an fsync: the cache of
+ * the device is written out and the flush operation of the driver is asked.
+ * Returns 0 on success, KERR_NOTSUP when the medium cannot make the promise,
+ * or KERR_IO when the flush was attempted and failed.
+ */
+int k_blockdev_flush(const struct k_blockdev *dev);
 
 /* A device by name, NULL when there is none. */
 const struct k_blockdev *k_blockdev_find(const char *name);

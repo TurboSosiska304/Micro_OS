@@ -499,6 +499,14 @@ void mfs_unmount(void);
  */
 int mfs_sync(void);
 
+/*
+ * Bring the data and the metadata of an open file to the medium. A power cut
+ * after the call returns MFS_OK keeps the bytes the file had at the call; the
+ * same guarantee as the close of the file, but the descriptor stays open.
+ * A device that cannot flush its volatile cache answers MFS_ENOTSUP.
+ */
+int mfs_fsync(struct mfs_file *file);
+
 bool mfs_is_mounted(void);
 
 /* The information about the mounted volume. */
