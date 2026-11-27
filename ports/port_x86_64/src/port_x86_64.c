@@ -150,8 +150,8 @@ static k_size_t g_com1_len;
  * wait is allowed, and an outage drops the remaining bytes until the port is
  * ready again instead of making every byte pay the timeout.
  */
-#define COM1_THR_TIMEOUT_US 100u
-#define COM1_THR_FALLBACK_SPINS 1000000u
+#define COM1_THR_TIMEOUT_US 5000000u
+#define COM1_THR_FALLBACK_SPINS 100000000u
 
 static k_u64_t g_com1_thr_waits;
 static k_u64_t g_com1_thr_timeouts;
@@ -161,7 +161,6 @@ static k_u32_t g_com1_last_pid;
 static k_u64_t g_com1_last_rip;
 static k_u64_t g_com1_last_rsp;
 static k_u64_t g_com1_last_stack[PORT_X86_64_COM1_STACK_WORDS];
-static bool g_com1_thr_down;
 
 /* Wait for THR, and name the exact instruction and stack if the wait expires. */
 static bool com1_wait_thr(k_u64_t *rip, k_u64_t *rsp, k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS])
@@ -220,7 +219,18 @@ static void com1_report_timeout(k_u32_t cpu, k_u32_t pid, const char *name, k_u6
                      (unsigned)(rip & 0xFFFFFFFFu), (unsigned)(rsp >> 32),
                      (unsigned)(rsp & 0xFFFFFFFFu));
 
+    if (n < 0) {
+        return;
+    }
+
+    if ((k_size_t)n >= sizeof(buf)) {
+        n = (int)sizeof(buf) - 1;
+    }
+
     for (int i = 0; i < n; i++) {
+        if ((port_inb(COM1_LSR) & 0x20u) == 0u) {
+            break;
+        }
         port_outb(COM1, (k_u8_t)buf[i]);
     }
 }
@@ -231,8 +241,8 @@ static void com1_timeout(k_u64_t rip, k_u64_t rsp,
     struct task *self = k_port_task_current();
     k_u32_t cpu = k_port_cpu_id();
     k_u32_t pid = self != NULL ? self->pid : 0u;
+    (void)stack;
 
-    __atomic_store_n(&g_com1_thr_down, true, __ATOMIC_RELEASE);
     __atomic_fetch_add(&g_com1_thr_timeouts, 1u, __ATOMIC_RELAXED);
     __atomic_store_n(&g_com1_last_cpu, cpu, __ATOMIC_RELAXED);
     __atomic_store_n(&g_com1_last_pid, pid, __ATOMIC_RELAXED);
@@ -249,14 +259,8 @@ static void com1_timeout(k_u64_t rip, k_u64_t rsp,
 static bool com1_put(char c)
 {
     if ((port_inb(COM1_LSR) & 0x20u) != 0u) {
-        __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
         port_outb(COM1, (k_u8_t)c);
         return true;
-    }
-
-    if (__atomic_load_n(&g_com1_thr_down, __ATOMIC_ACQUIRE)) {
-        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
-        return false;
     }
 
     __atomic_fetch_add(&g_com1_thr_waits, 1u, __ATOMIC_RELAXED);
@@ -272,7 +276,6 @@ static bool com1_put(char c)
         }
     }
 
-    __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
     port_outb(COM1, (k_u8_t)c);
     return true;
 }
