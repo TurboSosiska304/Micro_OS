@@ -284,6 +284,18 @@ static bool verify_mount(const struct scenario_context *ctx)
     return true;
 }
 
+static bool scenario_prepare_replay(struct scenario_context *ctx)
+{
+    (void)ctx;
+    return make_file("/replay.txt", FAULT_KEEP_BYTES, 77u);
+}
+
+static bool verify_mount_replay(const struct scenario_context *ctx)
+{
+    (void)ctx;
+    return file_matches("/replay.txt", FAULT_KEEP_BYTES, 77u);
+}
+
 static const struct scenario g_scenarios[] = {
     {"create", scenario_create, verify_create},
     {"append-past-eof", scenario_grow, verify_grow},
@@ -292,6 +304,9 @@ static const struct scenario g_scenarios[] = {
     {"fsync", scenario_fsync, verify_fsync},
     {"mount", scenario_mount, verify_mount},
 };
+
+static const struct scenario g_replay_scenario = {"mount-replay", scenario_mount,
+                                                  verify_mount_replay};
 
 static void restore_base(void)
 {
@@ -312,6 +327,80 @@ static bool run_scenario(const struct scenario *scenario, struct scenario_contex
     }
 
     return !g_fault.power_lost;
+}
+
+static bool stable_committed(const k_u8_t *image)
+{
+    struct mfs_superblock sb;
+    struct mfs_journal_header header;
+
+    memcpy(&sb, image + (k_size_t)(FAULT_VOLUME_BLOCKS - 1u) * MFS_BLOCK_SIZE, sizeof(sb));
+    if (sb.magic != MFS_MAGIC || sb.version != MFS_VERSION_JOURNAL ||
+        sb.journal_start >= FAULT_VOLUME_BLOCKS) {
+        return false;
+    }
+
+    memcpy(&header, image + (k_size_t)sb.journal_start * MFS_BLOCK_SIZE, sizeof(header));
+
+    return header.magic == MFS_JOURNAL_MAGIC && header.state == MFS_JOURNAL_STATE_COMMITTED &&
+           header.slots != 0u;
+}
+
+/* Find a stable image with a committed transaction that has not checkpointed
+ * its homes. The cut sweep is only preparation; the resulting image is then
+ * the common base of every mount-replay trial. */
+static bool prepare_replay_base(void)
+{
+    const struct scenario prepare = {"prepare-replay", scenario_prepare_replay, NULL};
+    struct k_blockdev_fault_plan plan = {0};
+    struct scenario_context ctx;
+    k_u8_t *candidate;
+    k_u32_t operations;
+    k_u32_t cut;
+
+    candidate = (k_u8_t *)malloc(FAULT_VOLUME_BYTES);
+    if (candidate == NULL) {
+        return false;
+    }
+
+    restore_base();
+    KT_CHECK_INT_EQ(k_blockdev_fault_arm(&g_fault, &plan), 0);
+    KT_CHECK(run_scenario(&prepare, &ctx));
+    operations = g_fault.stats.operations;
+    mfs_unmount();
+
+    for (cut = 1; cut <= operations; cut++) {
+        bool whole = false;
+
+        restore_base();
+        plan.modes = K_BLOCKDEV_FAULT_POWER_CUT;
+        plan.at = cut;
+        KT_CHECK_INT_EQ(k_blockdev_fault_arm(&g_fault, &plan), 0);
+        (void)run_scenario(&prepare, &ctx);
+        k_blockdev_fault_reboot(&g_fault);
+
+        if (!stable_committed(g_stable)) {
+            continue;
+        }
+
+        memcpy(candidate, g_stable, FAULT_VOLUME_BYTES);
+        memcpy(g_ram.data, candidate, FAULT_VOLUME_BYTES);
+        memcpy(g_stable, candidate, FAULT_VOLUME_BYTES);
+
+        if (mfs_mount(&g_fault.dev) == MFS_OK) {
+            whole = keeper_whole() && verify_mount_replay(&ctx);
+            mfs_unmount();
+        }
+
+        if (whole) {
+            memcpy(g_base, candidate, FAULT_VOLUME_BYTES);
+            free(candidate);
+            return true;
+        }
+    }
+
+    free(candidate);
+    return false;
 }
 
 static bool recovery_canary(void)
@@ -623,6 +712,11 @@ void test_mfs_fault(void)
 
     for (i = 0; i < sizeof(g_scenarios) / sizeof(g_scenarios[0]); i++) {
         sweep_scenario(&g_scenarios[i]);
+    }
+
+    KT_CHECK(prepare_replay_base());
+    if (stable_committed(g_base)) {
+        sweep_scenario(&g_replay_scenario);
     }
 
     printf("    total: %u point(s), %u passed\n", (unsigned)g_points, (unsigned)g_passed);

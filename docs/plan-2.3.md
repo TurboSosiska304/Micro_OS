@@ -51,9 +51,10 @@ write and the first write after its next durability barrier.
 | unlink | 65 | 15 | 25 | 300 | 300 |
 | `fsync` | 544 | 208 | 311 | 2 695 | 2 695 |
 | mount | 23 | 0 | 0 | 92 | 92 |
-| **Total** | **1 301** | **460** | **696** | **6 360** | **6 360** |
+| mount with journal replay | 34 | 3 | 3 | 142 | 142 |
+| **Total** | **1 335** | **463** | **699** | **6 502** | **6 502** |
 
-The total is 3 903 error points, 1 301 power cuts, 460 dropped writes and 696
+The total is 4 005 error points, 1 335 power cuts, 463 dropped writes and 699
 reordered pairs.
 
 ## Defects found and fixed
@@ -84,7 +85,7 @@ reordered pairs.
 
 ## Gates
 
-* `make test`: **pass**, 6/6 CTest tests; 80 116 unit checks, 0 failures.
+* `make test`: **pass**, 6/6 CTest tests; 80 211 unit checks, 0 failures.
 * `make test-smp`: the first full run exposed an unrelated intermittent
   `test_tty.c:373` state assertion; an isolated unit rerun passed. The final
   full gate result is recorded below after the branch gate run.
