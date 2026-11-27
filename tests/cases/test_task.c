@@ -106,6 +106,7 @@ static void test_task_self(void)
     if (self != NULL) {
         KT_CHECK_STR_EQ(self->name, "test-runner");
         KT_CHECK(self->pid > 0);
+        KT_CHECK_INT_EQ(task_exec_status(self), -1);
     }
 
     KT_CHECK(task_by_pid(9999) == NULL);
@@ -371,6 +372,48 @@ static void job_worker(void *arg)
     k_sched_sleep_ms(50);
 }
 
+static int g_stop_finished;
+
+static void stop_worker(void *arg)
+{
+    K_UNUSED(arg);
+
+    k_sched_sleep_ms(200);
+    COUNT_SET(g_stop_finished, 1);
+}
+
+/* SIGSTOP is a scheduler operation, not a pending mark: the task leaves the
+ * sleep table and SIGCONT resumes the remainder of its wait. */
+static void test_task_stop_continue(void)
+{
+    struct task *child;
+    int code = -1;
+
+    ktest_begin("task: SIGSTOP stops a task and SIGCONT resumes it");
+
+    port_host_set_sink(tmpfile());
+    COUNT_SET(g_stop_finished, 0);
+
+    child = task_create("stop-child", stop_worker, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        wait_for_state(child->pid, TASK_STATE_SLEEPING, 2000);
+        KT_CHECK_INT_EQ(task_signal_send(child->pid, K_SIGSTOP), 0);
+        KT_CHECK_INT_EQ(task_state_of(child), TASK_STATE_STOPPED);
+        KT_CHECK_INT_EQ(task_signal_pending(child), 0u);
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 20), -2);
+        KT_CHECK_INT_EQ(COUNT_GET(g_stop_finished), 0);
+        KT_CHECK(task_signal_set(child, K_SIGSTOP, K_SIG_IGN) == K_SIG_ERR);
+
+        KT_CHECK_INT_EQ(task_signal_send(child->pid, K_SIGCONT), 0);
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 2000), 0);
+        KT_CHECK_INT_EQ(COUNT_GET(g_stop_finished), 1);
+    }
+
+    port_host_set_sink(NULL);
+}
+
 /*
  * The job of a pipeline (ADR 0017): the child of task_fork_shared() gets the
  * job of its parent, a signal of the job reaches every task of it, and the
@@ -514,6 +557,7 @@ void test_task(void)
     test_task_wait();
     test_task_wait_timeout();
     test_task_job();
+    test_task_stop_continue();
     test_mutex_creation_race();
     test_task_limits();
 }

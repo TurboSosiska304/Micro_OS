@@ -998,6 +998,24 @@ void k_port_task_yield(void)
     sched_yield();
 }
 
+void k_port_task_stop(void)
+{
+    struct task *self = k_port_task_current();
+    host_task_ctl *ctl = (self != NULL) ? (host_task_ctl *)self->ctx : NULL;
+
+    if (ctl == NULL) {
+        return;
+    }
+
+    pthread_mutex_lock(&ctl->lock);
+    while (task_state_of(self) == TASK_STATE_STOPPED) {
+        pthread_cond_wait(&ctl->cond, &ctl->lock);
+    }
+    /* The wake that ended the stop is not a wake of the next sleep. */
+    ctl->woken = false;
+    pthread_mutex_unlock(&ctl->lock);
+}
+
 /*
  * The sleep of a task of the host is a wait on the condition of its own
  * context, and not a nanosleep: the kernel wakes a task by name when the

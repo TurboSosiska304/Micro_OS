@@ -16,6 +16,8 @@
  */
 #include "kernel/port_task.h"
 
+#include "kernel/task.h"
+
 K_WEAK bool k_port_task_sleep_cuttable(void)
 {
     return false;
@@ -24,4 +26,13 @@ K_WEAK bool k_port_task_sleep_cuttable(void)
 K_WEAK void k_port_task_wake(struct task *t)
 {
     K_UNUSED(t);
+}
+
+[[gnu::weak]] void k_port_task_stop(void)
+{
+    struct task *self = task_self();
+
+    while (self != NULL && task_state_of(self) == TASK_STATE_STOPPED) {
+        k_port_task_sleep_ms(10u);
+    }
 }

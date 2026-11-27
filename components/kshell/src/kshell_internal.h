@@ -84,10 +84,14 @@ void kshell_write(const char *data, k_size_t len);
 void kshell_eprintf(const char *fmt, ...);
 
 /*
- * Parse and run a line: the words, the pipes and the redirections. The line
- * is written over (the words are cut in place), so the caller keeps its own
- * copy if it needs it.
+ * Parse and run a line: the words, the lists, the pipes and the redirections.
+ * The caller keeps its own copy because the lexer uses a bounded work buffer
+ * for the words and the job table keeps the text of background commands.
  */
 int kshell_line_run(char *line);
+
+/* Run `jobs`, `fg` or `bg` in the task that owns the job table. The name is
+ * the first word of the command; the remaining words are its arguments. */
+int kshell_jobs_command(const char *name, int argc, char **argv);
 
 #endif /* MICRO_OS_KSHELL_INTERNAL_H */

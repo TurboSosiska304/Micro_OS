@@ -103,12 +103,16 @@
 #define KSYS_RLIMIT_FDS_MAX TASK_LIMIT_FDS_MAX
 
 /*
- * The signals of the ABI. The numbers are the ones of POSIX and the set is
- * the one of the kernel (kernel/signal.h): the terminal interrupt, the end of
- * a process, the end of a child and a broken pipe. The disposition is a
- * pointer of the caller, or one of the two values below.
+ * The signals of the ABI. The numbers are the ones of POSIX. INT, PIPE, TERM
+ * and CHLD are marks with a disposition; STOP, TSTP and CONT move a task
+ * between the run queue and the stopped state and cannot be caught. The
+ * disposition of a mark is a pointer of the caller, or one of the two values
+ * below.
  */
 #define KSYS_SIGINT K_SIGINT
+#define KSYS_SIGCONT K_SIGCONT
+#define KSYS_SIGSTOP K_SIGSTOP
+#define KSYS_SIGTSTP K_SIGTSTP
 #define KSYS_SIGPIPE K_SIGPIPE
 #define KSYS_SIGTERM K_SIGTERM
 #define KSYS_SIGCHLD K_SIGCHLD

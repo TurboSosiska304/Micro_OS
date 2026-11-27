@@ -66,6 +66,7 @@ if(NOT ESP_PLATFORM)
         cases/test_libc.c
         cases/test_kshell.c
         cases/test_kshell_pipe.c
+        cases/test_kshell_jobs.c
         cases/test_initd.c
         cases/test_config.c
         cases/test_settings.c

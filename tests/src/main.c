@@ -91,6 +91,7 @@ static void run_tests(void *arg)
     test_libc();
     test_kshell();
     test_kshell_pipe();
+    test_kshell_jobs();
     test_initd();
     test_config();
     test_settings();

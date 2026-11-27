@@ -73,11 +73,14 @@ int microos_getrlimits(struct microos_rlimit *out);
 #define MICROOS_WNOHANG 1
 
 /*
- * The signals of the system, the numbers of POSIX. The set is the one of
- * kernel/signal.h: the terminal interrupt, the end of the process, the end
- * of a child and a broken pipe.
+ * The signals of the system, the numbers of POSIX. INT, PIPE, TERM and CHLD
+ * have dispositions; STOP, TSTP and CONT change the scheduler state and
+ * cannot be caught.
  */
 #define MICROOS_SIGINT 2
+#define MICROOS_SIGCONT 18
+#define MICROOS_SIGSTOP 19
+#define MICROOS_SIGTSTP 20
 #define MICROOS_SIGPIPE 13
 #define MICROOS_SIGTERM 15
 #define MICROOS_SIGCHLD 17

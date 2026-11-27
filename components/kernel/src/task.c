@@ -20,7 +20,7 @@ static k_u32_t g_next_pid = 1;
 static k_size_t g_used;
 
 static const char *const g_state_names[] = {
-    "new", "ready", "running", "sleeping", "blocked", "zombie", "dead",
+    "new", "ready", "running", "sleeping", "blocked", "stopped", "zombie", "dead",
 };
 
 const char *task_state_name(task_state_t state)
@@ -731,6 +731,7 @@ static struct task *task_alloc_slot(const char *name, task_entry_fn entry, void 
         t->parent = creator;
         t->pgid = (creator != NULL) ? creator->pgid : t->pid;
         t->sid = (creator != NULL) ? creator->sid : t->pid;
+        t->exec_status = -1;
         t->uid = (creator != NULL) ? creator->uid : 0u;
         t->euid = (creator != NULL) ? creator->euid : 0u;
         t->suid = (creator != NULL) ? creator->suid : 0u;
@@ -1103,6 +1104,11 @@ int task_reap(k_u32_t pid)
     return rc;
 }
 
+int task_exec_status(const struct task *t)
+{
+    return t != NULL ? t->exec_status : -1;
+}
+
 /*
  * The state and the code of a task, read in one look under the critical
  * section: the slot can be reaped by another task between two reads, and a
@@ -1198,6 +1204,13 @@ static int signal_number(int slot)
 static k_u32_t signal_bit(int sig)
 {
     return (k_u32_t)1u << (k_u32_t)signal_slot(sig);
+}
+
+/* The job-control signals are operations on the scheduler, not marks with a
+ * disposition. They therefore have no slot in task::sig_handlers. */
+static bool signal_controls_state(int sig)
+{
+    return sig == K_SIGSTOP || sig == K_SIGTSTP || sig == K_SIGCONT;
 }
 
 /*
@@ -1312,7 +1325,7 @@ int task_signal_send(k_u32_t pid, int sig)
 {
     struct task *t;
 
-    if (signal_slot(sig) < 0) {
+    if (signal_slot(sig) < 0 && !signal_controls_state(sig)) {
         return KERR_INVAL;
     }
 
@@ -1331,6 +1344,14 @@ int task_signal_send(k_u32_t pid, int sig)
         return KERR_SRCH;
     }
     k_port_exit_critical();
+
+    if (sig == K_SIGCONT) {
+        return k_sched_continue(t) ? 0 : KERR_SRCH;
+    }
+
+    if (sig == K_SIGSTOP || sig == K_SIGTSTP) {
+        return k_sched_stop(t) ? 0 : KERR_SRCH;
+    }
 
     /*
      * The mark is one bit of a word the task itself reads without the lock
@@ -1452,7 +1473,7 @@ int task_signal_all(const struct task *except, int sig)
     k_size_t i;
     int sent = 0;
 
-    if (signal_slot(sig) < 0) {
+    if (signal_slot(sig) < 0 && !signal_controls_state(sig)) {
         return KERR_INVAL;
     }
 

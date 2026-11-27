@@ -226,6 +226,16 @@ static void test_redirections(void)
     KT_CHECK_INT_EQ(kshell_execute("cat /in > /out3 2> /err"), KSHELL_OK);
     KT_CHECK_INT_EQ(volume_read("/err", out, sizeof(out)), 0);
 
+    /* A builtin obeys the same redirection, and `2>&1` names the output
+     * installed before it rather than the console. */
+    KT_CHECK_INT_EQ(kshell_execute("echo builtin > /echo-out"), KSHELL_OK);
+    KT_CHECK_INT_EQ(volume_read("/echo-out", out, sizeof(out)), 8);
+    KT_CHECK_STR_EQ(out, "builtin\n");
+    KT_CHECK(kshell_execute("cat < /stderr-missing > /joined 2>&1") != KSHELL_OK);
+    KT_CHECK(volume_read("/joined", out, sizeof(out)) > 0);
+    KT_CHECK(strstr(out, "/stderr-missing") != NULL);
+    KT_CHECK(strstr(out, "no such file") != NULL);
+
     /* The splitter keeps `--`: a name that begins with a dash is an
      * argument of the stage, not an option of the shell. */
     KT_CHECK_INT_EQ(kshell_execute("cat -- -dash | cat"), KSHELL_OK);
@@ -237,6 +247,59 @@ static void test_redirections(void)
 
     check_no_leaks(tasks_before);
 
+    pipe_teardown();
+}
+
+static void test_lists(void)
+{
+    char buf[8192];
+    FILE *sink;
+    k_size_t tasks_before;
+
+    ktest_begin("kshell: lists run in order and short-circuit");
+
+    pipe_setup();
+    tasks_before = task_count();
+    KT_CHECK_INT_EQ(volume_write("/in", "alive\n"), 0);
+
+    sink = sink_open();
+    if (sink == NULL) {
+        pipe_teardown();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(kshell_execute("echo list-one; echo list-two"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("echo list-three && echo list-four"), KSHELL_OK);
+    KT_CHECK(kshell_execute("cat /list-missing && echo list-forbidden") != KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("cat /list-missing || echo list-recovered"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("echo list-skip || echo list-forbidden"), KSHELL_OK);
+
+    /* `&&` and `||` have the same precedence and associate to the left. */
+    KT_CHECK_INT_EQ(
+        kshell_execute("cat /in && cat /list-missing || echo list-fallback; echo list-last"),
+        KSHELL_OK);
+
+    /* Operators in quotes are arguments, and a trailing semicolon is the
+     * empty separator of POSIX. */
+    KT_CHECK_INT_EQ(kshell_execute("echo 'list && literal ; pipe | redirect >'"), KSHELL_OK);
+    KT_CHECK_INT_EQ(kshell_execute("echo list-tail;"), KSHELL_OK);
+
+    /* The whole line is parsed before it runs: a syntax error at the end
+     * does not leave a prefix behind. */
+    KT_CHECK_INT_EQ(kshell_execute("echo list-must-not-run &&"), KSHELL_USAGE);
+
+    sink_close(sink, buf, sizeof(buf));
+
+    KT_CHECK(strstr(buf, "list-one\nlist-two\n") != NULL);
+    KT_CHECK(strstr(buf, "list-three\nlist-four\n") != NULL);
+    KT_CHECK(strstr(buf, "list-recovered\n") != NULL);
+    KT_CHECK(strstr(buf, "list-fallback\nlist-last\n") != NULL);
+    KT_CHECK(strstr(buf, "list && literal ; pipe | redirect >\n") != NULL);
+    KT_CHECK(strstr(buf, "list-tail\n") != NULL);
+    KT_CHECK(strstr(buf, "list-forbidden") == NULL);
+    KT_CHECK(strstr(buf, "list-must-not-run") == NULL);
+
+    check_no_leaks(tasks_before);
     pipe_teardown();
 }
 
@@ -263,9 +326,11 @@ static void test_errors(void)
     KT_CHECK_INT_EQ(kshell_execute("cat |"), KSHELL_USAGE);
     KT_CHECK_INT_EQ(kshell_execute("cat /in | | cat"), KSHELL_USAGE);
 
-    /* The words the shell does not parse yet are refused and named. */
-    KT_CHECK_INT_EQ(kshell_execute("cat /in && cat"), KSHELL_USAGE);
-    KT_CHECK_INT_EQ(kshell_execute("cat /in ; cat"), KSHELL_USAGE);
+    /* Lists are parsed before they run; an operator without a neighbour is
+     * refused, and the shell stays alive for the next line. */
+    KT_CHECK_INT_EQ(kshell_execute("cat /in &&"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("cat /in ||"), KSHELL_USAGE);
+    KT_CHECK_INT_EQ(kshell_execute("; cat /in"), KSHELL_USAGE);
 
     /* A redirect without a name. */
     KT_CHECK_INT_EQ(kshell_execute("ls / >"), KSHELL_USAGE);
@@ -291,7 +356,7 @@ static void test_errors(void)
     sink_close(sink, buf, sizeof(buf));
 
     KT_CHECK(strstr(buf, "a pipe needs a command on both sides") != NULL);
-    KT_CHECK(strstr(buf, "'&&' is not supported") != NULL);
+    KT_CHECK(strstr(buf, "needs a command after it") != NULL);
     KT_CHECK(strstr(buf, "needs a file name") != NULL);
     KT_CHECK(strstr(buf, "cannot run in a pipeline") != NULL);
     KT_CHECK(strstr(buf, "no such file") != NULL);
@@ -307,5 +372,6 @@ void test_kshell_pipe(void)
 {
     test_parse_and_run();
     test_redirections();
+    test_lists();
     test_errors();
 }

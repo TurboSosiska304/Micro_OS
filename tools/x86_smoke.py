@@ -294,7 +294,7 @@ COMMANDS = [
     # The numeric string of a field: the third column of the data is 0, 1
     # and 1000, and a field compares as a number against the number 9.
     "exec /bin/awk -F: {print($3>9)} /etc/columns",
-    "exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}",
+    "exec /bin/awk \"BEGIN{srand(1);r=rand();print(r>=0&&r<1)}\"",
     # The status of a script that ends with `exit N` comes back to the shell.
     "exec /bin/awk BEGIN{exit(3)}",
     # The two calls of a shell. `system` is the port layer of awk, which still
@@ -2808,7 +2808,7 @@ def check(output: str) -> list:
         re.findall(r"(?m)^([01])\r?$", awk_numeric) == ["0", "0", "1"],
         awk_numeric,
     )
-    awk_rand = answer("exec /bin/awk BEGIN{srand(1);r=rand();print(r>=0&&r<1)}")
+    awk_rand = answer('exec /bin/awk "BEGIN{srand(1);r=rand();print(r>=0&&r<1)}"')
     expect(
         "awk rand answers a number below one",
         re.search(r"(?m)^1\r?$", awk_rand) is not None,

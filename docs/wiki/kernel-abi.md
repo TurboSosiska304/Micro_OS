@@ -142,12 +142,14 @@ kernel and runs in place.
 
 `waitpid()` looks at a finished child first and then at the signals; a pending
 signal that has to be answered makes the call answer `EINTR` and leaves the
-child to the next wait. The exit of a child marks `SIGCHLD` on its parent. No
-job control: the system has no groups and no `&`, `fg` or `bg`; Ctrl+C while
-the shell runs a program sends `SIGINT` to that program, and while it runs a
-pipeline to every stage of it and the programs they started (the job of
-ADR 0017). `kill` takes a pid from `ps`. ADR 0015 has the design, and the
-x86-64 smoke test runs `/bin/signals` through all of it.
+child to the next wait. The exit of a child marks `SIGCHLD` on its parent.
+`SIGSTOP`, `SIGTSTP` and `SIGCONT` are scheduler operations: a stopped task is
+in no queue, and only CONT makes it ready again. Ctrl+C sends `SIGINT` to the
+foreground process group and Ctrl+Z sends `SIGTSTP`; the shell keeps that group
+as a numbered job and implements `&`, `jobs`, `fg` and `bg`. `kill` still takes
+one positive pid from `ps`; group delivery is the tty and shell path. ADR 0015
+has the signal design, ADR 0059 the job table, and the x86-64 shell smoke runs
+the terminal keys through it.
 
 ## Descriptors
 

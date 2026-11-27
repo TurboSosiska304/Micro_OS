@@ -35,6 +35,7 @@ typedef enum {
     TASK_STATE_RUNNING,  /* executing */
     TASK_STATE_SLEEPING, /* waiting for a timer */
     TASK_STATE_BLOCKED,  /* waiting for an event */
+    TASK_STATE_STOPPED,  /* suspended by SIGSTOP, SIGTSTP or SIGCONT's absence */
     TASK_STATE_ZOMBIE,   /* exited, not reaped yet */
     TASK_STATE_DEAD      /* slot released */
 } task_state_t;
@@ -169,6 +170,10 @@ struct task {
     bool pending_block;
     bool pending_wake;
     k_u32_t exit_code;
+    /* The status of the last program this kernel task started and waited for.
+     * execve() keeps its ABI answer (0 on return); the shell reads this to
+     * implement the status of a pipeline and the short-circuit lists. */
+    int exec_status;
     k_u64_t runtime_ticks; /* bookkeeping: ticks spent running */
     k_u32_t quantum_left;  /* ticks left in the current time slice */
     void *stack;           /* owned by the port */
@@ -268,6 +273,10 @@ k_size_t task_count_by_state(task_state_t state);
 
 /* Release the slot of a finished task (Linux style reaping). */
 int task_reap(k_u32_t pid);
+
+/* The status of the last program started and waited for by a kernel task, or
+ * -1 when it has not started one. The execve ABI still answers 0 on return. */
+int task_exec_status(const struct task *t);
 
 /*
  * Wait for a child task to finish, like waitpid(). The task is reaped and

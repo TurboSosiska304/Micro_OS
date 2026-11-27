@@ -2623,13 +2623,13 @@ static int cmd_exec(int argc, char **argv)
 
     rc = microos_execve(path, args);
     if (rc == 0) {
-        /* A program that returned: the machine has no process to exit into. */
+        int status = task_exec_status(task_self());
         /* A line of the shell goes to the console and not to the output of
          * the program: with `exec gzip -c f > g` the stream of the program is
          * still the one the shell is writing to, and the sentence ended up in
          * the archive (found by the port of gzip). */
         kshell_eprintf("the program has finished\n");
-        return KSHELL_OK;
+        return status >= 0 ? status : KSHELL_OK;
     }
 
     kshell_printf("exec: %s: %s\n", path, exec_error_text(microos_errno()));
@@ -2645,8 +2645,8 @@ static int cmd_exec(int argc, char **argv)
  * of a board whose /bin has no file of that name.
  *
  * `execve` of this system runs the program as a task of its own and returns
- * when it has ended, so the shell waits without a `fork` of its own kernel
- * task (the port copies the address space of a program, not of the shell).
+ * when it has ended. Its ABI answer is still 0; the port records the program's
+ * exit code in the calling kernel task, which is the status of a shell stage.
  * docs/debts.md has the POSIX shape.
  */
 int kshell_try_program(int argc, char **argv, int *status)
@@ -2668,7 +2668,8 @@ int kshell_try_program(int argc, char **argv, int *status)
 
     rc = microos_execve(path, argv);
     if (rc == 0) {
-        *status = KSHELL_OK;
+        int program_status = task_exec_status(task_self());
+        *status = program_status >= 0 ? program_status : KSHELL_OK;
         return 1;
     }
 
@@ -2690,10 +2691,8 @@ int kshell_try_program(int argc, char **argv, int *status)
 /*
  * A stage of a pipeline whose name is not a command of the shell: the name
  * with a slash is a path, a name without one is looked up in PATH, and the
- * program runs with the descriptors the stage built for it. The answer is
- * the status of the stage: a program that ran and returned is a success,
- * because execve of this system waits for it and does not hand its code
- * back (docs/debts.md).
+ * program runs with the descriptors the stage built for it. The answer is the
+ * program's recorded exit code, or an error when the image could not start.
  */
 int kshell_run_program(int argc, char **argv)
 {
@@ -2716,7 +2715,8 @@ int kshell_run_program(int argc, char **argv)
 
     rc = microos_execve(path, argv);
     if (rc == 0) {
-        return KSHELL_OK;
+        int status = task_exec_status(task_self());
+        return status >= 0 ? status : KSHELL_OK;
     }
 
     kshell_eprintf("%s: %s\n", argv[0], exec_error_text(microos_errno()));

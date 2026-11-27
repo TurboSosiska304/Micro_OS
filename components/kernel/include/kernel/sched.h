@@ -100,6 +100,15 @@ void k_sched_wake_flush(void);
 void k_sched_block(struct task *t);
 void k_sched_unblock(struct task *t);
 
+/*
+ * Stop and continue a task. A stopped task is in no run queue and no sleep
+ * table; SIGCONT is the only operation that makes it ready again. The stop
+ * also remembers that a sleeping task must not come back early when the port
+ * ends the sleep it was in.
+ */
+bool k_sched_stop(struct task *t);
+bool k_sched_continue(struct task *t);
+
 /* Look at the queues: the task this core would run next, not taken. This is
  * the peek of the tests and the diagnostics; a port that switches must use
  * k_sched_claim_next(), because a choice another core can repeat is two cores

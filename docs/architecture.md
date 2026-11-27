@@ -277,9 +277,11 @@ the return address is a page of the port that calls `sigreturn`, which puts
 the interrupted frame back. The host, the board and the null port have no
 ring 3 and run the handler in place. `waitpid()` looks at a finished child
 before the marks and answers `EINTR` for a mark that has to be answered
-without reaping the child. There is no job control - no groups, no `&`, no
-`fg`, no `bg` - and the documentation says so; Ctrl+C while the shell waits
-for a program is read by the port and becomes `SIGINT` for that program.
+without reaping the child. SIGSTOP and SIGTSTP remove a task from every
+scheduler queue, and SIGCONT is the only way back. The shell gives each
+pipeline a process group and a job-table entry: Ctrl+C signals the foreground
+group, Ctrl+Z stops it and returns the terminal, and `&`, `jobs`, `fg` and
+`bg` manage the group (ADR 0059).
 
 ### The limits of a task (0.9)
 
