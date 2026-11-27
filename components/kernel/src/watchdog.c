@@ -107,8 +107,8 @@ static void dump_mutexes(void)
             continue;
         }
         wdg_printf("[WDG]   mutex %s owner=%u depth=%u\n",
-                   infos[i].name != NULL ? infos[i].name : "?",
-                   (unsigned)infos[i].owner_pid, (unsigned)infos[i].depth);
+                   infos[i].name != NULL ? infos[i].name : "?", (unsigned)infos[i].owner_pid,
+                   (unsigned)infos[i].depth);
     }
 }
 
@@ -148,8 +148,7 @@ static void dump_cpus(k_u32_t now_ticks)
         k_u64_t rip = k_port_cpu_saved_rip(cpu);
 
         wdg_printf("[WDG]   cpu=%u ticks=%u crit=%u klock=%u rip=0x%016llx cur=%u:%s/%s\n",
-                   (unsigned)cpu, (record != NULL) ? (unsigned)record->ticks : 0u,
-                   (unsigned)depth,
+                   (unsigned)cpu, (record != NULL) ? (unsigned)record->ticks : 0u, (unsigned)depth,
                    (record != NULL && record->interrupt_depth > 0u) ? 1u : 0u,
                    (unsigned long long)rip, (cur != NULL) ? (unsigned)cur->pid : 0u,
                    (cur != NULL) ? cur->name : "<idle>",
@@ -227,10 +226,9 @@ void k_watchdog_check(void)
 
         if (t->state == TASK_STATE_READY) {
             k_u32_t waited = now_ticks - t->last_run_tick;
-            if (t->last_run_tick != 0u &&
-                (k_i32_t)waited >= (k_i32_t)K_WATCHDOG_THRESHOLD_MS) {
-                wdg_printf("[WDG] starved pid=%u name=%s waited=%u ms\n",
-                           (unsigned)t->pid, t->name, (unsigned)waited);
+            if (t->last_run_tick != 0u && (k_i32_t)waited >= (k_i32_t)K_WATCHDOG_THRESHOLD_MS) {
+                wdg_printf("[WDG] starved pid=%u name=%s waited=%u ms\n", (unsigned)t->pid, t->name,
+                           (unsigned)waited);
                 k_watchdog_trigger("ready task starved");
                 return;
             }

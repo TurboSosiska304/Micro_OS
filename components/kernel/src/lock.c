@@ -218,7 +218,8 @@ int k_mutex_destroy(k_mutex_t *mutex)
             g_mutex_dbg[g_mutex_dbg_count - 1u].name = NULL;
             g_mutex_dbg[g_mutex_dbg_count - 1u].owner_pid = 0u;
             g_mutex_dbg[g_mutex_dbg_count - 1u].depth = 0u;
-            __atomic_store_n(&g_mutex_dbg_count, (k_u16_t)(g_mutex_dbg_count - 1u), __ATOMIC_RELEASE);
+            __atomic_store_n(&g_mutex_dbg_count, (k_u16_t)(g_mutex_dbg_count - 1u),
+                             __ATOMIC_RELEASE);
             break;
         }
     }
