@@ -576,6 +576,19 @@ bool k_sched_sleep_unless(k_u32_t ms, const bool *stop)
     sched_lock();
 
     /*
+     * SIGSTOP may arrive while the task is still running, before it reaches
+     * its first sleep. The state written below would replace STOPPED with
+     * SLEEPING and the task would run its wait to the end: a stop is not an
+     * answer to a wait, and only SIGCONT lifts it. Wait here, with the lock
+     * dropped, until the task is continued before arming the sleep.
+     */
+    while (self->state == TASK_STATE_STOPPED) {
+        sched_unlock();
+        k_port_task_stop();
+        sched_lock();
+    }
+
+    /*
      * The flag is the record of a wait (kernel/wait.c) and is written under
      * this lock: a wakeup that has already happened is not slept on, which is
      * the window of K15 closed at its source.
@@ -1199,6 +1212,15 @@ void k_sched_task_running(struct task *t)
     }
 
     sched_lock();
+
+    /* The trampoline is the first thing a new task runs. SIGSTOP may have
+     * arrived before it: writing RUNNING here would lose that stop just as
+     * arming a first sleep would. Wait for SIGCONT before the entry point. */
+    while (t->state == TASK_STATE_STOPPED) {
+        sched_unlock();
+        k_port_task_stop();
+        sched_lock();
+    }
 
     self = k_cpu_self();
 

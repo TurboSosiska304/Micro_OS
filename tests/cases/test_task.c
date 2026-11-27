@@ -414,6 +414,65 @@ static void test_task_stop_continue(void)
     port_host_set_sink(NULL);
 }
 
+static int g_stop_race_started;
+static int g_stop_race_release;
+static int g_stop_race_arming;
+static int g_stop_race_slept;
+
+static void stop_before_sleep_worker(void *arg)
+{
+    K_UNUSED(arg);
+
+    COUNT_SET(g_stop_race_started, 1);
+    /* Stay RUNNING until the test stops us: the first sleep must honour a
+     * SIGSTOP that arrived before there was a sleep table entry to remove. */
+    while (COUNT_GET(g_stop_race_release) == 0) {
+    }
+    COUNT_SET(g_stop_race_arming, 1);
+    k_sched_sleep_ms(50);
+    COUNT_SET(g_stop_race_slept, 1);
+}
+
+/* A stop of a running task is not lost when the task later arms a sleep. The
+ * guard of the shell job under the address sanitizer found this: the shell
+ * stopped a stage before it reached `sleep`, and the sleep overwrote STOPPED
+ * with SLEEPING and ran to its deadline. */
+static void test_task_stop_before_sleep(void)
+{
+    struct task *child;
+    int code = -1;
+
+    ktest_begin("task: SIGSTOP of a running task survives its first sleep");
+
+    port_host_set_sink(tmpfile());
+    COUNT_SET(g_stop_race_started, 0);
+    COUNT_SET(g_stop_race_release, 0);
+    COUNT_SET(g_stop_race_arming, 0);
+    COUNT_SET(g_stop_race_slept, 0);
+
+    child = task_create("stop-race", stop_before_sleep_worker, NULL, TASK_PRIO_DEFAULT);
+    KT_CHECK(child != NULL);
+
+    if (child != NULL) {
+        wait_for(&g_stop_race_started, 1, 2000);
+        KT_CHECK_INT_EQ(COUNT_GET(g_stop_race_started), 1);
+        KT_CHECK_INT_EQ(task_signal_send(child->pid, K_SIGSTOP), 0);
+        COUNT_SET(g_stop_race_release, 1);
+        wait_for(&g_stop_race_arming, 1, 2000);
+
+        k_sched_sleep_ms(300);
+        KT_CHECK_INT_EQ(task_state_of(child), TASK_STATE_STOPPED);
+        KT_CHECK_INT_EQ(COUNT_GET(g_stop_race_slept), 0);
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 20), -2);
+
+        KT_CHECK_INT_EQ(task_signal_send(child->pid, K_SIGCONT), 0);
+        KT_CHECK_INT_EQ(task_wait(child->pid, &code, 2000), 0);
+        KT_CHECK_INT_EQ(COUNT_GET(g_stop_race_slept), 1);
+    }
+
+    port_host_set_sink(NULL);
+}
+
 /*
  * The job of a pipeline (ADR 0017): the child of task_fork_shared() gets the
  * job of its parent, a signal of the job reaches every task of it, and the
@@ -558,6 +617,7 @@ void test_task(void)
     test_task_wait_timeout();
     test_task_job();
     test_task_stop_continue();
+    test_task_stop_before_sleep();
     test_mutex_creation_race();
     test_task_limits();
 }
