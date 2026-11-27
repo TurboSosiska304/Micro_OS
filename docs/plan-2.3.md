@@ -86,9 +86,9 @@ reordered pairs.
 ## Gates
 
 * `make test`: **pass**, 6/6 CTest tests; 80 211 unit checks, 0 failures.
-* `make test-smp`: the first full run exposed an unrelated intermittent
-  `test_tty.c:373` state assertion; an isolated unit rerun passed. The final
-  full gate result is recorded below after the branch gate run.
+* `make test-smp`: **pass**, 6/6 CTest tests. An earlier full run exposed an
+  intermittent `test_tty.c:373` state assertion outside this lane; the isolated
+  unit rerun and the final full SMP gate both passed.
 * `make integrity`: **pass**, 30/30 checks.
 * `make x86-build`: **pass**.
 * `make x86-smoke`: **pass**, 431/431 checks. The smoke driver now counts only
