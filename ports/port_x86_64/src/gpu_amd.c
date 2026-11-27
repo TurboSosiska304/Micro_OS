@@ -560,3 +560,347 @@ int port_x86_64_gpu_amd_vramtest(bool do_write)
 
     return do_vram_write_test(bar0_base, test_offset);
 }
+
+/* ------------------------------------------------------------------------- */
+/* VRAM block manager: vrammap / vramalloc / vramfill / vramread / vramfree  */
+/* / vramdump. Original work for Micro OS.                                    */
+/* ------------------------------------------------------------------------- */
+
+static struct gpu_amd_vram_mgr g_vram_mgr;
+
+static bool gpu_amd_get_bar0(k_u64_t *out_base, k_u64_t *out_size)
+{
+    const struct gpu_info *info = port_x86_64_gpu_info();
+    struct port_x86_64_pci_device pci;
+
+    if (out_base != NULL) {
+        *out_base = 0u;
+    }
+    if (out_size != NULL) {
+        *out_size = 0u;
+    }
+    if (info == NULL || !info->present || info->vendor != 0x1002u) {
+        return false;
+    }
+
+    pci.bus = info->bus;
+    pci.slot = info->slot;
+    pci.function = info->function;
+    if (out_base != NULL) {
+        *out_base = bar_base(&pci, PCI_BAR0);
+    }
+    if (out_size != NULL) {
+        *out_size = info->vram_bytes;
+    }
+    return out_base == NULL || *out_base != 0u;
+}
+
+static int gpu_amd_vram_ensure_init(void)
+{
+    const struct gpu_info *info = port_x86_64_gpu_info();
+    struct gpu_amd_scanout_region regions[GPU_AMD_DCE_PIPE_COUNT * 2];
+    int count = 0;
+    int rc;
+
+    if (info == NULL || !info->present) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    if (info->vendor != 0x1002u) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    if (info->mmio_base == 0u || info->mmio_size == 0u) {
+        return GPU_AMD_VRAM_ERR_NOT_MAPPED;
+    }
+    if (info->vram_bytes == 0u) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    if (g_vram_mgr.ready && g_vram_mgr.vram_size == info->vram_bytes) {
+        return GPU_AMD_VRAM_OK;
+    }
+
+    count = read_scanout_regions(regions, (int)(sizeof(regions) / sizeof(regions[0])));
+    rc = gpu_amd_vram_mgr_init(&g_vram_mgr, info->vram_bytes, regions, count);
+    if (rc != GPU_AMD_VRAM_OK) {
+        return rc;
+    }
+    return GPU_AMD_VRAM_OK;
+}
+
+int port_x86_64_gpu_amd_vrammap(void)
+{
+    const struct gpu_info *info = port_x86_64_gpu_info();
+    struct gpu_amd_scanout_region regions[GPU_AMD_DCE_PIPE_COUNT * 2];
+    int count;
+    int i;
+    k_u64_t free_total = 0u;
+    int rc;
+
+    if (info == NULL || !info->present) {
+        kshell_printf("gpu vrammap: no display controller present\n");
+        return 1;
+    }
+    if (info->vendor != 0x1002u) {
+        kshell_printf("gpu vrammap: not an AMD controller (%04x:%04x)\n", (unsigned)info->vendor,
+                      (unsigned)info->device);
+        return 1;
+    }
+    if (info->mmio_base == 0u || info->mmio_size == 0u) {
+        kshell_printf("gpu vrammap: BAR5 MMIO not mapped\n");
+        return 1;
+    }
+
+    count = read_scanout_regions(regions, (int)(sizeof(regions) / sizeof(regions[0])));
+    rc = gpu_amd_vram_mgr_init(&g_vram_mgr, info->vram_bytes, regions, count);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vrammap: init failed: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+
+    kshell_printf("gpu vrammap: vram %u MiB, block %u KiB\n",
+                  (unsigned)(info->vram_bytes / (1024ull * 1024ull)),
+                  (unsigned)(GPU_AMD_VRAM_BLOCK_SIZE / 1024ull));
+    kshell_printf("  reserved: [0x00000000, 0x%08x) first 16 MiB\n",
+                  (unsigned)GPU_AMD_VRAM_RESERVED_END);
+    if (count == 0) {
+        kshell_printf("  scanout: none detected\n");
+    }
+    for (i = 0; i < count; i++) {
+        kshell_printf("  scanout: pipe %u %s [0x%x%08x, +%u KiB)\n", (unsigned)regions[i].pipe,
+                      regions[i].primary ? "primary" : "secondary",
+                      (unsigned)(regions[i].address >> 32), (unsigned)(k_u32_t)regions[i].address,
+                      (unsigned)(regions[i].size_bytes / 1024u));
+    }
+    for (i = 0; i < g_vram_mgr.free_count; i++) {
+        free_total += g_vram_mgr.free_extents[i].size;
+        kshell_printf("  free: [0x%x%08x, +%u MiB)\n",
+                      (unsigned)(g_vram_mgr.free_extents[i].offset >> 32),
+                      (unsigned)(k_u32_t)g_vram_mgr.free_extents[i].offset,
+                      (unsigned)(g_vram_mgr.free_extents[i].size / (1024ull * 1024ull)));
+    }
+    kshell_printf("  free total: %u MiB in %d extent(s)\n",
+                  (unsigned)(free_total / (1024ull * 1024ull)), g_vram_mgr.free_count);
+    kinfo("gpu vrammap: vram=%uMiB free=%uMiB extents=%d scanouts=%d",
+          (unsigned)(info->vram_bytes / (1024ull * 1024ull)),
+          (unsigned)(free_total / (1024ull * 1024ull)), g_vram_mgr.free_count, count);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_vramalloc(k_u64_t size_kib)
+{
+    k_u32_t id = 0u;
+    k_u64_t offset = 0u;
+    k_u64_t bytes;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramalloc: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    if (size_kib == 0u || size_kib > (k_u64_t)(~(k_u32_t)0u)) {
+        kshell_printf("gpu vramalloc: invalid size\n");
+        return 1;
+    }
+    bytes = size_kib * 1024ull;
+    rc = gpu_amd_vram_alloc(&g_vram_mgr, bytes, &id, &offset);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramalloc: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    kshell_printf("gpu vramalloc: id=%u offset=0x%x%08x size=%u KiB\n", (unsigned)id,
+                  (unsigned)(offset >> 32), (unsigned)(k_u32_t)offset,
+                  (unsigned)(gpu_amd_vram_find(&g_vram_mgr, id)->size / 1024ull));
+    kinfo("gpu vramalloc: id=%u offset=0x%x%08x", (unsigned)id, (unsigned)(offset >> 32),
+          (unsigned)(k_u32_t)offset);
+    return 0;
+}
+
+static k_u32_t gpu_amd_vram_pattern(k_u32_t pattern, k_u64_t block_offset, k_u64_t word_index)
+{
+    /* Deterministic pattern by block offset so reads can verify content. */
+    return pattern ^ (k_u32_t)(block_offset >> 12) ^ (k_u32_t)word_index;
+}
+
+int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern)
+{
+    struct gpu_amd_vram_block *b;
+    k_u64_t bar0_base = 0u;
+    k_u64_t bar0_size = 0u;
+    k_u64_t off;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramfill: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    b = gpu_amd_vram_find(&g_vram_mgr, id);
+    if (b == NULL) {
+        kshell_printf("gpu vramfill: bad id %u\n", (unsigned)id);
+        return 1;
+    }
+    if (gpu_amd_vram_reserved_overlap(&g_vram_mgr, b->offset, b->size)) {
+        kshell_printf("gpu vramfill: refused, block overlaps reserved/scanout\n");
+        return 1;
+    }
+    if (!gpu_amd_get_bar0(&bar0_base, &bar0_size) || bar0_base == 0u) {
+        kshell_printf("gpu vramfill: BAR0 not available\n");
+        return 1;
+    }
+    if (b->offset + b->size > bar0_size) {
+        kshell_printf("gpu vramfill: block outside BAR0 aperture\n");
+        return 1;
+    }
+
+    for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
+        volatile k_u32_t *p;
+        k_u32_t pages;
+        k_u64_t chunk = b->size - off;
+        k_u32_t i;
+        k_u32_t words;
+
+        if (chunk > GPU_AMD_VRAM_BLOCK_SIZE) {
+            chunk = GPU_AMD_VRAM_BLOCK_SIZE;
+        }
+        pages = port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + b->offset + off,
+                                            (k_size_t)chunk);
+        if (pages == 0u) {
+            kshell_printf("gpu vramfill: map failed at +0x%x\n", (unsigned)(b->offset + off));
+            return 1;
+        }
+        p = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
+        words = (k_u32_t)(chunk / 4u);
+        for (i = 0; i < words; i++) {
+            p[i] = gpu_amd_vram_pattern(pattern, b->offset, (off / 4u) + (k_u64_t)i);
+        }
+    }
+
+    b->pattern = pattern;
+    b->filled = true;
+    kshell_printf("gpu vramfill: id=%u pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
+                  (unsigned)pattern, (unsigned)(b->size / 1024ull));
+    kinfo("gpu vramfill: id=%u pattern=0x%08x", (unsigned)id, (unsigned)pattern);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_vramread(k_u32_t id)
+{
+    struct gpu_amd_vram_block *b;
+    k_u64_t bar0_base = 0u;
+    k_u64_t bar0_size = 0u;
+    k_u64_t off;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramread: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    b = gpu_amd_vram_find(&g_vram_mgr, id);
+    if (b == NULL) {
+        kshell_printf("gpu vramread: bad id %u\n", (unsigned)id);
+        return 1;
+    }
+    if (!b->filled) {
+        kshell_printf("gpu vramread: id=%u not filled\n", (unsigned)id);
+        return 1;
+    }
+    if (!gpu_amd_get_bar0(&bar0_base, &bar0_size) || bar0_base == 0u) {
+        kshell_printf("gpu vramread: BAR0 not available\n");
+        return 1;
+    }
+    if (b->offset + b->size > bar0_size) {
+        kshell_printf("gpu vramread: block outside BAR0 aperture\n");
+        return 1;
+    }
+
+    for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
+        volatile k_u32_t *p;
+        k_u32_t pages;
+        k_u64_t chunk = b->size - off;
+        k_u32_t i;
+        k_u32_t words;
+
+        if (chunk > GPU_AMD_VRAM_BLOCK_SIZE) {
+            chunk = GPU_AMD_VRAM_BLOCK_SIZE;
+        }
+        pages = port_x86_64_paging_map_mmio(PORT_X86_64_GPU_VRAM_VIRT, bar0_base + b->offset + off,
+                                            (k_size_t)chunk);
+        if (pages == 0u) {
+            kshell_printf("gpu vramread: map failed at +0x%x\n", (unsigned)(b->offset + off));
+            return 1;
+        }
+        p = (volatile k_u32_t *)(uintptr_t)PORT_X86_64_GPU_VRAM_VIRT;
+        words = (k_u32_t)(chunk / 4u);
+        for (i = 0; i < words; i++) {
+            k_u32_t expect = gpu_amd_vram_pattern(b->pattern, b->offset, (off / 4u) + (k_u64_t)i);
+            k_u32_t got = p[i];
+            if (got != expect) {
+                kshell_printf("gpu vramread: mismatch id=%u at +%u: got 0x%08x expect 0x%08x\n",
+                              (unsigned)id, (unsigned)((off + (k_u64_t)i * 4u)), (unsigned)got,
+                              (unsigned)expect);
+                kerror("gpu vramread: mismatch id=%u", (unsigned)id);
+                return 1;
+            }
+        }
+    }
+
+    kshell_printf("gpu vramread: id=%u pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
+                  (unsigned)b->pattern, (unsigned)(b->size / 1024ull));
+    kinfo("gpu vramread: id=%u ok", (unsigned)id);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_vramfree(k_u32_t id)
+{
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramfree: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    rc = gpu_amd_vram_free(&g_vram_mgr, id);
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramfree: id=%u: %s\n", (unsigned)id, gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+    kshell_printf("gpu vramfree: id=%u freed\n", (unsigned)id);
+    kinfo("gpu vramfree: id=%u", (unsigned)id);
+    return 0;
+}
+
+int port_x86_64_gpu_amd_vramdump(void)
+{
+    int i;
+    int used = 0;
+    int rc;
+
+    rc = gpu_amd_vram_ensure_init();
+    if (rc != GPU_AMD_VRAM_OK) {
+        kshell_printf("gpu vramdump: %s\n", gpu_amd_vram_err_name(rc));
+        return 1;
+    }
+
+    kshell_printf("gpu vramdump: %u MiB total, %u KiB blocks, %d free extents\n",
+                  (unsigned)(g_vram_mgr.vram_size / (1024ull * 1024ull)),
+                  (unsigned)(GPU_AMD_VRAM_BLOCK_SIZE / 1024ull), g_vram_mgr.free_count);
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        const struct gpu_amd_vram_block *b = &g_vram_mgr.allocs[i];
+        if (b->id == 0u) {
+            continue;
+        }
+        used++;
+        kshell_printf("  id=%u off=0x%x%08x size=%u KiB %s", (unsigned)b->id,
+                      (unsigned)(b->offset >> 32), (unsigned)(k_u32_t)b->offset,
+                      (unsigned)(b->size / 1024ull), b->filled ? "filled" : "empty");
+        if (b->filled) {
+            kshell_printf(" pattern=0x%08x", (unsigned)b->pattern);
+        }
+        kshell_printf("\n");
+    }
+    if (used == 0) {
+        kshell_printf("  (no allocations)\n");
+    }
+    return 0;
+}

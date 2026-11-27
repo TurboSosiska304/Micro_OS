@@ -258,4 +258,453 @@ static inline k_u64_t gpu_amd_choose_test_offset(k_u64_t vram_bytes,
     return 0u;
 }
 
+/*
+ * A simple VRAM block manager for the BAR0 aperture. Original work for
+ * Micro OS. The layout is informed by the amdgpu VRAM manager idea of
+ * reserved regions and a free pool (drivers/gpu/drm/amd/amdgpu/amdgpu_vram_mgr.c,
+ * MIT, Linux v6.12) but no code is copied from it.
+ *
+ * Block size is 64 KiB: 8 GiB / 64 KiB = 131072 units, so a bitmap would be
+ * 16 KiB, but variable-size allocations and coalescing are simpler with a free
+ * extent list. 4 KiB would create too many units to track statically.
+ */
+#define GPU_AMD_VRAM_BLOCK_SIZE (64ull * 1024ull)
+#define GPU_AMD_VRAM_MAX_ALLOCS 64
+#define GPU_AMD_VRAM_MAX_FREE 32
+#define GPU_AMD_VRAM_RESERVED_END GPU_AMD_VRAM_TEST_MIN_OFFSET
+
+enum gpu_amd_vram_err {
+    GPU_AMD_VRAM_OK = 0,
+    GPU_AMD_VRAM_ERR_INIT = -1,     /* bad geometry / not initialized */
+    GPU_AMD_VRAM_ERR_RANGE = -2,    /* size zero, too large, or out of pool */
+    GPU_AMD_VRAM_ERR_NO_SPACE = -3, /* no free extent fits */
+    GPU_AMD_VRAM_ERR_NO_DESC = -4,  /* allocation/free-extent table full */
+    GPU_AMD_VRAM_ERR_BAD_ID = -5,   /* unknown or already free id */
+    GPU_AMD_VRAM_ERR_DOUBLE_FREE = -6,
+    GPU_AMD_VRAM_ERR_RESERVED = -7,  /* overlaps scanout or reserved area */
+    GPU_AMD_VRAM_ERR_NOT_MAPPED = -8 /* BAR0 aperture not mapped for I/O */
+};
+
+struct gpu_amd_vram_block {
+    k_u32_t id; /* 0 = unused slot */
+    k_u64_t offset;
+    k_u64_t size;
+    k_u32_t pattern;
+    bool filled;
+};
+
+struct gpu_amd_vram_extent {
+    k_u64_t offset;
+    k_u64_t size;
+};
+
+struct gpu_amd_vram_mgr {
+    bool ready;
+    k_u64_t vram_size;
+    k_u64_t reserved_end;
+    struct gpu_amd_scanout_region scanouts[GPU_AMD_DCE_PIPE_COUNT * 2];
+    int scanout_count;
+    struct gpu_amd_vram_extent free_extents[GPU_AMD_VRAM_MAX_FREE];
+    int free_count;
+    struct gpu_amd_vram_block allocs[GPU_AMD_VRAM_MAX_ALLOCS];
+    k_u32_t next_id;
+};
+
+static inline const char *gpu_amd_vram_err_name(int err)
+{
+    switch (err) {
+    case GPU_AMD_VRAM_OK:
+        return "ok";
+    case GPU_AMD_VRAM_ERR_INIT:
+        return "not initialized";
+    case GPU_AMD_VRAM_ERR_RANGE:
+        return "invalid size/range";
+    case GPU_AMD_VRAM_ERR_NO_SPACE:
+        return "no space";
+    case GPU_AMD_VRAM_ERR_NO_DESC:
+        return "descriptor table full";
+    case GPU_AMD_VRAM_ERR_BAD_ID:
+        return "bad id";
+    case GPU_AMD_VRAM_ERR_DOUBLE_FREE:
+        return "double free";
+    case GPU_AMD_VRAM_ERR_RESERVED:
+        return "reserved/scanout overlap";
+    case GPU_AMD_VRAM_ERR_NOT_MAPPED:
+        return "BAR0 not mapped";
+    default:
+        return "unknown error";
+    }
+}
+
+static inline k_u64_t gpu_amd_vram_align_up(k_u64_t v, k_u64_t align)
+{
+    k_u64_t mask;
+
+    if (align == 0u) {
+        return v;
+    }
+    mask = align - 1ull;
+    if (v > ~(k_u64_t)0u - mask) {
+        return 0u;
+    }
+    return (v + mask) & ~mask;
+}
+
+static inline bool gpu_amd_vram_reserved_overlap(const struct gpu_amd_vram_mgr *mgr, k_u64_t start,
+                                                 k_u64_t size)
+{
+    if (mgr == NULL || size == 0u) {
+        return true;
+    }
+    if (start < mgr->reserved_end) {
+        return true;
+    }
+    if (gpu_amd_scanout_overlaps(start, size, mgr->scanouts, mgr->scanout_count)) {
+        return true;
+    }
+    return false;
+}
+
+static inline void gpu_amd_vram_mgr_reset(struct gpu_amd_vram_mgr *mgr)
+{
+    int i;
+
+    if (mgr == NULL) {
+        return;
+    }
+    mgr->ready = false;
+    mgr->vram_size = 0u;
+    mgr->reserved_end = GPU_AMD_VRAM_RESERVED_END;
+    mgr->scanout_count = 0;
+    mgr->free_count = 0;
+    mgr->next_id = 1u;
+    for (i = 0; i < GPU_AMD_VRAM_MAX_FREE; i++) {
+        mgr->free_extents[i].offset = 0u;
+        mgr->free_extents[i].size = 0u;
+    }
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        mgr->allocs[i].id = 0u;
+        mgr->allocs[i].offset = 0u;
+        mgr->allocs[i].size = 0u;
+        mgr->allocs[i].pattern = 0u;
+        mgr->allocs[i].filled = false;
+    }
+    for (i = 0; i < (int)(GPU_AMD_DCE_PIPE_COUNT * 2u); i++) {
+        mgr->scanouts[i].pipe = 0u;
+        mgr->scanouts[i].primary = false;
+        mgr->scanouts[i].enabled = false;
+        mgr->scanouts[i].address = 0u;
+        mgr->scanouts[i].pitch_pixels = 0u;
+        mgr->scanouts[i].height = 0u;
+        mgr->scanouts[i].size_bytes = 0u;
+    }
+}
+
+static inline int gpu_amd_vram_add_free_extent(struct gpu_amd_vram_mgr *mgr, k_u64_t offset,
+                                               k_u64_t size)
+{
+    int i;
+    int pos;
+    k_u64_t end;
+
+    if (mgr == NULL || size == 0u) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    offset = gpu_amd_vram_align_up(offset, GPU_AMD_VRAM_BLOCK_SIZE);
+    if (offset == 0u && size != 0u && mgr->reserved_end != 0u) {
+        /* overflow in align_up returns 0; treat as bad range unless genuinely 0 */
+    }
+    end = offset + size;
+    if (end < offset || offset >= mgr->vram_size) {
+        return GPU_AMD_VRAM_ERR_RANGE;
+    }
+    if (end > mgr->vram_size) {
+        end = mgr->vram_size;
+    }
+    /* Round start up, end down to block size. */
+    offset = gpu_amd_vram_align_up(offset, GPU_AMD_VRAM_BLOCK_SIZE);
+    end &= ~(GPU_AMD_VRAM_BLOCK_SIZE - 1ull);
+    if (end <= offset) {
+        return GPU_AMD_VRAM_OK;
+    }
+
+    /* Insert sorted by offset and merge with neighbors. */
+    pos = mgr->free_count;
+    for (i = 0; i < mgr->free_count; i++) {
+        if (offset < mgr->free_extents[i].offset) {
+            pos = i;
+            break;
+        }
+    }
+    if (mgr->free_count >= GPU_AMD_VRAM_MAX_FREE) {
+        return GPU_AMD_VRAM_ERR_NO_DESC;
+    }
+    for (i = mgr->free_count; i > pos; i--) {
+        mgr->free_extents[i] = mgr->free_extents[i - 1];
+    }
+    mgr->free_extents[pos].offset = offset;
+    mgr->free_extents[pos].size = end - offset;
+    mgr->free_count++;
+
+    /* Merge adjacent/overlapping extents. */
+    i = 0;
+    while (i < mgr->free_count - 1) {
+        k_u64_t i_end = mgr->free_extents[i].offset + mgr->free_extents[i].size;
+        k_u64_t n_off = mgr->free_extents[i + 1].offset;
+        k_u64_t n_end = mgr->free_extents[i + 1].offset + mgr->free_extents[i + 1].size;
+        if (i_end >= n_off) {
+            if (n_end > i_end) {
+                mgr->free_extents[i].size = n_end - mgr->free_extents[i].offset;
+            }
+            for (int j = i + 1; j < mgr->free_count - 1; j++) {
+                mgr->free_extents[j] = mgr->free_extents[j + 1];
+            }
+            mgr->free_count--;
+            continue;
+        }
+        i++;
+    }
+
+    return GPU_AMD_VRAM_OK;
+}
+
+static inline int gpu_amd_vram_subtract_range(struct gpu_amd_vram_mgr *mgr, k_u64_t start,
+                                              k_u64_t size)
+{
+    int i = 0;
+    k_u64_t end;
+
+    if (mgr == NULL || size == 0u) {
+        return GPU_AMD_VRAM_OK;
+    }
+    end = start + size;
+    if (end < start) {
+        end = ~(k_u64_t)0u;
+    }
+
+    while (i < mgr->free_count) {
+        struct gpu_amd_vram_extent *e = &mgr->free_extents[i];
+        k_u64_t e_end = e->offset + e->size;
+        k_u64_t left_size;
+        k_u64_t right_off;
+        k_u64_t right_size;
+
+        if (end <= e->offset || start >= e_end) {
+            i++;
+            continue;
+        }
+
+        left_size = (start > e->offset) ? (start - e->offset) : 0u;
+        right_off = (end > e->offset) ? end : e->offset;
+        right_size = (e_end > right_off) ? (e_end - right_off) : 0u;
+
+        if (left_size == 0u && right_size == 0u) {
+            for (int j = i; j < mgr->free_count - 1; j++) {
+                mgr->free_extents[j] = mgr->free_extents[j + 1];
+            }
+            mgr->free_count--;
+            continue;
+        }
+
+        if (left_size != 0u && right_size != 0u) {
+            if (mgr->free_count >= GPU_AMD_VRAM_MAX_FREE) {
+                return GPU_AMD_VRAM_ERR_NO_DESC;
+            }
+            for (int j = mgr->free_count; j > i + 1; j--) {
+                mgr->free_extents[j] = mgr->free_extents[j - 1];
+            }
+            mgr->free_extents[i].size = left_size;
+            mgr->free_extents[i + 1].offset = right_off;
+            mgr->free_extents[i + 1].size = right_size;
+            mgr->free_count++;
+            i += 2;
+            continue;
+        }
+
+        if (left_size != 0u) {
+            e->size = left_size;
+        } else {
+            e->offset = right_off;
+            e->size = right_size;
+        }
+        i++;
+    }
+
+    return GPU_AMD_VRAM_OK;
+}
+
+static inline int gpu_amd_vram_mgr_init(struct gpu_amd_vram_mgr *mgr, k_u64_t vram_size,
+                                        const struct gpu_amd_scanout_region *regions, int count)
+{
+    k_u64_t pool_start;
+    k_u64_t pool_end;
+    int i;
+    int rc;
+
+    if (mgr == NULL || vram_size < GPU_AMD_VRAM_RESERVED_END + GPU_AMD_VRAM_BLOCK_SIZE) {
+        if (mgr != NULL) {
+            gpu_amd_vram_mgr_reset(mgr);
+        }
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+
+    gpu_amd_vram_mgr_reset(mgr);
+    mgr->vram_size = vram_size;
+    mgr->reserved_end = GPU_AMD_VRAM_RESERVED_END;
+    mgr->scanout_count = 0;
+    if (regions != NULL && count > 0) {
+        for (i = 0; i < count && mgr->scanout_count < (int)(GPU_AMD_DCE_PIPE_COUNT * 2u); i++) {
+            if (!regions[i].enabled || regions[i].size_bytes == 0u) {
+                continue;
+            }
+            mgr->scanouts[mgr->scanout_count] = regions[i];
+            mgr->scanout_count++;
+        }
+    }
+
+    pool_start = gpu_amd_vram_align_up(mgr->reserved_end, GPU_AMD_VRAM_BLOCK_SIZE);
+    pool_end = vram_size & ~(GPU_AMD_VRAM_BLOCK_SIZE - 1ull);
+    if (pool_end <= pool_start) {
+        return GPU_AMD_VRAM_ERR_NO_SPACE;
+    }
+
+    mgr->free_extents[0].offset = pool_start;
+    mgr->free_extents[0].size = pool_end - pool_start;
+    mgr->free_count = 1;
+
+    for (i = 0; i < mgr->scanout_count; i++) {
+        rc =
+            gpu_amd_vram_subtract_range(mgr, mgr->scanouts[i].address, mgr->scanouts[i].size_bytes);
+        if (rc != GPU_AMD_VRAM_OK) {
+            gpu_amd_vram_mgr_reset(mgr);
+            return rc;
+        }
+    }
+
+    mgr->ready = mgr->free_count > 0;
+    return mgr->ready ? GPU_AMD_VRAM_OK : GPU_AMD_VRAM_ERR_NO_SPACE;
+}
+
+static inline struct gpu_amd_vram_block *gpu_amd_vram_find(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
+{
+    int i;
+
+    if (mgr == NULL || id == 0u) {
+        return NULL;
+    }
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        if (mgr->allocs[i].id == id) {
+            return &mgr->allocs[i];
+        }
+    }
+    return NULL;
+}
+
+static inline int gpu_amd_vram_alloc(struct gpu_amd_vram_mgr *mgr, k_u64_t size_bytes,
+                                     k_u32_t *out_id, k_u64_t *out_offset)
+{
+    k_u64_t size;
+    int slot = -1;
+    int i;
+
+    if (out_id != NULL) {
+        *out_id = 0u;
+    }
+    if (out_offset != NULL) {
+        *out_offset = 0u;
+    }
+    if (mgr == NULL || !mgr->ready) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    if (size_bytes == 0u || size_bytes > mgr->vram_size) {
+        return GPU_AMD_VRAM_ERR_RANGE;
+    }
+    size = gpu_amd_vram_align_up(size_bytes, GPU_AMD_VRAM_BLOCK_SIZE);
+    if (size == 0u || size < size_bytes) {
+        return GPU_AMD_VRAM_ERR_RANGE;
+    }
+
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        if (mgr->allocs[i].id == 0u) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot < 0) {
+        return GPU_AMD_VRAM_ERR_NO_DESC;
+    }
+
+    for (i = 0; i < mgr->free_count; i++) {
+        struct gpu_amd_vram_extent *e = &mgr->free_extents[i];
+        if (e->size < size) {
+            continue;
+        }
+        if (gpu_amd_vram_reserved_overlap(mgr, e->offset, size)) {
+            continue;
+        }
+        mgr->allocs[slot].id = mgr->next_id++;
+        if (mgr->next_id == 0u) {
+            mgr->next_id = 1u;
+        }
+        mgr->allocs[slot].offset = e->offset;
+        mgr->allocs[slot].size = size;
+        mgr->allocs[slot].pattern = 0u;
+        mgr->allocs[slot].filled = false;
+
+        e->offset += size;
+        e->size -= size;
+        if (e->size == 0u) {
+            for (int j = i; j < mgr->free_count - 1; j++) {
+                mgr->free_extents[j] = mgr->free_extents[j + 1];
+            }
+            mgr->free_count--;
+        }
+
+        if (out_id != NULL) {
+            *out_id = mgr->allocs[slot].id;
+        }
+        if (out_offset != NULL) {
+            *out_offset = mgr->allocs[slot].offset;
+        }
+        return GPU_AMD_VRAM_OK;
+    }
+
+    return GPU_AMD_VRAM_ERR_NO_SPACE;
+}
+
+static inline int gpu_amd_vram_free(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
+{
+    struct gpu_amd_vram_block *b;
+    k_u64_t offset;
+    k_u64_t size;
+    int rc;
+
+    if (mgr == NULL || !mgr->ready) {
+        return GPU_AMD_VRAM_ERR_INIT;
+    }
+    if (id == 0u) {
+        return GPU_AMD_VRAM_ERR_BAD_ID;
+    }
+    b = gpu_amd_vram_find(mgr, id);
+    if (b == NULL) {
+        return GPU_AMD_VRAM_ERR_BAD_ID;
+    }
+    if (gpu_amd_vram_reserved_overlap(mgr, b->offset, b->size)) {
+        /* Should never happen for a valid allocation. */
+        b->id = 0u;
+        return GPU_AMD_VRAM_ERR_RESERVED;
+    }
+
+    offset = b->offset;
+    size = b->size;
+    b->id = 0u;
+    b->offset = 0u;
+    b->size = 0u;
+    b->pattern = 0u;
+    b->filled = false;
+
+    rc = gpu_amd_vram_add_free_extent(mgr, offset, size);
+    return rc;
+}
+
 #endif /* MICRO_OS_PORT_X86_64_GPU_AMD_H */

@@ -257,6 +257,53 @@ static const struct kmod g_gpu_mod = {
 };
 
 int port_x86_64_gpu_amd_vramtest(bool do_write);
+int port_x86_64_gpu_amd_vrammap(void);
+int port_x86_64_gpu_amd_vramalloc(k_u64_t size_kib);
+int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern);
+int port_x86_64_gpu_amd_vramread(k_u32_t id);
+int port_x86_64_gpu_amd_vramfree(k_u32_t id);
+int port_x86_64_gpu_amd_vramdump(void);
+
+static bool gpu_parse_u64(const char *s, k_u64_t *out)
+{
+    k_u64_t v = 0u;
+    int base = 10;
+    int any = 0;
+
+    if (s == NULL || *s == '\0' || out == NULL) {
+        return false;
+    }
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        base = 16;
+        s += 2;
+    }
+    for (; *s != '\0'; s++) {
+        char c = *s;
+        int digit = -1;
+        if (c >= '0' && c <= '9') {
+            digit = c - '0';
+        } else if (base == 16 && c >= 'a' && c <= 'f') {
+            digit = 10 + (c - 'a');
+        } else if (base == 16 && c >= 'A' && c <= 'F') {
+            digit = 10 + (c - 'A');
+        } else {
+            return false;
+        }
+        if (digit >= base) {
+            return false;
+        }
+        if (v > (~(k_u64_t)0u - (k_u64_t)digit) / (k_u64_t)base) {
+            return false;
+        }
+        v = v * (k_u64_t)base + (k_u64_t)digit;
+        any = 1;
+    }
+    if (!any) {
+        return false;
+    }
+    *out = v;
+    return true;
+}
 
 static int cmd_gpu(int argc, char **argv)
 {
@@ -277,6 +324,52 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_vramtest(do_write);
     }
 
+    if (argc == 2 && strcmp(argv[1], "vrammap") == 0) {
+        return port_x86_64_gpu_amd_vrammap();
+    }
+
+    if (argc == 3 && strcmp(argv[1], "vramalloc") == 0) {
+        k_u64_t kib = 0u;
+        if (!gpu_parse_u64(argv[2], &kib)) {
+            kshell_printf("usage: gpu vramalloc <kib>\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramalloc(kib);
+    }
+
+    if (argc == 4 && strcmp(argv[1], "vramfill") == 0) {
+        k_u64_t id = 0u;
+        k_u64_t pat = 0u;
+        if (!gpu_parse_u64(argv[2], &id) || !gpu_parse_u64(argv[3], &pat) || id > 0xFFFFFFFFu ||
+            pat > 0xFFFFFFFFu) {
+            kshell_printf("usage: gpu vramfill <id> <pattern>\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramfill((k_u32_t)id, (k_u32_t)pat);
+    }
+
+    if (argc == 3 && strcmp(argv[1], "vramread") == 0) {
+        k_u64_t id = 0u;
+        if (!gpu_parse_u64(argv[2], &id) || id > 0xFFFFFFFFu) {
+            kshell_printf("usage: gpu vramread <id>\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramread((k_u32_t)id);
+    }
+
+    if (argc == 3 && strcmp(argv[1], "vramfree") == 0) {
+        k_u64_t id = 0u;
+        if (!gpu_parse_u64(argv[2], &id) || id > 0xFFFFFFFFu) {
+            kshell_printf("usage: gpu vramfree <id>\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramfree((k_u32_t)id);
+    }
+
+    if (argc == 2 && strcmp(argv[1], "vramdump") == 0) {
+        return port_x86_64_gpu_amd_vramdump();
+    }
+
     if (gpu_intel_command != NULL &&
         ((argc == 2 && strcmp(argv[1], "ggtt-test") == 0) ||
          (argc == 2 && strcmp(argv[1], "flip") == 0) ||
@@ -284,7 +377,8 @@ static int cmd_gpu(int argc, char **argv)
         return gpu_intel_command(argc, argv);
     }
 
-    kshell_printf("usage: gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]\n");
+    kshell_printf("usage: gpu [info|vramtest [--write]|vrammap|vramalloc <kib>|vramfill <id> <pat>|"
+                  "vramread <id>|vramfree <id>|vramdump|ggtt-test|flip [--yes]]\n");
     return KSHELL_USAGE;
 }
 
@@ -292,10 +386,11 @@ int port_x86_64_gpu_register(void)
 {
     static const struct kshell_help help = {
         .summary = "display controller probe",
-        .usage = "gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]",
+        .usage = "gpu [info|vramtest|vrammap|vramalloc|vramfill|vramread|vramfree|vramdump|...]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
-                  "Intel systems also accept info, ggtt-test and a flip dry-run; the\n"
-                  "flip write path requires the explicit --yes confirmation.\n",
+                  "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a block;\n"
+                  "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
+                  "releases it; vramdump lists blocks. Intel: ggtt-test, flip [--yes].\n",
     };
     int rc;
 
