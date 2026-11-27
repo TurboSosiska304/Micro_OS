@@ -90,6 +90,13 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+# The older GCC of a CI runner spells C23 `c2x` (see the root CMakeLists).
+include(CheckCCompilerFlag)
+check_c_compiler_flag("-std=c23" MICRO_OS_C23_FLAG_PORT)
+if(NOT MICRO_OS_C23_FLAG_PORT)
+    add_compile_options("-std=c2x")
+endif()
+
 # The kernel of the higher half: no red zone (an interrupt may use the stack
 # under us), no PIC, no SSE in the C of the kernel (the state of the units is
 # saved by the switch of the port; a program that asks for them gets them

@@ -91,6 +91,17 @@ else()
     set(CMAKE_C_STANDARD_REQUIRED ON)
     set(CMAKE_C_EXTENSIONS OFF)
 
+    # The dialect is C23 on the compilers of the development machine; a
+    # distribution whose GCC is older spells the same dialect `c2x`, and CMake
+    # passes `-std=c23` which that compiler refuses. The flag that works is
+    # chosen once, here, and the tree keeps one promise: the kernel is built in
+    # the standard of the language, whichever name the compiler gives it.
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-std=c23" MICRO_OS_C23_FLAG)
+    if(NOT MICRO_OS_C23_FLAG)
+        add_compile_options("-std=c2x")
+    endif()
+
     if(NOT CMAKE_BUILD_TYPE)
         set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "" FORCE)
     endif()
