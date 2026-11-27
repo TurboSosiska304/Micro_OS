@@ -423,6 +423,90 @@ static void test_address_pitch_encoding(void)
     KT_CHECK_INT_EQ((long long)(GPU_AMD_CRTC_STATUS__CRTC_V_BLANK_MASK), 1);
 }
 
+static void test_vram_buf_named_alloc(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+    struct gpu_amd_vram_block *b;
+
+    ktest_begin("gpu_amd: buf alloc stores name and state");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 256ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 4096ull * 1024ull, &id, &off, "panel"),
+                    GPU_AMD_VRAM_OK);
+    b = gpu_amd_vram_find(&mgr, id);
+    KT_CHECK(b != NULL);
+    if (b != NULL) {
+        KT_CHECK_STR_EQ(b->name, "panel");
+        KT_CHECK(!b->filled);
+        KT_CHECK(b->size >= 4096ull * 1024ull);
+    }
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, id), GPU_AMD_VRAM_OK);
+    KT_CHECK(gpu_amd_vram_find(&mgr, id) == NULL);
+}
+
+static void test_vram_buf_name_truncation(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+    struct gpu_amd_vram_block *b;
+    const char *long_name = "this-is-a-very-long-buffer-name-that-must-be-truncated";
+
+    ktest_begin("gpu_amd: buf name is truncated safely");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 128ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 64ull * 1024u, &id, &off, long_name),
+                    GPU_AMD_VRAM_OK);
+    b = gpu_amd_vram_find(&mgr, id);
+    KT_CHECK(b != NULL);
+    if (b != NULL) {
+        KT_CHECK(b->name[GPU_AMD_VRAM_NAME_MAX - 1] == '\0');
+        KT_CHECK(b->name[0] != '\0');
+    }
+}
+
+static void test_vram_buf_double_free(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t id = 0u;
+    k_u64_t off = 0u;
+
+    ktest_begin("gpu_amd: buf double free is refused");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 128ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 64ull * 1024u, &id, &off, "tmp"),
+                    GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, id), GPU_AMD_VRAM_OK);
+    KT_CHECK_INT_EQ(gpu_amd_vram_free(&mgr, id), GPU_AMD_VRAM_ERR_BAD_ID);
+}
+
+static void test_vram_buf_table_overflow(void)
+{
+    struct gpu_amd_vram_mgr mgr;
+    k_u32_t ids[GPU_AMD_VRAM_MAX_ALLOCS];
+    k_u64_t off = 0u;
+    k_u32_t extra = 0u;
+    int i;
+
+    ktest_begin("gpu_amd: buf table overflow returns NO_DESC");
+
+    KT_CHECK_INT_EQ(gpu_amd_vram_mgr_init(&mgr, 1024ull * 1024ull * 1024ull, NULL, 0),
+                    GPU_AMD_VRAM_OK);
+    for (i = 0; i < GPU_AMD_VRAM_MAX_ALLOCS; i++) {
+        ids[i] = 0u;
+        KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 64ull * 1024u, &ids[i], &off, "b"),
+                        GPU_AMD_VRAM_OK);
+        KT_CHECK(ids[i] != 0u);
+    }
+    KT_CHECK_INT_EQ(gpu_amd_vram_alloc_named(&mgr, 64ull * 1024u, &extra, &off, "overflow"),
+                    GPU_AMD_VRAM_ERR_NO_DESC);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -447,4 +531,8 @@ void test_gpu_amd(void)
     test_frame_offset_no_fit();
     test_frame_offset_finds_safe();
     test_address_pitch_encoding();
+    test_vram_buf_named_alloc();
+    test_vram_buf_name_truncation();
+    test_vram_buf_double_free();
+    test_vram_buf_table_overflow();
 }

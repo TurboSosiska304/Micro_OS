@@ -278,6 +278,7 @@ static inline k_u64_t gpu_amd_choose_test_offset(k_u64_t vram_bytes,
 #define GPU_AMD_VRAM_MAX_ALLOCS 64
 #define GPU_AMD_VRAM_MAX_FREE 32
 #define GPU_AMD_VRAM_RESERVED_END GPU_AMD_VRAM_TEST_MIN_OFFSET
+#define GPU_AMD_VRAM_NAME_MAX 32
 
 enum gpu_amd_vram_err {
     GPU_AMD_VRAM_OK = 0,
@@ -297,6 +298,7 @@ struct gpu_amd_vram_block {
     k_u64_t size;
     k_u32_t pattern;
     bool filled;
+    char name[GPU_AMD_VRAM_NAME_MAX];
 };
 
 struct gpu_amd_vram_extent {
@@ -371,6 +373,31 @@ static inline bool gpu_amd_vram_reserved_overlap(const struct gpu_amd_vram_mgr *
     return false;
 }
 
+static inline void gpu_amd_vram_name_clear(char *name)
+{
+    k_u32_t i;
+
+    if (name == NULL) {
+        return;
+    }
+    for (i = 0; i < (k_u32_t)GPU_AMD_VRAM_NAME_MAX; i++) {
+        name[i] = '\0';
+    }
+}
+
+static inline void gpu_amd_vram_name_copy(char *dst, const char *src)
+{
+    k_u32_t i;
+
+    gpu_amd_vram_name_clear(dst);
+    if (dst == NULL || src == NULL) {
+        return;
+    }
+    for (i = 0; i + 1u < (k_u32_t)GPU_AMD_VRAM_NAME_MAX && src[i] != '\0'; i++) {
+        dst[i] = src[i];
+    }
+}
+
 static inline void gpu_amd_vram_mgr_reset(struct gpu_amd_vram_mgr *mgr)
 {
     int i;
@@ -394,6 +421,7 @@ static inline void gpu_amd_vram_mgr_reset(struct gpu_amd_vram_mgr *mgr)
         mgr->allocs[i].size = 0u;
         mgr->allocs[i].pattern = 0u;
         mgr->allocs[i].filled = false;
+        gpu_amd_vram_name_clear(mgr->allocs[i].name);
     }
     for (i = 0; i < (int)(GPU_AMD_DCE_PIPE_COUNT * 2u); i++) {
         mgr->scanouts[i].pipe = 0u;
@@ -606,8 +634,8 @@ static inline struct gpu_amd_vram_block *gpu_amd_vram_find(struct gpu_amd_vram_m
     return NULL;
 }
 
-static inline int gpu_amd_vram_alloc(struct gpu_amd_vram_mgr *mgr, k_u64_t size_bytes,
-                                     k_u32_t *out_id, k_u64_t *out_offset)
+static inline int gpu_amd_vram_alloc_named(struct gpu_amd_vram_mgr *mgr, k_u64_t size_bytes,
+                                           k_u32_t *out_id, k_u64_t *out_offset, const char *name)
 {
     k_u64_t size;
     int slot = -1;
@@ -656,6 +684,7 @@ static inline int gpu_amd_vram_alloc(struct gpu_amd_vram_mgr *mgr, k_u64_t size_
         mgr->allocs[slot].size = size;
         mgr->allocs[slot].pattern = 0u;
         mgr->allocs[slot].filled = false;
+        gpu_amd_vram_name_copy(mgr->allocs[slot].name, name);
 
         e->offset += size;
         e->size -= size;
@@ -676,6 +705,12 @@ static inline int gpu_amd_vram_alloc(struct gpu_amd_vram_mgr *mgr, k_u64_t size_
     }
 
     return GPU_AMD_VRAM_ERR_NO_SPACE;
+}
+
+static inline int gpu_amd_vram_alloc(struct gpu_amd_vram_mgr *mgr, k_u64_t size_bytes,
+                                     k_u32_t *out_id, k_u64_t *out_offset)
+{
+    return gpu_amd_vram_alloc_named(mgr, size_bytes, out_id, out_offset, NULL);
 }
 
 static inline int gpu_amd_vram_free(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
@@ -708,6 +743,7 @@ static inline int gpu_amd_vram_free(struct gpu_amd_vram_mgr *mgr, k_u32_t id)
     b->size = 0u;
     b->pattern = 0u;
     b->filled = false;
+    gpu_amd_vram_name_clear(b->name);
 
     rc = gpu_amd_vram_add_free_extent(mgr, offset, size);
     return rc;
