@@ -73,6 +73,7 @@ void test_users(void);
 void test_libc(void);
 void test_kshell(void);
 void test_kshell_pipe(void);
+void test_kshell_jobs(void);
 void test_initd(void);
 void test_config(void);
 void test_settings(void);

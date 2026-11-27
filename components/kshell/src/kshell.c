@@ -536,7 +536,9 @@ bool kshell_stage_is_program(const char *name)
  */
 bool kshell_command_is_shell_state(const char *name)
 {
-    return name != NULL && (strcmp(name, "cd") == 0 || strcmp(name, "path") == 0);
+    return name != NULL &&
+           (strcmp(name, "cd") == 0 || strcmp(name, "path") == 0 || strcmp(name, "jobs") == 0 ||
+            strcmp(name, "fg") == 0 || strcmp(name, "bg") == 0);
 }
 
 int kshell_execute(const char *line)
@@ -1003,9 +1005,8 @@ static int signal_by_name(const char *name)
         const char *name;
         int number;
     } names[] = {
-        {"INT", KSYS_SIGINT},
-        {"TERM", KSYS_SIGTERM},
-        {"CHLD", KSYS_SIGCHLD},
+        {"INT", KSYS_SIGINT},   {"CONT", KSYS_SIGCONT}, {"STOP", KSYS_SIGSTOP},
+        {"TSTP", KSYS_SIGTSTP}, {"TERM", KSYS_SIGTERM}, {"CHLD", KSYS_SIGCHLD},
         {"PIPE", KSYS_SIGPIPE},
     };
     char *end = NULL;
@@ -1050,10 +1051,10 @@ static int signal_by_name(const char *name)
 }
 
 /*
- * The signal to one task. There is no job control and no group of a
- * terminal in the system, so the number comes from `ps` and nothing else:
- * a pid that names no task is answered with the sentence of POSIX, and the
- * number of the error is the shared -3 of the table of errno.
+ * The signal to one task. The number comes from `ps`, or a foreground or
+ * background job can be controlled with `fg`, `bg` and Ctrl+Z. A pid that
+ * names no task is answered with the sentence of POSIX, and the number of
+ * the error is the shared -3 of the table of errno.
  */
 static int cmd_kill(int argc, char **argv)
 {
@@ -1124,6 +1125,23 @@ static int cmd_kill(int argc, char **argv)
     return KSHELL_OK;
 }
 
+/* The job table belongs to the shell task, so these three commands are
+ * dispatched here and are never run in a stage of a pipeline. */
+static int cmd_jobs(int argc, char **argv)
+{
+    return kshell_jobs_command("jobs", argc, argv);
+}
+
+static int cmd_fg(int argc, char **argv)
+{
+    return kshell_jobs_command("fg", argc, argv);
+}
+
+static int cmd_bg(int argc, char **argv)
+{
+    return kshell_jobs_command("bg", argc, argv);
+}
+
 /*
  * The commands of the shell itself, with the help a person reads. One table,
  * so that a usage line, the one line of the list and the notes of `-h`
@@ -1167,11 +1185,31 @@ static const struct builtin_command {
     {"kill",
      {.summary = "send a signal to a task",
       .usage = "kill [-signal] <pid>",
-      .detail = "  -INT, -TERM, -CHLD, -PIPE, or the number of the signal\n"
-                "Without a signal TERM is sent. There is no job control in the system:\n"
-                "the pid comes from `ps`, and Ctrl+C of the console reaches the program\n"
-                "the shell is running.\n"},
+      .detail = "  -INT, -TERM, -CHLD, -PIPE, -STOP, -CONT, -TSTP, or the number\n"
+                "Without a signal TERM is sent. The pid comes from `ps`; `fg`, `bg`\n"
+                "and `jobs` control the tasks started by this shell. Ctrl+C reaches the\n"
+                "foreground job, and Ctrl+Z moves it to the job table as stopped.\n"},
      cmd_kill},
+    {"jobs",
+     {.summary = "list the jobs of this shell",
+      .usage = "jobs",
+      .detail = "One line per job: its number, pid, process group, state and the\n"
+                "command. A state is Running, Stopped or Done; finished stages are\n"
+                "reaped when the table is read.\n"},
+     cmd_jobs},
+    {"fg",
+     {.summary = "continue a job in the foreground",
+      .usage = "fg [%N]",
+      .detail = "The group takes the terminal and receives SIGCONT. Without %N the\n"
+                "most recent unfinished job is used. Ctrl+C ends it; Ctrl+Z stops\n"
+                "it and gives the terminal back to the shell.\n"},
+     cmd_fg},
+    {"bg",
+     {.summary = "continue a stopped job in the background",
+      .usage = "bg [%N]",
+      .detail = "The group receives SIGCONT and keeps running in the background.\n"
+                "Without %N the most recent unfinished job is used.\n"},
+     cmd_bg},
     {"dmesg", {.summary = "the kernel log", .usage = "dmesg"}, cmd_dmesg},
     {"free", {.summary = "the memory usage", .usage = "free"}, cmd_free},
     {"ulimit",
