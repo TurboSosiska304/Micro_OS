@@ -411,6 +411,16 @@ k_ssize_t pagecache_read(struct vfs_file *file, void *buf, k_size_t size)
         page_end = (k_u64_t)page_index * PC_PAGE_SIZE + p->valid;
         if (p->valid < PC_PAGE_SIZE && file->size < page_end) {
             file->size = page_end;
+        } else if (p->valid < PC_PAGE_SIZE && file->size > page_end) {
+            k_size_t want = (k_size_t)(file->size - (k_u64_t)page_index * PC_PAGE_SIZE);
+            if (want > PC_PAGE_SIZE) {
+                want = PC_PAGE_SIZE;
+            }
+            if (want > p->valid) {
+                memset(p->data + p->valid, 0, want - p->valid);
+                p->valid = want;
+                page_end = (k_u64_t)page_index * PC_PAGE_SIZE + p->valid;
+            }
         }
 
         if (off >= file->size) {
@@ -418,10 +428,7 @@ k_ssize_t pagecache_read(struct vfs_file *file, void *buf, k_size_t size)
         }
 
         if (in_page >= p->valid) {
-            /* Past EOF inside this page. */
-            if (off >= page_end) {
-                break;
-            }
+            break;
         }
 
         chunk = p->valid - in_page;

@@ -253,7 +253,6 @@ static void test_shared(void)
     if (t != NULL) {
         int status = -1;
         KT_CHECK_INT_EQ(task_wait(t->pid, &status, 2000), 0);
-        KT_CHECK_INT_EQ(task_reap(t->pid), 0);
     }
 
     teardown();

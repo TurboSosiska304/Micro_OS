@@ -219,8 +219,7 @@ static int vfs_close_file(void *ctx, struct vfs_file *vfs_file)
         return mfs_to_kerr(MFS_EINVAL);
     }
 
-    if (vfs_file->ops != NULL && vfs_file->ops->readpage != NULL &&
-        !file->file.dirty) {
+    if (vfs_file->ops != NULL && vfs_file->ops->readpage != NULL && !file->file.dirty) {
         struct mfs_inode inode;
 
         file->file.offset = (k_u32_t)vfs_file->offset;

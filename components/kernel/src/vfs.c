@@ -1093,8 +1093,7 @@ int vfs_open(const char *path, int flags, struct vfs_file *out, void *priv)
         (void)m->ops->chgrp(m->ctx, path, caller_gid());
     }
 
-    if (out->ops != NULL && out->ops->readpage != NULL &&
-        (flags & VFS_O_DIRECTORY) == 0) {
+    if (out->ops != NULL && out->ops->readpage != NULL && (flags & VFS_O_DIRECTORY) == 0) {
         out->size = pagecache_inode_size(pagecache_fs_key(out), out->inode, out->size);
     }
 
@@ -1274,9 +1273,6 @@ int vfs_truncate(struct vfs_file *file, k_u64_t size)
     if (rc == 0 && file->ops->readpage != NULL && file->ops->writepage != NULL) {
         pagecache_truncate(pagecache_fs_key(file), file->inode, size);
         file->size = size;
-        if (file->offset > size) {
-            file->offset = size;
-        }
     }
 
     return rc;
