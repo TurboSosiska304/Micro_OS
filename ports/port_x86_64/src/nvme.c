@@ -176,13 +176,10 @@ struct nvme_queue {
     k_u32_t cq_db; /* the offset of the doorbell of the completion head */
 };
 
-/* The sector of the medium and the block of the filesystem, as on the two
- * other disks: the unit of the block layer is the block of MicroFS. */
-#define NVME_MEDIUM_SECTOR 512u
-#define NVME_SECTORS_PER_BLOCK (MFS_BLOCK_SIZE / NVME_MEDIUM_SECTOR)
-
-_Static_assert(MFS_BLOCK_SIZE % NVME_MEDIUM_SECTOR == 0,
-               "a block of the filesystem is not a whole number of disk sectors");
+/* The sector of the medium, read from the namespace (LBA format). The block
+ * layer sees the same size the medium names: a 512-byte namespace is 512-byte
+ * sectors, not the 1024-byte block of MicroFS. A partition that ends on an
+ * odd 512-byte LBA is real and must be representable. */
 
 /* A request of the driver names at most two pages (PRP1 and PRP2), which is
  * what the specification calls the "two-page" case: the first piece starts at
@@ -192,11 +189,12 @@ _Static_assert(MFS_BLOCK_SIZE % NVME_MEDIUM_SECTOR == 0,
 #define NVME_TRANSFER_MAX (2u * NVME_PROTOCOL_PAGE)
 
 /* The cache of the block layer above the disk, and the run a read ahead of a
- * file asks of it: the same numbers as the two other disks of the port
- * (ADR 0032), and write-through because a write is the answer of the door of
- * ADR 0041 and not of a cache that would hold it back. */
-#define NVME_CACHE_SECTORS 512u
-#define NVME_READ_AHEAD 128u
+ * file asks of it (ADR 0032), in bytes: 512 KiB of cache, 128 KiB of read
+ * ahead. The sector count is derived from the namespace LBA size so a 512-byte
+ * namespace keeps the same byte budget as a 4096-byte one. Write-through,
+ * because a write is the answer of the door of ADR 0041. */
+#define NVME_CACHE_BYTES (512u * 1024u)
+#define NVME_READ_AHEAD_BYTES (128u * 1024u)
 
 /* A controller that does not answer must not hang the boot: every wait gives
  * up after this much time, and a machine whose processor the port could not
@@ -224,8 +222,8 @@ static volatile k_u8_t *g_regs; /* the window of the registers */
 static k_u32_t g_dstrd;         /* the stride of the doorbells, from CAP */
 static k_u32_t g_page;          /* the page size the controller works in */
 static k_u32_t g_nsid = 1u;     /* the namespace the boot mounts */
-static k_u32_t g_medium_sectors;
-static k_u32_t g_sectors; /* the blocks of the filesystem on it */
+static k_u32_t g_lba_size;      /* the formatted LBA size of the namespace */
+static k_u32_t g_sectors;       /* the namespace size, in g_lba_size units */
 static const char *g_root;
 static const struct k_blockdev *g_volume; /* the partition the rule is about */
 static bool g_read_only = true;
@@ -475,7 +473,7 @@ static int nvme_rw_dma(k_u32_t opcode, k_u64_t lba, k_size_t bytes, const k_u8_t
     command.prp2_high = (k_u32_t)(prp2 >> 32);
     command.cdw10 = (k_u32_t)lba;                               /* the low half of the address */
     command.cdw11 = (k_u32_t)(lba >> 32);                       /* the high half */
-    command.cdw12 = (k_u32_t)(bytes / NVME_MEDIUM_SECTOR - 1u); /* 0-based */
+    command.cdw12 = (k_u32_t)(bytes / g_lba_size - 1u);         /* 0-based */
 
     return nvme_submit(&g_io, &command);
 }
@@ -523,7 +521,7 @@ static bool nvme_range_ok(k_u32_t sector, k_size_t count)
 static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 {
     k_u8_t *dst = (k_u8_t *)buf;
-    k_u64_t lba;
+    k_u64_t lba = sector;
     k_size_t bytes;
     int rc = 0;
 
@@ -537,8 +535,7 @@ static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         return -1;
     }
 
-    lba = (k_u64_t)sector * NVME_SECTORS_PER_BLOCK;
-    bytes = count * MFS_BLOCK_SIZE;
+    bytes = count * g_lba_size;
 
     while (bytes > 0u) {
         k_size_t inside = (k_size_t)((uintptr_t)dst & (g_page - 1u));
@@ -549,15 +546,16 @@ static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         }
 
         /* A command moves whole sectors of the medium. */
-        chunk &= ~(k_size_t)(NVME_MEDIUM_SECTOR - 1u);
+        chunk &= ~(k_size_t)(g_lba_size - 1u);
 
         if (chunk == 0u || nvme_read_dma(lba, chunk, dst) != 0) {
-            kerror("nvme0: the read of %u sector(s) at %u failed", (unsigned)chunk, (unsigned)lba);
+            kerror("nvme0: the read of %u byte(s) at LBA %llu failed", (unsigned)chunk,
+                  (unsigned long long)lba);
             rc = -1;
             break;
         }
 
-        lba += chunk / NVME_MEDIUM_SECTOR;
+        lba += chunk / g_lba_size;
         dst += chunk;
         bytes -= chunk;
     }
@@ -577,7 +575,7 @@ static int nvme_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
 static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
 {
     const k_u8_t *source = (const k_u8_t *)buf;
-    k_u64_t lba;
+    k_u64_t lba = sector;
     k_size_t bytes;
     int rc = 0;
 
@@ -615,8 +613,7 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    lba = (k_u64_t)sector * NVME_SECTORS_PER_BLOCK;
-    bytes = count * MFS_BLOCK_SIZE;
+    bytes = count * g_lba_size;
 
     while (bytes > 0u) {
         k_size_t inside = (k_size_t)((uintptr_t)source & (g_page - 1u));
@@ -626,15 +623,16 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
             chunk = bytes;
         }
 
-        chunk &= ~(k_size_t)(NVME_MEDIUM_SECTOR - 1u);
+        chunk &= ~(k_size_t)(g_lba_size - 1u);
 
         if (chunk == 0u || nvme_write_dma(lba, chunk, source) != 0) {
-            kerror("nvme0: the write of %u sector(s) at %u failed", (unsigned)chunk, (unsigned)lba);
+            kerror("nvme0: the write of %u byte(s) at LBA %llu failed", (unsigned)chunk,
+                  (unsigned long long)lba);
             rc = -1;
             break;
         }
 
-        lba += chunk / NVME_MEDIUM_SECTOR;
+        lba += chunk / g_lba_size;
         source += chunk;
         bytes -= chunk;
     }
@@ -722,11 +720,11 @@ static const struct k_blockdev_ops g_nvme_ops = {
 
 static struct k_blockdev g_nvme_device = {
     .name = "nvme0",
-    .sector_size = MFS_BLOCK_SIZE,
-    .sectors = 0, /* the size of the namespace, read by the identify */
+    .sector_size = 0, /* the formatted LBA size, read by the identify */
+    .sectors = 0,     /* the size of the namespace, read by the identify */
     .ops = &g_nvme_ops,
     .ctx = NULL,
-    .read_ahead = NVME_READ_AHEAD,
+    .read_ahead = 0,
 };
 
 /* The name the rule gives a medium, for a sentence of the boot. */
@@ -1035,44 +1033,55 @@ void port_x86_64_nvme_init(void)
     namespace_size = read_le64(g_identify);
     flbas = g_identify[26] & 0x0Fu;
     lbaf = read_le32(g_identify + 128u + flbas * 4u);
-    lbads = (lbaf >> 16) & 0x0Fu;
+    lbads = (lbaf >> 16) & 0xFFu;
 
-    if (lbads != 9u) {
-        kerror("nvme0: the namespace formats %u-byte blocks, the sector of this system is %u",
-               (unsigned)(1u << lbads), (unsigned)NVME_MEDIUM_SECTOR);
+    if (lbads < 9u || lbads > 12u) {
+        kerror("nvme0: the namespace formats %u-byte blocks, this driver supports 512 and 4096",
+               (unsigned)(1u << lbads));
         return;
     }
 
-    if (namespace_size < NVME_SECTORS_PER_BLOCK || (namespace_size & 1u) != 0u) {
-        kerror("nvme0: the namespace is not a whole number of %u-byte blocks",
-               (unsigned)MFS_BLOCK_SIZE);
+    g_lba_size = 1u << lbads;
+
+    if (namespace_size == 0u) {
+        kerror("nvme0: the namespace has no sectors");
         return;
     }
 
     if (namespace_size > 0xFFFFFFFFull) {
-        namespace_size = 0xFFFFFFFFull & ~1ull;
+        namespace_size = 0xFFFFFFFFull;
     }
 
     if (!nvme_io_queue()) {
         return;
     }
 
-    g_medium_sectors = (k_u32_t)namespace_size;
-    g_sectors = g_medium_sectors / NVME_SECTORS_PER_BLOCK;
+    g_sectors = (k_u32_t)namespace_size;
+    g_nvme_device.sector_size = g_lba_size;
     g_nvme_device.sectors = g_sectors;
+    g_nvme_device.read_ahead = NVME_READ_AHEAD_BYTES / g_lba_size;
+    if (g_nvme_device.read_ahead == 0u) {
+        g_nvme_device.read_ahead = 1u;
+    }
 
-    kinfo("nvme0: %u MB, %u-byte blocks, %u entries in the pair of the I/O queues",
-          (unsigned)(g_medium_sectors / 2048u), (unsigned)NVME_MEDIUM_SECTOR,
-          (unsigned)g_io.entries);
+    kinfo("nvme0: %u MB, %u-byte sectors, %u entries in the pair of the I/O queues",
+          (unsigned)(((k_u64_t)g_sectors * g_lba_size) / (1024u * 1024u)),
+          (unsigned)g_lba_size, (unsigned)g_io.entries);
 
     /*
      * The cache of the block layer, write-through: the disk is read-only and
      * a write has to come back as the refusal of the driver, not as a sector
      * that sat in the cache until a sync nobody asked for (ADR 0041).
      */
-    if (k_blockdev_register_cached_sized(&g_nvme_device, false, NVME_CACHE_SECTORS) != 0) {
-        kerror("nvme0: cannot register the disk");
-        return;
+    {
+        k_size_t cache_sectors = NVME_CACHE_BYTES / g_lba_size;
+        if (cache_sectors == 0u) {
+            cache_sectors = 1u;
+        }
+        if (k_blockdev_register_cached_sized(&g_nvme_device, false, cache_sectors) != 0) {
+            kerror("nvme0: cannot register the disk");
+            return;
+        }
     }
 
     /* The view the table hands out is the one with the cache above it, and
