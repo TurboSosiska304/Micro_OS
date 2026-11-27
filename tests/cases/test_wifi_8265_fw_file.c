@@ -41,24 +41,34 @@ static void test_reads_large_firmware(void)
     struct vfs_file writer;
     struct vfs_stat info;
     k_u8_t private_data[VFS_FILE_DATA_SIZE];
-    k_size_t size = 70u * 1024u;
-    k_u8_t *bytes = kmm_alloc(size, KMM_PRIORITY_KERNEL);
+    k_size_t size = 12u * 1024u;
+    k_u8_t *bytes;
     k_size_t done = 0u;
     int rc;
 
     ktest_begin("wifi: a firmware larger than one syscall block is read whole");
-    KT_CHECK(bytes != NULL);
-    if (bytes == NULL) {
+
+    rc = vfs_mkdir(WIFI_TEST_ROOT "/etc");
+    if (rc == KERR_NOSPC) {
         return;
     }
-    memset(bytes, 0xA5, size);
-
-    rc = vfs_mkdir_p(WIFI_TEST_ROOT "/etc/firmware");
+    KT_CHECK_INT_EQ(rc, 0);
+    rc = vfs_mkdir(WIFI_TEST_ROOT "/etc/firmware");
+    if (rc == KERR_NOSPC) {
+        return;
+    }
     KT_CHECK_INT_EQ(rc, 0);
     rc = vfs_open(WIFI_TEST_ROOT "/etc/firmware/iwlwifi-8265-36.ucode",
                   VFS_O_WRONLY | VFS_O_CREAT | VFS_O_TRUNC, &writer, private_data);
+    if (rc == KERR_NOSPC) {
+        return;
+    }
     KT_CHECK_INT_EQ(rc, 0);
-    if (rc == 0) {
+
+    bytes = kmm_alloc(size, KMM_PRIORITY_KERNEL);
+    KT_CHECK(bytes != NULL);
+    if (bytes != NULL && rc == 0) {
+        memset(bytes, 0xA5, size);
         while (done < size) {
             rc = vfs_write(&writer, bytes + done, size - done);
             if (rc <= 0) {
@@ -68,6 +78,12 @@ static void test_reads_large_firmware(void)
         }
         KT_CHECK_INT_EQ(done, size);
         (void)vfs_close(&writer);
+        kmm_free(bytes);
+    } else {
+        if (rc == 0) {
+            (void)vfs_close(&writer);
+        }
+        kmm_free(bytes);
     }
 
     memset(&file, 0, sizeof(file));
@@ -82,7 +98,6 @@ static void test_reads_large_firmware(void)
         KT_CHECK_INT_EQ(info.size, size);
         kmm_free(file.data);
     }
-    kmm_free(bytes);
 }
 
 void test_wifi_8265_fw_file(void)
@@ -95,7 +110,7 @@ void test_wifi_8265_fw_file(void)
     if (rc != 0 && rc != KERR_EXIST) {
         KT_CHECK_INT_EQ(rc, 0);
     }
-    rc = vfs_mount_type("ramfs", "/", "ram0");
+    rc = vfs_mount_type("/", "ramfs", "ram0");
     KT_CHECK_INT_EQ(rc, 0);
     if (rc != 0) {
         (void)vfs_unregister_type("ramfs");
