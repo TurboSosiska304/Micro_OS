@@ -28,6 +28,7 @@
 #include "kernel/config.h"
 #include "kernel/cpu.h"
 #include "kernel/kmod.h"
+#include "kernel/pagecache.h"
 #include "kernel/sched.h"
 #include "kernel/sysinfo.h"
 #include "kernel/task.h"
@@ -334,6 +335,18 @@ static int cmd_mfetch(int argc, char **argv)
     (void)snprintf(value, sizeof(value), "%u, %d problem(s)", (unsigned)kmod_count(),
                    kmod_problems());
     print_row(row++, color, "Modules", value);
+
+    {
+        struct pagecache_stats pc;
+
+        pagecache_get_stats(&pc);
+        (void)snprintf(value, sizeof(value),
+                       "%llu/%llu pages, %llu dirty, %llu hits, %llu misses, %llu evicted",
+                       (unsigned long long)pc.pages, (unsigned long long)pc.capacity,
+                       (unsigned long long)pc.dirty, (unsigned long long)pc.hits,
+                       (unsigned long long)pc.misses, (unsigned long long)pc.evictions);
+        print_row(row++, color, "Page cache", value);
+    }
 
     return KSHELL_OK;
 }
