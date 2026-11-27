@@ -712,10 +712,11 @@ identity-mapped pages and the excluded live ranges; it must be run on the
 laptop before anyone claims how many slots are really free.
 
 Still open, in order: obtain the `ggtt-map` numbers; check whether the stride
-decode names the plane the firmware really scans (an identity mapping would
-let a RAM surface flip with no PTE write at all); prove the device path with
-`gpu display enable --yes`; then decide between a smaller-pitch surface, one
-surface with a copy, and a real two-surface flip. Mode setting and backlight
+decode names the plane the firmware really scans and whether any identity run
+exists (only an identity mapping lets a RAM surface flip with no PTE write — a
+linear plane alone still reads through `PLANE_SURF`, an aperture offset);
+prove the device path with `gpu display enable --yes`; then decide between a
+smaller-pitch surface, one surface with a copy, and a real two-surface flip. Mode setting and backlight
 are research only in this lane: no PLL or DDI register is written.
 
 The QEMU row stays as a baseline: there is no Intel card in QEMU, so no

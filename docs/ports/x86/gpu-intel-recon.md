@@ -768,13 +768,18 @@ of never-mapped PTEs with unmapped guards, and falls back to the scratch case.
 identity-mapped pages, the longest runs, and the excluded live ranges; it must
 be run on the laptop to answer who actually owns the slots.
 
+A linear plane does **not** by itself make a RAM buffer scanner-visible:
+`PLANE_SURF` names an offset in the graphics aperture, so the scan engine reads
+through a GGTT PTE even for a linear XRGB8888 surface. The only exception is an
+identity run, where the firmware already maps an aperture page to that physical
+page; the new `find_identity` check takes that path without writing a PTE. If
+`ggtt-map` reports zero identity pages, a flip necessarily needs a slot.
+
 `gpu display enable` now prints this arithmetic in its dry-run and refuses to
 promise a device flip when there is no guarded run. On this machine it is
 nearly a no-op: the plane is already linear, so `--yes` only verifies one
-present, releases the mapping and leaves the plane unchanged. A separate path
-uses an identity GGTT run when the firmware already maps the RAM one-to-one;
-then no PTE write is needed at all. Mode and backlight remain research only in
-`gpu-intel-mode-backlight-plan.md`.
+present, releases the mapping and leaves the plane unchanged. Mode and
+backlight remain research only in `gpu-intel-mode-backlight-plan.md`.
 
 ## 10. Sources
 
