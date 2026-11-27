@@ -937,6 +937,49 @@ static void com1_put_hex64(k_u64_t value)
     }
 }
 
+static void com1_put_hex16(k_u64_t value)
+{
+    static const char digits[] = "0123456789abcdef";
+    int shift;
+
+    for (shift = 12; shift >= 0; shift -= 4) {
+        char c = digits[(value >> shift) & 0xFu];
+
+        k_port_write(&c, 1);
+    }
+}
+
+static k_u16_t read_sreg_ds(void)
+{
+    k_u16_t v;
+    __asm__ volatile("mov %%ds, %0" : "=r"(v));
+    return v;
+}
+static k_u16_t read_sreg_es(void)
+{
+    k_u16_t v;
+    __asm__ volatile("mov %%es, %0" : "=r"(v));
+    return v;
+}
+static k_u16_t read_sreg_fs(void)
+{
+    k_u16_t v;
+    __asm__ volatile("mov %%fs, %0" : "=r"(v));
+    return v;
+}
+static k_u16_t read_sreg_gs(void)
+{
+    k_u16_t v;
+    __asm__ volatile("mov %%gs, %0" : "=r"(v));
+    return v;
+}
+static k_u16_t read_sreg_ss(void)
+{
+    k_u16_t v;
+    __asm__ volatile("mov %%ss, %0" : "=r"(v));
+    return v;
+}
+
 static const char *exception_name(k_u64_t vector)
 {
     static const char *const names[32] = {
@@ -981,7 +1024,7 @@ static const char *exception_name(k_u64_t vector)
     return "unknown";
 }
 
-int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs, k_u64_t *frame)
 {
     /*
      * The guard page under the stack of a kernel task (ADR 0048). A fault of
@@ -1104,6 +1147,113 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
         __asm__ volatile("movq %%cr2, %0" : "=r"(address));
         com1_puts(", cr2 0x");
         com1_put_hex64(address);
+    }
+
+    {
+        k_u64_t rflags = frame != NULL ? frame[19] : 0u;
+        k_u64_t fault_rsp;
+        k_u64_t fault_ss;
+        k_u16_t ds = read_sreg_ds();
+        k_u16_t es = read_sreg_es();
+        k_u16_t fs = read_sreg_fs();
+        k_u16_t gs = read_sreg_gs();
+        k_u16_t ss_now = read_sreg_ss();
+
+        if (frame != NULL && (cs & 3u) != 0u) {
+            fault_rsp = frame[20];
+            fault_ss = frame[21];
+        } else {
+            fault_rsp = frame != NULL ? (k_u64_t)(uintptr_t)(frame + 20) : 0u;
+            fault_ss = (k_u64_t)ss_now;
+        }
+
+        com1_puts(", rsp 0x");
+        com1_put_hex64(fault_rsp);
+        com1_puts(", ss 0x");
+        com1_put_hex64(fault_ss);
+        com1_puts(", rflags 0x");
+        com1_put_hex64(rflags);
+        com1_puts("\nx86-64: ds 0x");
+        com1_put_hex16(ds);
+        com1_puts(", es 0x");
+        com1_put_hex16(es);
+        com1_puts(", fs 0x");
+        com1_put_hex16(fs);
+        com1_puts(", gs 0x");
+        com1_put_hex16(gs);
+        com1_puts(", ss(reg) 0x");
+        com1_put_hex16(ss_now);
+
+        /* Selector errors (e.g. #GP 0x30): index/TI/RPL tell which descriptor
+         * was refused. This is the line that turns "0x30" into "GDT index 6". */
+        if (error != 0u) {
+            k_u64_t index = (error >> 3) & 0x1FFFu;
+            k_u64_t ti = (error >> 2) & 1u;
+            k_u64_t rpl = error & 3u;
+            k_u64_t ext = (error >> 0) & 1u;
+            k_u64_t idt = (error >> 1) & 1u;
+
+            com1_puts("\nx86-64: error selector index ");
+            com1_put_dec(index);
+            com1_puts(ti ? " LDT" : " GDT");
+            com1_puts(", rpl ");
+            com1_put_dec(rpl);
+            com1_puts(ext ? ", ext" : "");
+            com1_puts(idt ? ", idt" : "");
+
+            if (ti == 0u) {
+                com1_puts("\n");
+                port_x86_64_gdt_dump_entry(k_port_cpu_id(), (k_u32_t)index);
+            }
+        }
+
+        if (frame != NULL) {
+            com1_puts("\nx86-64: rax 0x");
+            com1_put_hex64(frame[9]);
+            com1_puts(" rbx 0x");
+            com1_put_hex64(frame[10]);
+            com1_puts(" rcx 0x");
+            com1_put_hex64(frame[8]);
+            com1_puts(" rdx 0x");
+            com1_put_hex64(frame[7]);
+            com1_puts("\nx86-64: rsi 0x");
+            com1_put_hex64(frame[6]);
+            com1_puts(" rdi 0x");
+            com1_put_hex64(frame[5]);
+            com1_puts(" rbp 0x");
+            com1_put_hex64(frame[0]);
+            com1_puts(" r8  0x");
+            com1_put_hex64(frame[4]);
+            com1_puts("\nx86-64: r9  0x");
+            com1_put_hex64(frame[3]);
+            com1_puts(" r10 0x");
+            com1_put_hex64(frame[2]);
+            com1_puts(" r11 0x");
+            com1_put_hex64(frame[1]);
+            com1_puts(" r12 0x");
+            com1_put_hex64(frame[11]);
+            com1_puts("\nx86-64: r13 0x");
+            com1_put_hex64(frame[12]);
+            com1_puts(" r14 0x");
+            com1_put_hex64(frame[13]);
+            com1_puts(" r15 0x");
+            com1_put_hex64(frame[14]);
+        }
+
+        /* The bytes at RIP are the instruction that faulted. A person with
+         * this line can disassemble without a debugger; on metal there is no
+         * other way to see it. */
+        com1_puts("\nx86-64: rip bytes");
+        for (int i = 0; i < 16; i++) {
+            k_u8_t byte = ((const volatile k_u8_t *)(uintptr_t)rip)[i];
+            static const char hex[] = "0123456789abcdef";
+            char buf[4];
+
+            buf[0] = ' ';
+            buf[1] = hex[(byte >> 4) & 0xFu];
+            buf[2] = hex[byte & 0xFu];
+            k_port_write(buf, 3);
+        }
     }
 
     com1_puts("\nx86-64: the machine stops here\n");

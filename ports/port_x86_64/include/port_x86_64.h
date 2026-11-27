@@ -294,11 +294,13 @@ void port_x86_64_signal_tick(k_u64_t *frame);
  * when it names a ring 3 frame the program that faulted is taken down and
  * the machine continues, and when it names ring 0 the kernel has nowhere to
  * return to and the machine stops. The RIP and, for a page fault, CR2 say
- * where. The one exception is the first write into a page a fork made
+ * where. `frame` points at the saved registers and the iretq words the stub
+ * left on the stack (see interrupts.S); it is used to print the state on a
+ * fatal fault. The one exception is the first write into a page a fork made
  * read-only: the page is copied and 1 is returned, which sends the stub back
  * to the instruction that faulted with the registers it had.
  */
-int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs);
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs, k_u64_t *frame);
 
 /*
  * A fault of the program that is running: print the line of the failure and
@@ -358,6 +360,11 @@ void port_x86_64_gdt_init(void);
  * the TSS, which carries the RSP0 and the IST stack of that core.
  */
 void port_x86_64_gdt_init_cpu(k_u32_t cpu);
+
+/* Print the GDT of the boot core: index, selector, type, DPL, present. */
+void port_x86_64_gdt_dump(void);
+/* Print one GDT entry to the console; used by the fatal exception dump. */
+void port_x86_64_gdt_dump_entry(k_u32_t cpu, k_u32_t index);
 
 /* The stack the processor takes on an interrupt from ring 3. */
 void port_x86_64_tss_set_rsp0(k_u64_t rsp0);

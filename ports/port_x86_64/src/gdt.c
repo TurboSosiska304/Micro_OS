@@ -29,8 +29,12 @@
 #include "port_x86_64.h"
 
 #include "kernel/cpu.h"
+#include "kernel/log.h"
+#include "kernel/port/console.h"
 #include "kernel/port/cpu.h"
 #include "port_x86_64_smp.h"
+
+#include <stdio.h>
 
 /* The selectors, as they sit in the table and as the processor sees them. */
 #define GDT_KERNEL_CODE 0x08u
@@ -232,4 +236,100 @@ void port_x86_64_tss_set_rsp0(k_u64_t rsp0)
 k_u64_t port_x86_64_tss_rsp0(void)
 {
     return g_tss[gdt_cpu()].rsp0;
+}
+
+static const char *gdt_type_name(k_u8_t access, bool system)
+{
+    if (!system) {
+        bool code = (access & 0x08u) != 0u;
+        return code ? "code" : "data";
+    }
+
+    switch (access & 0x0Fu) {
+    case 0x9u:
+        return "tss64-avail";
+    case 0xBu:
+        return "tss64-busy";
+    default:
+        return "system";
+    }
+}
+
+void port_x86_64_gdt_dump_entry(k_u32_t cpu, k_u32_t index)
+{
+    const struct gdt_entry *e;
+    k_u8_t access;
+    bool present;
+    k_u32_t dpl;
+    bool system;
+    k_u64_t base;
+    k_u32_t limit;
+    const char *type;
+
+    if (cpu >= KERNEL_CPUS_MAX || index >= GDT_ENTRIES) {
+        kinfo("x86-64: gdt[%u] cpu %u: out of range", (unsigned)index, (unsigned)cpu);
+        return;
+    }
+
+    e = &g_gdt[cpu][index];
+    access = e->access;
+    present = (access & 0x80u) != 0u;
+    dpl = (access >> 5) & 3u;
+    system = (access & 0x10u) == 0u;
+    base = (k_u64_t)e->base_low | ((k_u64_t)e->base_mid << 16) | ((k_u64_t)e->base_high << 24);
+    limit = (k_u32_t)e->limit_low | ((k_u32_t)(e->granularity & 0x0Fu) << 16);
+    type = gdt_type_name(access, system);
+
+    if (system && (access & 0x0Fu) >= 0x9u && (access & 0x0Fu) <= 0xBu &&
+        index + 1u < GDT_ENTRIES) {
+        const struct gdt_entry *h = &g_gdt[cpu][index + 1u];
+        base |= ((k_u64_t)h->limit_low << 32) | ((k_u64_t)h->base_low << 48);
+        kinfo("x86-64: gdt[%u] sel 0x%x %s p=%u dpl=%u base 0x%08x%08x limit 0x%x", index,
+              (unsigned)(index * 8u), type, present ? 1u : 0u, dpl, (unsigned)(base >> 32),
+              (unsigned)base, limit);
+        return;
+    }
+
+    kinfo("x86-64: gdt[%u] sel 0x%x %s p=%u dpl=%u base 0x%x limit 0x%x flags 0x%x raw %02x %02x",
+          index, (unsigned)(index * 8u), type, present ? 1u : 0u, dpl, (unsigned)base, limit,
+          (unsigned)(e->granularity >> 4), (unsigned)access, (unsigned)e->granularity);
+}
+
+void port_x86_64_gdt_dump(void)
+{
+    k_u32_t cpu = 0u;
+    k_u32_t i;
+
+    kinfo("x86-64: GDT cpu %u base 0x%08x%08x limit 0x%x", (unsigned)cpu,
+          (unsigned)(g_gdt_pointer[cpu].base >> 32), (unsigned)g_gdt_pointer[cpu].base,
+          (unsigned)g_gdt_pointer[cpu].limit);
+
+    for (i = 0; i < GDT_ENTRIES; i++) {
+        const struct gdt_entry *e = &g_gdt[cpu][i];
+        k_u8_t access = e->access;
+        bool present = (access & 0x80u) != 0u;
+        k_u32_t dpl = (access >> 5) & 3u;
+        bool system = (access & 0x10u) == 0u;
+        k_u64_t base =
+            (k_u64_t)e->base_low | ((k_u64_t)e->base_mid << 16) | ((k_u64_t)e->base_high << 24);
+        k_u32_t limit = (k_u32_t)e->limit_low | ((k_u32_t)(e->granularity & 0x0Fu) << 16);
+        const char *type = gdt_type_name(access, system);
+
+        if (system && (access & 0x0Fu) >= 0x9u && (access & 0x0Fu) <= 0xBu) {
+            /* 64-bit TSS descriptor spans two slots; print the full base. */
+            const struct gdt_entry *h = &g_gdt[cpu][i + 1u];
+            base |= ((k_u64_t)h->limit_low << 32) | ((k_u64_t)h->base_low << 48);
+            kinfo("x86-64: gdt[%u] sel 0x%x %s p=%u dpl=%u base 0x%08x%08x limit 0x%x", i,
+                  (unsigned)(i * 8u), type, present ? 1u : 0u, dpl, (unsigned)(base >> 32),
+                  (unsigned)base, limit);
+            kinfo("x86-64: gdt[%u] sel 0x%x tss64-high (not a segment selector)", i + 1u,
+                  (unsigned)((i + 1u) * 8u));
+            i++; /* skip high half */
+            continue;
+        }
+
+        kinfo("x86-64: gdt[%u] sel 0x%x %s p=%u dpl=%u base 0x%x limit 0x%x flags 0x%x", i,
+              (unsigned)(i * 8u), type, present ? 1u : 0u, dpl, (unsigned)base, limit,
+              (unsigned)(e->granularity >> 4));
+    }
 }

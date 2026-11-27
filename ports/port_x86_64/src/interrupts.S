@@ -126,6 +126,7 @@ isr_exception_common:
     movq 128(%rbp), %rsi /* the error code, or the zero of the stub */
     movq 136(%rbp), %rdx /* the instruction that was running */
     movq 144(%rbp), %rcx /* the code selector of the moment */
+    movq %rbp, %r8       /* the frame: registers and the iretq fields */
 
     andq $-16, %rsp
     call port_x86_64_exception

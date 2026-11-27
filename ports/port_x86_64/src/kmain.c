@@ -459,6 +459,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
 
     kernel_boot(&cfg);
 
+    /* The GDT as the CPU sees it. A real-metal #GP that names a selector is
+     * unreadable without this table, and the dump costs 10 lines of boot. */
+    port_x86_64_gdt_dump();
+
     /* Which of the two boots of this port it is: the multiboot image that
      * QEMU loads with -kernel, or the machine the firmware handed over
      * (loader/uefi). The rest of the log is the same on both, which is the
