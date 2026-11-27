@@ -65,6 +65,10 @@ int pagecache_sync_file(struct vfs_file *file);
 /* Write every dirty page of the cache back. */
 int pagecache_sync_all(void);
 
+/* Periodic writeback: flush dirty pages when they age past 1 s or exceed the
+ * dirty threshold, so a sudden power loss does not drop cached writes. */
+void pagecache_tick(void);
+
 /* Drop every page but keep the cache ready. */
 void pagecache_drop_all(void);
 

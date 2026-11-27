@@ -23,6 +23,7 @@
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/logfile.h"
+#include "kernel/pagecache.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
 #include "kernel/version.h"
@@ -321,6 +322,7 @@ static void init_task(void *arg)
         }
 
         k_logfile_tick();
+        pagecache_tick();
         k_sched_sleep_ms(100);
     }
 }
