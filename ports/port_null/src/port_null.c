@@ -178,6 +178,18 @@ void k_port_free(void *ptr)
     K_UNUSED(ptr);
 }
 
+void *k_port_dma_alloc(k_size_t size, k_size_t align)
+{
+    K_UNUSED(size);
+    K_UNUSED(align);
+    return NULL;
+}
+
+void k_port_dma_free(void *ptr)
+{
+    K_UNUSED(ptr);
+}
+
 /* --- locking --- */
 
 k_u32_t k_port_critical_depth(void)

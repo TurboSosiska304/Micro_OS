@@ -47,6 +47,7 @@
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_smp.h"
+#include "port_x86_64_wifi.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
@@ -514,6 +515,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     if (port_x86_64_gpu_register() != 0) {
         kwarn("x86-64: the gpu command is not registered");
     }
+
+    /* Intel 8265 discovery is safe on QEMU: no card means KMOD_SKIP. Power
+     * and firmware loading are never started by the boot. */
+    port_x86_64_wifi_init();
 
     /*
      * The processors of the machine (ADR 0012). The count on the left is what

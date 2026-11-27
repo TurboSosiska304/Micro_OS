@@ -8,11 +8,18 @@ if(NOT ESP_PLATFORM)
         cases/test_version.c
         cases/test_gpu_intel.c
         cases/test_gpu_intel_ggtt.c
+        cases/test_wifi_8265_fw.c
+        cases/test_wifi_8265_fw_file.c
+        cases/test_wifi_8265_regs.c
+        cases/test_wifi_8265_power.c
+        cases/test_wifi_8265_attach.c
+        cases/test_wifi_8265_virtual.c
         cases/test_board.c
         cases/test_log.c
         cases/test_logfile.c
         cases/test_ansi.c
         cases/test_port.c
+        cases/test_port_dma.c
         cases/test_blockdev.c
         cases/test_blockdev_cache.c
         cases/test_blockdev_fault.c
@@ -133,11 +140,18 @@ if(NOT ESP_PLATFORM)
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/bt_hci.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel_ggtt.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/wifi_8265.c"
         ${MICRO_OS_TEST_CASES}
     )
 
-    # The Intel case links the real probe against a PCI stub, so the shared
-    # GPU_PROBE_NONE/UNKNOWN_DEV contract and the identity table are exercised.
+    # The Intel and WiFi cases link the real probes against PCI/MMIO stubs,
+    # so their shared result contracts and register facts are exercised. The
+    # test-only clock seam keeps the production port clock unchanged.
+    set_source_files_properties(
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/wifi_8265.c"
+        PROPERTIES COMPILE_DEFINITIONS MICRO_OS_HOST_TEST=1
+    )
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")

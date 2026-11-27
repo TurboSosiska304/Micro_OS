@@ -18,7 +18,7 @@
 
 #include "kernel/fb.h"
 
-static k_u16_t s_vendor;
+k_u16_t s_vendor;
 static k_u16_t s_device;
 static k_u8_t s_revision;
 
@@ -26,11 +26,16 @@ static k_u8_t s_revision;
 k_u64_t g_port_x86_64_kernel_phys;
 static k_u64_t s_ticks;
 
-k_u64_t port_x86_64_ticks(void)
+k_u64_t microos_test_x86_64_ticks(void) __attribute__((weak));
+
+k_u64_t microos_test_x86_64_ticks(void)
 {
     s_ticks++;
     return s_ticks;
 }
+
+k_u32_t port_x86_64_pci_read32(const struct port_x86_64_pci_device *device, k_u8_t offset)
+    __attribute__((weak));
 
 k_u32_t port_x86_64_pci_read32(const struct port_x86_64_pci_device *device, k_u8_t offset)
 {
@@ -38,6 +43,9 @@ k_u32_t port_x86_64_pci_read32(const struct port_x86_64_pci_device *device, k_u8
     (void)offset;
     return 0u;
 }
+
+k_u16_t port_x86_64_pci_read16(const struct port_x86_64_pci_device *device, k_u8_t offset)
+    __attribute__((weak));
 
 k_u16_t port_x86_64_pci_read16(const struct port_x86_64_pci_device *device, k_u8_t offset)
 {
@@ -58,10 +66,59 @@ k_u16_t port_x86_64_pci_read16(const struct port_x86_64_pci_device *device, k_u8
 }
 
 void port_x86_64_pci_enable(const struct port_x86_64_pci_device *device, k_u16_t bits)
+    __attribute__((weak));
+
+void port_x86_64_pci_enable(const struct port_x86_64_pci_device *device, k_u16_t bits)
 {
     (void)device;
     (void)bits;
 }
+
+bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device, struct port_x86_64_pci_device *found)
+    __attribute__((weak));
+
+bool port_x86_64_pci_find(k_u16_t vendor, k_u16_t device, struct port_x86_64_pci_device *found)
+{
+    (void)vendor;
+    (void)device;
+    (void)found;
+    return false;
+}
+
+void port_x86_64_pci_write16(const struct port_x86_64_pci_device *device, k_u8_t offset,
+                             k_u16_t value) __attribute__((weak));
+
+void port_x86_64_pci_write16(const struct port_x86_64_pci_device *device, k_u8_t offset,
+                             k_u16_t value)
+{
+    (void)device;
+    (void)offset;
+    (void)value;
+}
+
+void port_x86_64_pci_write32(const struct port_x86_64_pci_device *device, k_u8_t offset,
+                             k_u32_t value) __attribute__((weak));
+
+void port_x86_64_pci_write32(const struct port_x86_64_pci_device *device, k_u8_t offset,
+                             k_u32_t value)
+{
+    (void)device;
+    (void)offset;
+    (void)value;
+}
+
+k_u32_t port_x86_64_pci_bar_size(const struct port_x86_64_pci_device *device, k_u8_t offset)
+    __attribute__((weak));
+
+k_u32_t port_x86_64_pci_bar_size(const struct port_x86_64_pci_device *device, k_u8_t offset)
+{
+    (void)device;
+    (void)offset;
+    return 0u;
+}
+
+k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+    __attribute__((weak));
 
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
@@ -72,6 +129,9 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 }
 
 k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+    __attribute__((weak));
+
+k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
     (void)vaddr;
     (void)paddr;
@@ -79,10 +139,22 @@ k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_
     return 0u;
 }
 
+bool port_x86_64_paging_kernel_present(k_u64_t vaddr) __attribute__((weak));
+
+bool port_x86_64_paging_kernel_present(k_u64_t vaddr)
+{
+    (void)vaddr;
+    return false;
+}
+
+k_u64_t port_x86_64_dma_phys(const void *buffer) __attribute__((weak));
+
 k_u64_t port_x86_64_dma_phys(const void *buffer)
 {
     return port_x86_64_bus_phys(buffer);
 }
+
+bool port_x86_64_frame_hold(k_u64_t address) __attribute__((weak));
 
 bool port_x86_64_frame_hold(k_u64_t address)
 {
@@ -90,9 +162,21 @@ bool port_x86_64_frame_hold(k_u64_t address)
     return true;
 }
 
+void port_x86_64_frame_release(k_u64_t address) __attribute__((weak));
+
 void port_x86_64_frame_release(k_u64_t address)
 {
     (void)address;
+}
+
+void reset_gpu_pci_stub(void);
+
+void reset_gpu_pci_stub(void)
+{
+    s_vendor = 0u;
+    s_device = 0u;
+    s_revision = 0u;
+    s_ticks = 0u;
 }
 
 void port_x86_64_fb_set_format(k_u8_t format, k_u8_t bpp);

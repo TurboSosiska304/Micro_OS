@@ -19,6 +19,7 @@
 
 #include "kernel/errno.h"
 #include "kernel/cpu.h"
+#include "kernel/kmm.h"
 #include "kernel/port.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
@@ -606,6 +607,44 @@ void k_port_free(void *ptr)
     }
 
     free(ptr);
+}
+
+void *k_port_dma_alloc(k_size_t size, k_size_t align)
+{
+    k_u8_t *raw;
+    k_u8_t *aligned;
+    k_size_t total;
+    uintptr_t mask;
+
+    if (size == 0u || align == 0u || (align & (align - 1u)) != 0u) {
+        return NULL;
+    }
+    if (align < sizeof(void *)) {
+        align = sizeof(void *);
+    }
+
+    mask = (uintptr_t)align - 1u;
+    if (size > (k_size_t)-1 - align - sizeof(void *)) {
+        return NULL;
+    }
+    total = size + align - 1u + sizeof(void *);
+
+    raw = (k_u8_t *)kmm_alloc(total, KMM_PRIORITY_KERNEL);
+    if (raw == NULL) {
+        return NULL;
+    }
+
+    aligned = (k_u8_t *)(((uintptr_t)(raw + sizeof(void *)) + mask) & ~mask);
+    ((void **)aligned)[-1] = raw;
+    return aligned;
+}
+
+void k_port_dma_free(void *ptr)
+{
+    if (ptr == NULL) {
+        return;
+    }
+    kmm_free(((void **)ptr)[-1]);
 }
 
 k_u64_t k_port_uptime_us(void)

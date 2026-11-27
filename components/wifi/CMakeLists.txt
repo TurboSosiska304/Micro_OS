@@ -11,6 +11,9 @@
 
 set(MICRO_OS_WIFI_SRCS
     "src/wifi.c"
+    "src/iwl8265_fw.c"
+    "src/iwl8265_fw_file.c"
+    "src/iwl8265_loader.c"
 )
 
 if(ESP_PLATFORM)

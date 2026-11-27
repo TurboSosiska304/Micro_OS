@@ -15,6 +15,12 @@
  */
 #include "gpu_intel.h"
 
+#ifdef MICRO_OS_HOST_TEST
+#include "test_x86_64_ticks.h"
+#else
+#define wifi_test_ticks port_x86_64_ticks
+#endif
+
 #include "kernel/blit.h"
 #include "kernel/errno.h"
 #include "kernel/fb.h"
@@ -558,7 +564,7 @@ static bool gpu_intel_wait_frame(const struct gpu_intel_info *info)
      * missing tick source from turning a frame wait into an infinite loop. */
     k_u32_t offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PIPE_FRAME_BASE);
     k_u32_t before = gpu_intel_mmio_read(offset);
-    k_u64_t deadline = port_x86_64_ticks() + 100u;
+    k_u64_t deadline = wifi_test_ticks() + 100u;
     k_u32_t spins = 0u;
 
     do {
@@ -566,9 +572,9 @@ static bool gpu_intel_wait_frame(const struct gpu_intel_info *info)
             return true;
         }
         spins++;
-    } while (port_x86_64_ticks() < deadline && spins < 4000000u);
+    } while (wifi_test_ticks() < deadline && spins < 4000000u);
 
-    if (spins >= 4000000u || port_x86_64_ticks() >= deadline) {
+    if (spins >= 4000000u || wifi_test_ticks() >= deadline) {
         kwarn("gpu: frame wait timed out (pipe %u, before 0x%x, now 0x%x, spins %u)",
               (unsigned)info->panel_pipe, (unsigned)before, (unsigned)gpu_intel_mmio_read(offset),
               (unsigned)spins);
