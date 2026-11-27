@@ -10,6 +10,89 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [2.3.0] - 2026-11-27
+
+### The release
+
+- 2.3.0 "The disk answers": the installer learns to read a disk before it
+  writes one, the page cache keeps the hot blocks in memory, the WiFi port
+  contract grows a DMA and a 8265 driver through its second stage, and the
+  x86-64 machine boots with its cores on by default on the medium that can
+  afford them.
+
+### Added
+
+- The installer inventory: `partition_inventory()` reads the GPT and the
+  protective MBR, reports every entry and every aligned gap, and refuses a
+  damaged or hybrid table before any write. `partition_append()` adds one GPT
+  entry to both copies of the table, saves the old tables in memory, verifies
+  the write, and restores on a mismatch. `install --dry-run` on x86-64 prints
+  the inventory and the plan without writing a byte to the disk.
+- The page cache: a bounded cache of file blocks in the kernel, wired into
+  VFS reads and writes, with `fsync` bringing the data and the metadata of an
+  open file to the medium. MicroFS writes go through the journal with barriers
+  and a durable write order; the cache keeps the hot path in memory and the
+  medium honest on sync.
+- Intel 8265 WiFi stage 1 and 2 on x86-64: PCI attach, CSR/power-up, firmware
+  file loading and the virtual device proof. The port DMA contract is recorded
+  as port contract 1.16; the driver reaches the stage 2 boundary but does not
+  yet bring the radio to `ALIVE` on real hardware.
+- SMP on by default in the shipped x86-64 image; `make x86-build SMP=OFF`
+  builds the safe single-core stick. The AP trampoline carries a firmware-boot
+  path and names every phase on screen; the AP bring-up reports diagnostics
+  instead of failing silent.
+
+### Fixed
+
+- SMEP and SMAP are cleared and the CR4 policy is named: the MMU smokes accept
+  the policy, and the kernel does not fault on a user-mapped access it makes
+  by design on this port.
+- NVMe reports the formatted LBA size (LBADS/FLBAS) as the block device sector
+  size, and the partition/GPT reader accepts real GPT geometry the way `sgdisk`
+  does - a partition may end past `last_usable` but inside the disk.
+- xHCI USB enumeration retries and reports a missing keyboard instead of
+  stalling on a port that needs more time.
+- `wm` frame wait on real Intel GOP has a tick deadline and a spin bound, so a
+  stalled or missing tick source cannot turn a frame wait into an infinite
+  loop.
+- ESP32 DRAM: the logfile batch buffer is trimmed on the board so the static
+  DRAM stays below the 8 KiB program-data window.
+
+## [2.2.0] - 2026-11-27
+
+### The release
+
+- 2.2.0 "Eternal Peace": the machine after the thaw. The journal keeps its
+  promises on a medium that fails, the shell runs work in the background, the
+  hand moves a cursor, the GPU gets buffers of its own, and a fault bus proves
+  that a disk that lies does not take the volume with it.
+
+### Added
+
+- The MicroFS journal writes with barriers and the medium is `fsync`'d: a durable
+  write order, `fsync` for the file, and the recovery that follows the log instead
+  of guessing. The fault-injection sweep fixed the defects it found on the way,
+  including an inode and its bitmap committed in different transactions.
+- The shell runs lists, redirections and job control: `;`, `&&`, `||`, pipes in
+  the background, `jobs`, `fg`, `bg`, and stop/continue for a foreground group.
+- A PS/2 AUX IntelliMouse: the byte parser, the wheel, and a testable mouse path
+  with an x86 smoke gate.
+- A Bluetooth HCI control slice over USB: command and connection events, and
+  `bt reset/name/scan` for the radio that is present.
+- AMD VRAM buffer objects: `bufalloc`, `buffill`, `bufread`, `buffree`,
+  `buflist`, and `bufflip` over the BAR0 aperture.
+- Intel `gpu plane-linear`: an XRGB8888 linear plane path for the flip backend,
+  alongside the existing RGB565 path.
+
+### Fixed
+
+- Deterministic block-device fault injection (`blockdev_fault`) and MicroFS fault
+  sweeps: failed cache boxes are forgotten, corrupt slot images keep strict
+  replay, and a disk fault does not silently corrupt the volume.
+- xHCI and USB smoke coverage kept in step with the BT and input work (66 checks).
+- `kshell` jobs test waits for the stopped state, so the ASan gate does not race
+  the scheduler.
+
 ## [2.1.0] - 2026-11-27
 
 ### The release

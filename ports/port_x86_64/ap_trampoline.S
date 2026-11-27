@@ -167,6 +167,18 @@ ap_gdt:
     .quad 0x00AF9A000000FFFF /* 64-bit code, ring 0 */
     .quad 0x00CF92000000FFFF /* data, ring 0 */
 
+/*
+ * The signature the kernel reads before it sends a start-up IPI. The BIOS
+ * loader copies this page to 0x7000 and the kernel does the same on a UEFI
+ * machine: without the signature the page may still hold whatever the
+ * firmware left there, and an AP that executes those bytes can reach a port
+ * that resets the whole machine (a laptop of the X1 generation does). A page
+ * without this word is never given a SIPI.
+ */
+. = 0x0F00
+ap_signature:
+    .ascii "MOSAP1\0\0"
+
 /* The parameters the BSP fills in before the start-up IPI (see the top). */
 . = 0x1000
 ap_params:

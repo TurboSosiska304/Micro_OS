@@ -636,6 +636,9 @@ int port_x86_64_net_register(void);
  */
 int port_x86_64_stack_register(void);
 
+/* Register the `install` command: dry-run plan for installing to a disk. */
+int port_x86_64_install_register(void);
+
 /*
  * The hook of the task substrate, called on every tick. Weak here: a build
  * without a scheduler keeps its clock, and the file of the tasks of the port
@@ -760,6 +763,7 @@ k_u32_t port_x86_64_tick_start(k_u32_t cpu);
  */
 #define PORT_X86_64_REQUEST_TIMER_OFF 0x1u
 #define PORT_X86_64_REQUEST_TIMER_ON 0x2u
+#define PORT_X86_64_REQUEST_BOOT_MUTEX 0x4u
 
 void port_x86_64_timer_off_request(k_u32_t cpu);
 void port_x86_64_timer_on_request(k_u32_t cpu);
@@ -896,6 +900,25 @@ k_u64_t port_x86_64_dma_phys(const void *buffer);
 #define PORT_X86_64_USER_RESTORER_OFFSET (PORT_X86_64_USER_GUARD_OFFSET - 4096u)
 #define PORT_X86_64_USER_TOP (PORT_X86_64_USER_BASE + PORT_X86_64_USER_RESTORER_OFFSET)
 
+/* --- the console ---------------------------------------------------------- */
+
+/* The live state of the last COM1 transmit wait that reached its deadline. */
+#define PORT_X86_64_COM1_STACK_WORDS 8u
+
+struct port_x86_64_com1_stats {
+    k_u64_t thr_waits;
+    k_u64_t thr_timeouts;
+    k_u64_t dropped;
+    k_u32_t last_cpu;
+    k_u32_t last_pid;
+    k_u64_t last_rip;
+    k_u64_t last_rsp;
+    k_u64_t last_stack[PORT_X86_64_COM1_STACK_WORDS];
+};
+
+/* Copy the counters and the last timeout without waiting for the console lock. */
+void port_x86_64_com1_get_stats(struct port_x86_64_com1_stats *stats);
+
 /* --- what the boot of the platform learned -------------------------------- */
 
 struct port_x86_64_info {
@@ -936,5 +959,11 @@ const struct port_x86_64_info *port_x86_64_info(void);
 
 /* Write a line to COM1 without the kernel: for the failures of the boot. */
 void port_x86_64_panic(const char *text);
+
+/* Write a diagnosis to COM1 without the console lock: see src/port_x86_64.c. */
+void port_x86_64_debug_write(const char *data, k_size_t len);
+
+/* The depth of the critical section of a core, for the same diagnosis. */
+k_u32_t port_x86_64_critical_depth_cpu(k_u32_t cpu);
 
 #endif /* MICRO_OS_PORT_X86_64_H */

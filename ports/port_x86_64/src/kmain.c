@@ -40,12 +40,14 @@
 #include "config/config.h"
 #include "config/session.h"
 #include "kshell/kshell.h"
+#include "port_x86_64_bt.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_gpu.h"
 #include "port_x86_64_input.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
 #include "port_x86_64_smp.h"
+#include "port_x86_64_wifi.h"
 #include "settings/settings.h"
 
 #if MICRO_OS_NET
@@ -375,6 +377,7 @@ static void init_task(void *arg)
     if (kshell_init() != KSHELL_OK) {
         kwarn("x86-64: not every command of the shell is registered");
     }
+    port_x86_64_bt_register();
 
     /*
      * The colours of the log of the session, from the first prompt: a warning
@@ -513,6 +516,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
         kwarn("x86-64: the gpu command is not registered");
     }
 
+    /* Intel 8265 discovery is safe on QEMU: no card means KMOD_SKIP. Power
+     * and firmware loading are never started by the boot. */
+    port_x86_64_wifi_init();
+
     /*
      * The processors of the machine (ADR 0012). The count on the left is what
      * the firmware (the MADT of ACPI) says, the one on the right is what the
@@ -552,23 +559,15 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 
     /*
-     * The two bits of CR4 that keep the kernel out of the memory of a program
-     * (ADR 0052). SMEP refuses a fetch of a page of ring 3 from ring 0 and
-     * SMAP a read or a write of one; both are turned on when the processor
-     * advertises them and named here either way, because a machine that has
-     * neither is protected by the supervisor bit of every kernel page and
-     * that is the line a person reads when an attack does not work.
+     * The two bits of CR4 are cleared in paging.c before the first program,
+     * and the register before and after is in the log of the boot. The
+     * supervisor bit of every kernel page and the checks of the copy edge
+     * are the boundary until the kernel has a map of its own (ADR 0052).
+     * Saying so here keeps the line an honest one on a machine whose firmware
+     * advertised the bits: they are off here by policy, not by absence.
      */
-    if (port_x86_64_smep_on() && port_x86_64_smap_on()) {
-        kinfo("x86-64: SMEP and SMAP are on, the kernel cannot run or read a page of a program");
-    } else if (port_x86_64_smep_on()) {
-        kinfo("x86-64: SMEP is on, SMAP is not on this processor");
-    } else if (port_x86_64_smap_on()) {
-        kinfo("x86-64: SMAP is on, SMEP is not on this processor");
-    } else {
-        kinfo("x86-64: this processor has no SMEP or SMAP, the supervisor bit of every kernel "
-              "page is the boundary");
-    }
+    kinfo("x86-64: SMEP and SMAP are off by policy, the supervisor bit of every kernel page is "
+          "the boundary (ADR 0052)");
 
     /*
      * The filesystem, before the tasks: the type of the volume is read from
@@ -662,6 +661,10 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 #endif
 
+    if (port_x86_64_install_register() != 0) {
+        kwarn("x86-64: the install command is not registered");
+    }
+
     /*
      * The other volumes: /etc/fstab, when the disk of the machine carries
      * one. The root is the first mount, so the file has a place to live. A
@@ -687,6 +690,15 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
         kinfo("x86-64: no tasks yet");
         port_x86_64_idle();
     }
+
+    /*
+     * The phases of the bring-up went to the screen and COM1 while they
+     * happened. Say them once more into the log of the kernel now, at the end
+     * of the boot: `dmesg` keeps the newest lines, so a summary placed here
+     * survives the boot lines that follow, and a core that did not join the
+     * scheduler is named even on a machine without a serial wire.
+     */
+    port_x86_64_smp_log_bringup();
 
     /*
      * The init process owns the rest of the boot: the shell comes from it.

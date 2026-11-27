@@ -401,6 +401,11 @@ static int cache_flush_run(struct k_blockdev_cache *cache, int box)
         for (i = 0; i < cache->capacity; i++) {
             if (cache->boxes[i].valid && cache->boxes[i].sector >= first &&
                 cache->boxes[i].sector <= last) {
+                /* The index must forget the box with the data: a lookup
+                 * checks the sector before it checks `valid`, and a stale
+                 * entry would answer a later read with bytes the medium
+                 * refused. */
+                cache_index_remove(cache, i);
                 cache->boxes[i].valid = false;
                 cache->boxes[i].dirty = false;
             }

@@ -80,6 +80,7 @@ bool port_x86_64_vbe_mode(struct port_x86_64_screen_mode *mode);
  * own name, which says the size, the format and the cells of the picture.
  */
 const struct port_x86_64_screen *port_x86_64_gop_screen(void);
+void port_x86_64_gop_present_rect(int x, int y, int w, int h);
 
 /*
  * The rectangle of a frame that a caller outside the console has changed:

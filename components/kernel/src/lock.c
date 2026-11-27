@@ -14,7 +14,13 @@
  */
 #include "kernel/lock.h"
 
+#include "kernel/log.h"
+#include "kernel/panic.h"
 #include "kernel/port.h"
+#include "kernel/port/cpu.h"
+#include "kernel/port/lock.h"
+#include "kernel/port_task.h"
+#include "kernel/task.h"
 
 static k_port_mutex_t *mutex_handle(k_mutex_t *mutex)
 {
@@ -51,7 +57,17 @@ static k_port_mutex_t *mutex_handle(k_mutex_t *mutex)
 
 int k_mutex_lock(k_mutex_t *mutex)
 {
-    k_port_mutex_t *handle = mutex_handle(mutex);
+    k_port_mutex_t *handle;
+    k_u32_t depth = k_port_critical_depth();
+
+    if (depth > 0u) {
+        struct task *t = k_port_task_current();
+        kerror("lock: [LOCKORDER] cpu %u depth %u task %s taking mutex %p",
+               (unsigned)k_port_cpu_id(), (unsigned)depth, t != NULL ? t->name : "<none>",
+               (void *)mutex);
+    }
+
+    handle = mutex_handle(mutex);
 
     if (handle == NULL) {
         return -1;

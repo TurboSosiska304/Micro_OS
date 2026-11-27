@@ -12,7 +12,8 @@
 
 /* The producer never waits for the volume: one bounded ring feeds one batch.
  * The ring of the board is small because its DRAM is about a hundred kilobytes
- * and the log must not be the reason a program cannot run. */
+ * and the log must not be the reason a program cannot run. On ESP32 the ring
+ * lives in the heap: the 8 KiB program-data window leaves no room in BSS. */
 #if defined(ESP_PLATFORM)
 #define K_LOGFILE_BUFFER_SIZE 512u
 #else
@@ -33,8 +34,8 @@ struct log_image {
 
 static struct log_image g_boot;
 static struct log_image g_run;
-static char g_pending[K_LOGFILE_BUFFER_SIZE];
-static char g_batch[K_LOGFILE_BUFFER_SIZE];
+static char *g_pending;
+static char *g_batch;
 static k_size_t g_pending_head;
 static k_size_t g_pending_size;
 static k_size_t g_batch_size;
@@ -43,6 +44,40 @@ static bool g_active;
 static bool g_ram;
 static bool g_flushing;
 static k_u64_t g_last_flush_ms;
+
+static int pending_buffers_alloc(void)
+{
+    if (g_pending != NULL && g_batch != NULL) {
+        return 0;
+    }
+
+    if (g_pending == NULL) {
+        g_pending = kmm_alloc(K_LOGFILE_BUFFER_SIZE, KMM_PRIORITY_KERNEL);
+    }
+    if (g_batch == NULL) {
+        g_batch = kmm_alloc(K_LOGFILE_BUFFER_SIZE, KMM_PRIORITY_KERNEL);
+    }
+
+    if (g_pending == NULL || g_batch == NULL) {
+        kmm_free(g_pending);
+        kmm_free(g_batch);
+        g_pending = NULL;
+        g_batch = NULL;
+        kwarn("log: cannot allocate the console buffer (%u bytes)",
+              (unsigned)K_LOGFILE_BUFFER_SIZE);
+        return KERR_NOMEM;
+    }
+
+    return 0;
+}
+
+static void pending_buffers_free(void)
+{
+    kmm_free(g_pending);
+    kmm_free(g_batch);
+    g_pending = NULL;
+    g_batch = NULL;
+}
 
 static int image_alloc(struct log_image *image, k_size_t limit)
 {
@@ -130,6 +165,11 @@ static void pending_append(const char *data, k_size_t len)
     k_size_t first;
     k_size_t second;
 
+    if (g_pending == NULL) {
+        g_dropped += len;
+        return;
+    }
+
     if (len > K_LOGFILE_BUFFER_SIZE) {
         g_dropped += len - K_LOGFILE_BUFFER_SIZE;
         data += len - K_LOGFILE_BUFFER_SIZE;
@@ -162,6 +202,11 @@ static void pending_prepend(const char *data, k_size_t len)
 {
     k_size_t first;
     k_size_t second;
+
+    if (g_pending == NULL) {
+        g_dropped += len;
+        return;
+    }
 
     if (len > K_LOGFILE_BUFFER_SIZE) {
         pending_append(data, len);
@@ -391,6 +436,11 @@ int k_logfile_start(const char *boot, k_size_t boot_size, bool storage)
     g_last_flush_ms = k_sched_uptime_ms();
     g_ram = false;
 
+    rc = pending_buffers_alloc();
+    if (rc != 0) {
+        return rc;
+    }
+
     if (boot == NULL) {
         boot_size = 0;
     }
@@ -457,6 +507,10 @@ static int flush_pending(void)
     if (g_flushing) {
         k_port_exit_critical();
         return KERR_BUSY;
+    }
+    if (g_pending == NULL || g_batch == NULL) {
+        k_port_exit_critical();
+        return KERR_NOMEM;
     }
     g_flushing = true;
     g_batch_size = g_pending_size;
@@ -591,6 +645,7 @@ void k_logfile_stop(void)
     pending_clear();
     k_port_exit_critical();
 
+    pending_buffers_free();
     image_free(&g_boot);
     image_free(&g_run);
 }

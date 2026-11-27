@@ -35,4 +35,16 @@ k_u64_t k_port_memory_limit(void);
 void *k_port_alloc(k_size_t size, bool psram);
 void k_port_free(void *ptr);
 
+/*
+ * A block of memory a device may read and write by its own address. The
+ * returned pointer is aligned to `align` (a power of two), the block is at
+ * least `size` bytes, and it stays valid until k_port_dma_free(). A device
+ * sees the physical address behind it; on a machine where that address is
+ * not the pointer, the caller translates it through the port's DMA map
+ * (port_x86_64_dma_phys on x86-64). The size 0 or an invalid align returns
+ * NULL.
+ */
+void *k_port_dma_alloc(k_size_t size, k_size_t align);
+void k_port_dma_free(void *ptr);
+
 #endif /* MICRO_OS_KERNEL_PORT_MEM_H */

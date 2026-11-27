@@ -25,11 +25,13 @@ BUILD = "build-x86-smp"
 IMAGE = "build-x86-smp/soak.img"
 ROUNDS = int(os.environ.get("ROUNDS", "500"))
 LINE = "ls /bin | wc -l"
-NUMBER = re.compile(r"(?m)^\s*[1-9]\d*\s*$")
+NUMBER = re.compile(r"(?m)^\s*\d+\s*$")
 
 
 def main() -> int:
-    machine = Machine(BUILD, IMAGE)
+    # The point of this tool is the eighth core: without `-smp 8` the machine
+    # is the one-core port and the hang it reproduces never arrives.
+    machine = Machine(BUILD, IMAGE, extra_args=["-smp", "8"])
 
     try:
         machine.open(timeout=120.0)

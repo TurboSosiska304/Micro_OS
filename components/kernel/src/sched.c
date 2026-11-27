@@ -471,8 +471,16 @@ void k_sched_tick(void)
 
 void k_sched_set_quantum(k_u32_t ticks)
 {
+    k_size_t i;
+
     sched_lock();
     g_quantum = (ticks < SCHED_QUANTUM_MIN) ? SCHED_QUANTUM_MIN : ticks;
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = task_get_by_index_unlocked(i);
+        if (t != NULL && t->quantum_left > g_quantum) {
+            t->quantum_left = g_quantum;
+        }
+    }
     sched_unlock();
 }
 
@@ -1041,6 +1049,30 @@ k_size_t k_sched_sleeping_count(void)
 k_size_t k_sched_blocked_count(void)
 {
     return task_count_by_state(TASK_STATE_BLOCKED);
+}
+
+k_size_t k_sched_sleepers(struct k_sched_sleeper *out, k_size_t max)
+{
+    k_size_t count;
+    k_size_t i;
+
+    if (out == NULL || max == 0u) {
+        return 0u;
+    }
+
+    sched_lock();
+    count = K_MIN(max, g_sleeping_count);
+    for (i = 0u; i < count; i++) {
+        const struct task *t = g_sleeping[i];
+
+        out[i].pid = (t != NULL) ? t->pid : 0u;
+        out[i].wake_tick = (t != NULL) ? t->wake_tick : 0u;
+        out[i].cpu = (t != NULL) ? task_cpu(t) : 0u;
+        out[i].state = (t != NULL) ? (k_u8_t)t->state : 0u;
+    }
+    sched_unlock();
+
+    return count;
 }
 
 k_size_t k_sched_validate(void)

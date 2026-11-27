@@ -11,6 +11,9 @@
 
 #include <string.h>
 
+#ifndef MICROOS_USERLAND
+#include "kernel/kmm.h"
+#endif
 #include "kernel/types.h"
 
 void ui_canvas_init(struct ui_canvas *canvas, int width, int height, k_u16_t *pixels)
@@ -157,7 +160,13 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
         const k_u8_t *(*glyph_fn)(char);
         k_u16_t pixels[ATLAS_MAX_W * ATLAS_MAX_H];
     };
+#ifdef MICROOS_USERLAND
     static struct glyph_slot atlas[ATLAS_SLOTS];
+#else
+    /* The atlas is heap-allocated in the kernel so it does not live in DRAM
+     * BSS on the ESP32 (the exec window leaves only an 8 KiB gap). */
+    static struct glyph_slot *atlas;
+#endif
     size_t length;
     bool ended = false;
     int index;
@@ -175,6 +184,18 @@ int ui_canvas_text(struct ui_canvas *canvas, int x, int y, const char *text, int
     cell_w = ui_font_cell_width(font);
     cell_h = ui_font_cell_height(font);
     atlas_ok = cell_w <= ATLAS_MAX_W && cell_h <= ATLAS_MAX_H;
+#ifndef MICROOS_USERLAND
+    if (atlas_ok && atlas == NULL) {
+        atlas = (struct glyph_slot *)kmm_alloc(sizeof(struct glyph_slot) * ATLAS_SLOTS,
+                                               KMM_PRIORITY_USER);
+        if (atlas != NULL) {
+            memset(atlas, 0, sizeof(struct glyph_slot) * ATLAS_SLOTS);
+        }
+    }
+    if (atlas == NULL) {
+        atlas_ok = false;
+    }
+#endif
 
     length = text != NULL ? strlen(text) : 0u;
 

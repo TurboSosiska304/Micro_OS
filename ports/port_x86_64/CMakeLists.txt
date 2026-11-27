@@ -36,6 +36,7 @@ set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
 set(TELNET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/telnet")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
+set(WIFI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/wifi")
 
 # The second filesystem of the machine (ADR 0009). On: the boot of the root
 # reads the type of the volume out of the medium (ADR 0027), so the machine
@@ -59,7 +60,7 @@ option(MICRO_OS_FS_RAMFS "ramfs, the writable /tmp of a read-only root" ON)
 # here so that the defaults of the port are in one place.
 option(KERNEL_PSRAM "the PSRAM pool and its statistics in kmm" OFF)
 option(KERNEL_EXEC "the MOX1 parser, execve and the exec command" ON)
-option(KERNEL_SMP "the second core: a run queue per core (ADR 0012)" OFF)
+option(KERNEL_SMP "the cores of the machine: a run queue per core (ADR 0012)" ON)
 option(MICRO_OS_TELNET "the shell on TCP port 23" OFF)
 option(MICRO_OS_WIFI "the WiFi station" OFF)
 
@@ -141,6 +142,9 @@ add_compile_options(
 )
 
 file(GLOB KERNEL_SOURCES "${KERNEL_DIR}/src/*.c")
+# The PS/2 mouse decoder is x86-only; it lives in the port, not in the
+# portable kernel, so the ESP32 DRAM budget does not pay for it.
+list(APPEND KERNEL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/input_ps2_mouse.c")
 
 # The shell is the kernel's own interpreter: the port supplies the console
 # under it and nothing else, so the commands are the same as on the board.
@@ -241,6 +245,8 @@ set(SETTINGS_SOURCES
 # ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
 # name, in every image, and it is the cache the contract of K6 asks for.
 set(NET_SOURCES "${NET_DIR}/src/dns.c" "${NET_DIR}/src/dhcp.c")
+set(WIFI_SOURCES "${WIFI_DIR}/src/wifi.c" "${WIFI_DIR}/src/iwl8265_fw.c"
+                 "${WIFI_DIR}/src/iwl8265_fw_file.c" "${WIFI_DIR}/src/iwl8265_loader.c")
 
 if(MICRO_OS_X86_NET)
     list(APPEND NET_SOURCES
@@ -380,6 +386,7 @@ set(USERLAND_CFLAGS
     ${MICRO_OS_PORT_C_DIALECT} -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
+    -DMICROOS_USERLAND
 )
 set(PROGRAM_CFLAGS -c ${USERLAND_CFLAGS} -mgeneral-regs-only
     -I "${KERNEL_DIR}/include" -I "${PROGRAM_DIR}" -I "${LIBC_USER_DIR}/include"
@@ -1554,6 +1561,21 @@ add_libc_program(awk
         -Wno-unused-parameter -Wno-unused-but-set-variable -Os
 )
 
+# The AP trampoline is a flat binary the BIOS loader carries to 0x7000. A
+# firmware loader has no copy of it, so the kernel carries the same bytes and
+# installs them before its own page tables make the page read-only. The source
+# is generated because .incbin needs the absolute path of the linked binary.
+set(AP_TRAMPOLINE_BIN "${CMAKE_BINARY_DIR}/ap_trampoline.bin")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline_image.S.in"
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
+    @ONLY
+)
+set_source_files_properties(
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
+    PROPERTIES OBJECT_DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+)
+
 add_executable(microos64
 
     ${KERNEL_SOURCES}
@@ -1567,9 +1589,11 @@ add_executable(microos64
     ${SETTINGS_SOURCES}
     ${HASH_SOURCES}
     ${NET_SOURCES}
+    ${WIFI_SOURCES}
     ${PKG_SOURCES}
     ${TELNET_SOURCES}
     src/boot64.S
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
     src/kmain.c
     src/port_x86_64.c
     src/console.c
@@ -1578,6 +1602,8 @@ add_executable(microos64
     src/gop.c
     src/gpu_intel.c
     src/gpu_intel_ggtt.c
+    src/wifi_8265.c
+    src/wifi.c
     src/fb.c
     src/font_spleen.c
     src/pci.c
@@ -1605,6 +1631,7 @@ add_executable(microos64
     src/port_exec.c
     src/port_x86_64_task.c
     src/stack.c
+    src/install.c
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c
@@ -1634,6 +1661,7 @@ target_include_directories(microos64 PRIVATE
     "${CONFIG_DIR}/include"
     "${TELNET_DIR}/include"
     "${SETTINGS_DIR}/include"
+    "${WIFI_DIR}/include"
     "${NET_DIR}/include"
     # The hash of /etc/shadow and of a signed image (components/config,
     # components/pkg): one SHA-256 for the machine.
@@ -1661,6 +1689,7 @@ target_compile_definitions(microos64 PRIVATE
     # The ring of a pipe (kernel/kfile.h): 64 KiB, the block of one call of
     # the system, and the memory comes from kmm_alloc() with the pipe.
     KFILE_PIPE_SIZE=65536
+    PAGECACHE_MAX_BYTES=8388608
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>
@@ -1830,6 +1859,10 @@ add_custom_command(
     COMMENT "linking the AP trampoline at 0x7000"
     VERBATIM
 )
+
+# The kernel compiles the blob above; make sure the binary exists first.
+add_custom_target(ap_trampoline_image DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.bin")
+add_dependencies(microos64 ap_trampoline_image)
 
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.o"

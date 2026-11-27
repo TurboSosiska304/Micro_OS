@@ -158,6 +158,7 @@ static struct k_fb_surface test_surface(void)
     surface.width = TEST_WIDTH;
     surface.height = TEST_HEIGHT;
     surface.pitch = TEST_PITCH;
+    surface.format = FB_FORMAT_RGB565;
 
     return surface;
 }
@@ -418,6 +419,7 @@ static void test_blit_present(void)
     source.width = TEST_WIDTH;
     source.height = TEST_HEIGHT;
     source.pitch = TEST_PITCH;
+    source.format = FB_FORMAT_RGB565;
     for (index = 0; index < K_ARRAY_SIZE(source_pixels); index++) {
         source_pixels[index] = (k_u16_t)(TEST_COLOR + index);
     }
@@ -503,6 +505,102 @@ static void test_blit_present_format(void)
 
     src.format = FB_FORMAT_RGB565;
     KT_CHECK_INT_EQ(k_blit_present(&dst, &src), KERR_INVAL);
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+}
+
+/* A format mismatch must be refused, never converted by guessing. The
+ * destination stays unchanged: no noise, no partial write. */
+static void test_present_format_mismatch(void)
+{
+    struct k_fb_surface rgb565 = test_surface();
+    struct k_fb_surface xrgb8888;
+    k_u16_t rgb565_src[TEST_PITCH * TEST_HEIGHT];
+    k_u32_t xrgb8888_src[TEST_PITCH * TEST_HEIGHT];
+    k_u32_t xrgb8888_dst[TEST_PITCH * TEST_HEIGHT];
+    k_size_t index;
+
+    ktest_begin("blit: present refuses format mismatch without writing noise");
+
+    for (index = 0; index < K_ARRAY_SIZE(rgb565_src); index++) {
+        rgb565_src[index] = (k_u16_t)(0x1234u + index);
+    }
+    for (index = 0; index < K_ARRAY_SIZE(xrgb8888_src); index++) {
+        xrgb8888_src[index] = 0x00AABBCCu + (k_u32_t)index;
+        xrgb8888_dst[index] = 0x00DEADBEu;
+    }
+
+    xrgb8888.base = (k_u16_t *)(void *)xrgb8888_dst;
+    xrgb8888.width = TEST_WIDTH;
+    xrgb8888.height = TEST_HEIGHT;
+    xrgb8888.pitch = TEST_PITCH;
+    xrgb8888.format = FB_FORMAT_XRGB8888;
+
+    /* RGB565 source into XRGB8888 destination: refusal, destination intact. */
+    rgb565.base = g_pixels;
+    surface_clear(TEST_OLD);
+    {
+        struct k_fb_surface src_rgb565 = test_surface();
+
+        src_rgb565.base = rgb565_src;
+        KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+        KT_CHECK_INT_EQ(k_blit_present(&xrgb8888, &src_rgb565), KERR_INVAL);
+        for (index = 0; index < K_ARRAY_SIZE(xrgb8888_dst); index++) {
+            KT_CHECK_INT_EQ(xrgb8888_dst[index], 0x00DEADBEu);
+        }
+    }
+
+    /* XRGB8888 source into RGB565 destination: refusal, destination intact. */
+    {
+        struct k_fb_surface src_xrgb = xrgb8888;
+
+        src_xrgb.base = (k_u16_t *)(void *)xrgb8888_src;
+        surface_clear(TEST_OLD);
+        KT_CHECK_INT_EQ(k_blit_present(&rgb565, &src_xrgb), KERR_INVAL);
+        for (index = 0; index < TEST_CELLS; index++) {
+            KT_CHECK_INT_EQ(g_pixels[index], TEST_OLD);
+        }
+    }
+
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+}
+
+/* No GGTT slot means the device present cannot map the buffer: the backend
+ * refuses with KERR_NOTSUP and the kernel must copy once, not retry. */
+static void test_present_no_ggtt_falls_back(void)
+{
+    struct k_fb_surface destination = test_surface();
+    struct k_fb_surface source;
+    struct k_fb_ops no_ggtt_ops;
+    k_u16_t source_pixels[TEST_PITCH * TEST_HEIGHT];
+    k_size_t index;
+
+    ktest_begin("blit: no GGTT slot falls back to software copy once");
+
+    source.base = source_pixels;
+    source.width = TEST_WIDTH;
+    source.height = TEST_HEIGHT;
+    source.pitch = TEST_PITCH;
+    source.format = FB_FORMAT_RGB565;
+    for (index = 0; index < K_ARRAY_SIZE(source_pixels); index++) {
+        source_pixels[index] = (k_u16_t)(0x3344u + index);
+    }
+
+    device_reset();
+    memset(&no_ggtt_ops, 0, sizeof(no_ggtt_ops));
+    no_ggtt_ops.present = device_present;
+    g_device.present_rc = KERR_NOTSUP;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&no_ggtt_ops, &g_device), 0);
+
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(present_matches(source_pixels), true);
+    KT_CHECK_INT_EQ(g_device.presents, 1);
+
+    /* A second frame must not probe the exhausted GGTT again. */
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(present_matches(source_pixels), true);
+    KT_CHECK_INT_EQ(g_device.presents, 1);
 
     KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
 }
@@ -514,4 +612,6 @@ void test_fb_ops(void)
     test_fb_ops_device();
     test_blit_present();
     test_blit_present_format();
+    test_present_format_mismatch();
+    test_present_no_ggtt_falls_back();
 }

@@ -153,14 +153,16 @@ def main(argv: list) -> int:
             report.expect("the boot reaches the shell", "the kernel is up" in banner, banner)
             report.expect("the map of the kernel is W^X", BOOT_AUDIT in banner, banner)
             report.expect("the boot names the policy of the processor",
-                          "SMEP and SMAP are on" in banner or "SMEP is on" in banner
-                          or "SMAP is on" in banner
+                          "SMEP and SMAP are off by policy" in banner
+                          or "SMEP and SMAP are on" in banner
+                          or "SMEP is on" in banner or "SMAP is on" in banner
                           or "the supervisor bit of every kernel page is the boundary" in banner,
                           banner)
 
             if "+smep" in args.cpu and "+smap" in args.cpu:
-                report.expect("the processor of the suite has SMEP and SMAP",
-                              "SMEP and SMAP are on" in banner, banner)
+                report.expect("the processor of the suite cleared SMEP and SMAP",
+                              "smep/smap off" in banner
+                              and "SMEP and SMAP are off by policy" in banner, banner)
 
             # --- the attacks that end their program -----------------------
             text = machine.run("exec /bin/mmu_text", args.timeout)
