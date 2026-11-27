@@ -557,18 +557,48 @@ void port_x86_64_resume_boot(k_u32_t cpu)
  */
 static void wait_for_interrupt(void)
 {
+    static bool masked_reported;
     k_u32_t cpu = k_cpu_id();
+    k_u64_t flags;
 
     if (cpu < KERNEL_CPUS_MAX && g_timer_missing[cpu]) {
         __asm__ volatile("pause");
         return;
     }
 
-    if ((port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF) != 0) {
+    flags = port_x86_64_read_flags();
+    if ((flags & PORT_X86_64_RFLAGS_IF) != 0u) {
         port_hlt();
-    } else {
-        __asm__ volatile("pause");
+        return;
     }
+
+    /*
+     * A task can reach a wait with the interrupts masked - a context that
+     * was switched from a handler carries that state until it restores its
+     * own flags. Halting in that state would stop the timer of the boot core
+     * and, with it, the clock of every sleeper of the machine. Let the clock
+     * in for the halt, then put the caller's mask back. The one line says
+     * that this path was taken: a masked wait is a bug to find, not a mode
+     * of operation to rely on.
+     */
+    if (!masked_reported) {
+        char buf[96];
+        int len;
+
+        masked_reported = true;
+        len = snprintf(buf, sizeof(buf), "[SLPDBG] cpu=%u pid=%u waits with masked interrupts\r\n",
+                       (unsigned)cpu,
+                       (this_cpu()->current != NULL && this_cpu()->current->task != NULL)
+                           ? this_cpu()->current->task->pid
+                           : 0u);
+        if (len > 0) {
+            port_x86_64_debug_write(buf, (k_size_t)len);
+        }
+    }
+
+    port_restore_flags(flags | PORT_X86_64_RFLAGS_IF);
+    port_hlt();
+    (void)port_save_flags_and_cli();
 }
 
 /*

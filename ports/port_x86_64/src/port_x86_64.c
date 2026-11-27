@@ -1294,20 +1294,36 @@ void port_x86_64_interrupts_init(void)
 /* --- the time --- */
 
 /*
- * The time of the kernel is the number of ticks of the timer. The PIT fires
- * 1000 times a second, so a tick is a millisecond and the arithmetic of the
- * scheduler cannot drift: the calibration of the TSC above is a number for
- * the information of the port, not the clock, because a counter of the
- * processor is not guaranteed to be stable on every machine QEMU imitates.
+ * The scheduler counts ticks, and the PIT fires 1000 times a second; the
+ * interrupt, however, is a request and not a promise. If the boot core runs
+ * with its interrupts masked, or the line is held by a controller, the tick
+ * stops and a clock made only of ticks stops with it. The eight-core soak
+ * found a shell that slept for ever with a finished child because both its
+ * deadline and the wake of its tick were numbers of a clock that had stopped.
+ *
+ * The microsecond clock therefore reads the calibrated time stamp counter:
+ * the PIT still drives the scheduler, but no deadline depends on an interrupt
+ * being delivered. A boot whose counter could not be calibrated keeps the
+ * old tick clock, which is the only clock it has.
  */
-k_u64_t k_port_uptime_ms(void)
-{
-    return g_ticks;
-}
-
 k_u64_t k_port_uptime_us(void)
 {
+    const struct port_x86_64_info *info = port_x86_64_info();
+    k_u64_t per_us;
+
+    if (info != NULL && info->cpu_hz != 0u) {
+        per_us = info->cpu_hz / 1000000u;
+        if (per_us != 0u) {
+            return port_rdtsc() / per_us;
+        }
+    }
+
     return g_ticks * 1000u;
+}
+
+k_u64_t k_port_uptime_ms(void)
+{
+    return k_port_uptime_us() / 1000u;
 }
 
 k_u64_t port_x86_64_ticks(void)
