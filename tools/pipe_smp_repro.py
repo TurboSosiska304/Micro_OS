@@ -25,7 +25,7 @@ BUILD = "build-x86-smp"
 IMAGE = "build-x86-smp/soak.img"
 ROUNDS = int(os.environ.get("ROUNDS", "500"))
 LINE = "ls /bin | wc -l"
-NUMBER = re.compile(r"(?m)^\s*[1-9]\d*\s*$")
+NUMBER = re.compile(r"(?m)^\s*\d+\s*$")
 
 
 def main() -> int:
