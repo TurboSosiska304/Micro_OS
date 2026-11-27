@@ -2,12 +2,12 @@
  * Micro OS — the blit of a picture (the phase A of the GPU plan).
  *
  * A picture is drawn in a memory the CPU can write, and the part of it that
- * changed is given to the device of the display. The three operations below
- * are the whole of that: fill a rectangle, copy a rectangle from one picture
- * to another, and make the rectangles of a picture visible to the device that
- * shows it. A device that can do one of them itself answers through the same
- * slot as `kernel/fb_ops.h`; a device that can do none of them is the
- * software picture of 1.6 and the software path of this file is what it gets.
+ * changed is given to the device of the display. The operations below are
+ * the whole of that: fill a rectangle, copy a rectangle from one picture to
+ * another, make rectangles visible, and present a complete RAM surface by
+ * flipping the display to it. A device that can do one of them itself answers
+ * through the same slot as `kernel/fb_ops.h`; a device that can do none of them
+ * is the software picture of 1.6 and the software path is what it gets.
  *
  * The interface is the seam: a compositor composes into a surface of ordinary
  * RAM and calls flush with the damage of the turn, and the same surface can
@@ -44,5 +44,20 @@ int k_blit_copy(k_blit_surface *dst, const k_blit_rect *dst_rect, const k_blit_s
  * answers 0; a device picture flushes the union it was given.
  */
 int k_blit_flush(k_blit_surface *surface, const k_blit_rect *rects, k_u32_t count);
+
+/*
+ * Show the complete RAM surface `src` instead of copying it into `dst`. The
+ * surfaces have the same dimensions and pixel format. A device backend gets
+ * the first attempt; if it is absent or refuses, the pixels are copied into
+ * `dst` exactly as `k_blit_copy` would copy them. A refusal is remembered for
+ * that backend, so an unsupported card is not probed once per frame.
+ *
+ * The answer is 0 when the device showed `src`, 1 when the software copy was
+ * used, or a negative error when even that copy was impossible. A fallback is
+ * a successful present, not an error. `k_blit_present_release` asks the backend
+ * to restore the original surface before its caller releases the source pages.
+ */
+int k_blit_present(k_blit_surface *dst, const k_blit_surface *src);
+int k_blit_present_release(void);
 
 #endif /* MICRO_OS_KERNEL_BLIT_H */

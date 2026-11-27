@@ -2,7 +2,7 @@
  * Micro OS — the operations of the picture (kernel/fb_ops.h).
  *
  * One slot for the device of `/dev/fb0` and the software implementations of
- * the three operations. The slot is written once at the boot by the port and
+ * the rectangle operations. The slot is written once at the boot by the port and
  * read by every caller afterwards, so it needs no lock of its own: a device
  * that arrives after the first frame is a device of the next boot.
  *
@@ -20,11 +20,13 @@
 
 static const struct k_fb_ops *g_ops;
 static void *g_context;
+static k_u32_t g_generation;
 
 int k_fb_ops_register(const struct k_fb_ops *ops, void *context)
 {
     g_ops = ops;
     g_context = ops != NULL ? context : NULL;
+    g_generation++;
 
     return 0;
 }
@@ -36,6 +38,13 @@ const struct k_fb_ops *k_fb_ops_device(void **context)
     }
 
     return g_ops;
+}
+
+/* The registration counter lets a consumer remember a refusal without
+ * treating a newly registered driver as the same backend. */
+k_u32_t k_fb_ops_generation(void)
+{
+    return g_generation;
 }
 
 /* The part of a rectangle that is inside the picture, false when none is. */

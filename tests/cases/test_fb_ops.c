@@ -22,6 +22,7 @@
 
 #include <string.h>
 
+#include "kernel/blit.h"
 #include "kernel/errno.h"
 #include "kernel/fb_ops.h"
 #include "kernel/types.h"
@@ -48,6 +49,11 @@ struct test_device {
     int fills;
     int blits;
     int flushes;
+    int presents;
+    int releases;
+    int present_rc;
+    const struct k_fb_surface *present_dst;
+    const struct k_fb_surface *present_src;
     struct k_fb_rect rects[TEST_CALLS];
     k_u32_t colors[TEST_CALLS];
 };
@@ -59,6 +65,11 @@ static void device_reset(void)
     g_device.fills = 0;
     g_device.blits = 0;
     g_device.flushes = 0;
+    g_device.presents = 0;
+    g_device.releases = 0;
+    g_device.present_rc = 0;
+    g_device.present_dst = NULL;
+    g_device.present_src = NULL;
     memset(g_device.rects, 0, sizeof(g_device.rects));
     memset(g_device.colors, 0, sizeof(g_device.colors));
 }
@@ -107,6 +118,27 @@ static int device_flush(void *context, const struct k_fb_rect *rect)
     return 0;
 }
 
+static int device_present(void *context, const struct k_fb_surface *dst,
+                          const struct k_fb_surface *src)
+{
+    struct test_device *device = (struct test_device *)context;
+
+    device->presents++;
+    device->present_dst = dst;
+    device->present_src = src;
+
+    return device->present_rc;
+}
+
+static int device_present_release(void *context)
+{
+    struct test_device *device = (struct test_device *)context;
+
+    device->releases++;
+
+    return 0;
+}
+
 static void surface_clear(k_u16_t color)
 {
     k_size_t index;
@@ -146,6 +178,22 @@ static bool guard_is_clear(void)
 
         if (column >= TEST_WIDTH && g_pixels[index] != TEST_OLD) {
             return false;
+        }
+    }
+
+    return true;
+}
+
+static bool present_matches(const k_u16_t *source)
+{
+    k_u32_t row;
+    k_u32_t column;
+
+    for (row = 0u; row < TEST_HEIGHT; row++) {
+        for (column = 0u; column < TEST_WIDTH; column++) {
+            if (g_pixels[row * TEST_PITCH + column] != source[row * TEST_PITCH + column]) {
+                return false;
+            }
         }
     }
 
@@ -354,9 +402,69 @@ static void test_fb_ops_device(void)
     KT_CHECK_INT_EQ(k_fb_ops_device(NULL), NULL);
 }
 
+static void test_blit_present(void)
+{
+    struct k_fb_surface destination = test_surface();
+    struct k_fb_surface source;
+    struct k_fb_ops failing_ops;
+    struct k_fb_ops working_ops;
+    k_u16_t source_pixels[TEST_PITCH * TEST_HEIGHT];
+    k_size_t index;
+
+    ktest_begin("blit: no driver copies once, and a refused flip is not retried");
+
+    source.base = source_pixels;
+    source.width = TEST_WIDTH;
+    source.height = TEST_HEIGHT;
+    source.pitch = TEST_PITCH;
+    for (index = 0; index < K_ARRAY_SIZE(source_pixels); index++) {
+        source_pixels[index] = (k_u16_t)(TEST_COLOR + index);
+    }
+
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(present_matches(source_pixels), true);
+
+    device_reset();
+    memset(&failing_ops, 0, sizeof(failing_ops));
+    failing_ops.present = device_present;
+    failing_ops.present_release = device_present_release;
+    g_device.present_rc = KERR_NOTSUP;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&failing_ops, &g_device), 0);
+
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 1);
+    KT_CHECK_INT_EQ(g_device.presents, 1);
+    KT_CHECK(g_device.present_dst == &destination);
+    KT_CHECK(g_device.present_src == &source);
+    KT_CHECK_INT_EQ(present_matches(source_pixels), true);
+
+    memset(&working_ops, 0, sizeof(working_ops));
+    working_ops.present = device_present;
+    working_ops.present_release = device_present_release;
+    g_device.present_rc = 0;
+    KT_CHECK_INT_EQ(k_fb_ops_register(&working_ops, &g_device), 0);
+
+    surface_clear(TEST_OLD);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 0);
+    KT_CHECK_INT_EQ(k_blit_present(&destination, &source), 0);
+    KT_CHECK_INT_EQ(g_device.presents, 3);
+    for (index = 0; index < TEST_CELLS; index++) {
+        KT_CHECK_INT_EQ(g_pixels[index], TEST_OLD);
+    }
+    KT_CHECK_INT_EQ(k_blit_present_release(), 0);
+    KT_CHECK_INT_EQ(g_device.releases, 1);
+
+    KT_CHECK_INT_EQ(k_fb_ops_register(NULL, NULL), 0);
+}
+
 void test_fb_ops(void)
 {
     test_fb_ops_software();
     test_fb_ops_clip();
     test_fb_ops_device();
+    test_blit_present();
 }

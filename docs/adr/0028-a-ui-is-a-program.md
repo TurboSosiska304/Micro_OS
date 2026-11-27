@@ -103,6 +103,23 @@ composes a rectangle that may begin outside the picture and the software path
 cuts it; the device of `/dev/fb0` is given a rectangle the ABI already checked,
 so the clip is a rule of a caller and not a second check of the syscall.
 
+## The device may show a RAM surface (2.1)
+
+Phase A gave the compositor a RAM backbuffer but still copied every damaged
+rectangle into the framebuffer. `FBIO_PRESENT` (0x4D03) hands the kernel a
+complete `struct fb_present_surface` instead. `kernel/blit.h` owns the choice:
+`k_blit_present(dst, src)` asks the registered `k_fb_ops.present` callback once
+and, if the device is absent or refuses, copies `src` into `dst` and remembers
+the refusal for that registration. The compositor sees answer 0 for a flip and
+1 for a successful copy; it never chooses a GPU vendor.
+
+The source pages stay mapped until `FBIO_GIVE` or the last close. The device's
+`present_release` callback runs before those pages can be unmapped and restores
+the original surface. A driver which cannot guarantee that lifetime, the pixel
+format, the stride or the GGTT mappings must refuse; the software copy remains
+the always-available implementation. AMD has no present callback in this tree
+and therefore keeps the copy path.
+
 ## Consequences
 
 **Good.** The interface changes with a file of `/bin`, not with the firmware.

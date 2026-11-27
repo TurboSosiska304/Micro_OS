@@ -205,9 +205,13 @@ struct wm_frames {
     unsigned long first_pixels;
     unsigned long first_ms;
     unsigned long long first_tsc_ns;
+    unsigned long long first_present_tsc_ns;
     unsigned long damaged_pixels;
     unsigned long slowest_ms;
     unsigned long slowest_pixels;
+    unsigned present_calls;
+    unsigned long long present_tsc_ns;
+    unsigned long long slowest_present_tsc_ns;
 
     /* The largest rectangle painted since the start, by area. */
     int largest_w;
@@ -311,6 +315,11 @@ static int tsc_calibrate(void)
     g_tsc_per_us = (unsigned long)((last - first) / us);
 
     return g_tsc_per_us != 0;
+}
+
+static unsigned long long tsc_to_ns(unsigned long long ticks)
+{
+    return g_tsc_per_us != 0u ? ticks * 1000ull / g_tsc_per_us : 0u;
 }
 
 /* --- the clock of the panel ----------------------------------------------- */
@@ -970,6 +979,8 @@ static void flush_pending(void)
     unsigned long started;
     unsigned long painted = 0;
     unsigned long elapsed;
+    unsigned long long present_started;
+    unsigned long long present_elapsed;
     int index;
 
     if (g_damage_count == 0) {
@@ -998,11 +1009,6 @@ static void flush_pending(void)
         }
     }
 
-    /* The damage is in the RAM backbuffer now; send it to the device before
-     * the cursor is drawn over it, then send the cursor's own rectangle. */
-    (void)uiprog_present(&g_screen, g_damage, g_damage_count);
-    g_damage_count = 0;
-
     /*
      * The pointer is the last thing of the picture and the thing any damage
      * may have painted over: every turn that painted anything draws it again.
@@ -1011,14 +1017,20 @@ static void flush_pending(void)
      * to see to know where a click will land.
      */
     cursor_paint();
+
+    /* Present once, after the cursor is in the RAM surface. A device flip
+     * shows the whole surface; a software present copies the damage union. */
     {
+        struct ui_rect present[WM_DAMAGE_MAX + 1];
         struct ui_rect cursor = {
             g_pointer_x - 1,
             g_pointer_y - 1,
             WM_ARROW_WIDTH + 2,
             WM_ARROW_ROWS + 2,
         };
+        int present_count = g_damage_count;
 
+        memcpy(present, g_damage, (size_t)present_count * sizeof(present[0]));
         if (cursor.x < 0) {
             cursor.w += cursor.x;
             cursor.x = 0;
@@ -1034,9 +1046,19 @@ static void flush_pending(void)
             cursor.h = g_height - cursor.y;
         }
         if (cursor.w > 0 && cursor.h > 0) {
-            (void)uiprog_present(&g_screen, &cursor, 1);
+            present[present_count++] = cursor;
+        }
+
+        present_started = tsc_now();
+        (void)uiprog_present(&g_screen, present, present_count);
+        present_elapsed = tsc_to_ns(tsc_now() - present_started);
+        g_frames.present_calls++;
+        g_frames.present_tsc_ns += present_elapsed;
+        if (present_elapsed > g_frames.slowest_present_tsc_ns) {
+            g_frames.slowest_present_tsc_ns = present_elapsed;
         }
     }
+    g_damage_count = 0;
 
     elapsed = now_ms() - started;
 
@@ -1116,6 +1138,25 @@ static void frames_report(void)
     if (g_frames.first_tsc_ns != 0u) {
         length = snprintf(line, sizeof(line), "wm: the first frame took %llu ns by TSC (%lu px)\n",
                           g_frames.first_tsc_ns, g_frames.first_pixels);
+
+        if (length > 0) {
+            (void)write(ULIBC_STDOUT, line, (size_t)length);
+        }
+    }
+
+    if (g_frames.first_present_tsc_ns != 0u) {
+        length = snprintf(line, sizeof(line), "wm: the first present took %llu ns by TSC\n",
+                          g_frames.first_present_tsc_ns);
+
+        if (length > 0) {
+            (void)write(ULIBC_STDOUT, line, (size_t)length);
+        }
+    }
+
+    if (g_frames.present_calls != 0u) {
+        length = snprintf(
+            line, sizeof(line), "wm: present: %u calls, %llu ns total, %llu ns at the worst\n",
+            g_frames.present_calls, g_frames.present_tsc_ns, g_frames.slowest_present_tsc_ns);
 
         if (length > 0) {
             (void)write(ULIBC_STDOUT, line, (size_t)length);
@@ -2234,6 +2275,8 @@ int main(int argc, char *const argv[], char *const envp[])
         unsigned long started;
         unsigned long long first;
         unsigned long long elapsed;
+        unsigned long long present_first;
+        unsigned long long present_elapsed;
 
         (void)tsc_calibrate();
         started = now_ms();
@@ -2244,14 +2287,20 @@ int main(int argc, char *const argv[], char *const envp[])
 
             scene_paint(&whole);
             cursor_paint();
+            present_first = tsc_now();
             (void)uiprog_present(&g_screen, &whole, 1);
+            present_elapsed = tsc_to_ns(tsc_now() - present_first);
         }
 
         elapsed = tsc_now() - first;
         g_frames.frames = 1u;
         g_frames.first_pixels = (unsigned long)g_width * (unsigned long)g_height;
         g_frames.first_ms = now_ms() - started;
-        g_frames.first_tsc_ns = g_tsc_per_us != 0u ? elapsed * 1000ull / g_tsc_per_us : 0u;
+        g_frames.first_tsc_ns = tsc_to_ns(elapsed);
+        g_frames.first_present_tsc_ns = present_elapsed;
+        g_frames.present_calls = 1u;
+        g_frames.present_tsc_ns = present_elapsed;
+        g_frames.slowest_present_tsc_ns = present_elapsed;
     }
 
     desktop_open();

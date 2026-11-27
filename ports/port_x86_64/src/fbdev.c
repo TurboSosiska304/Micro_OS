@@ -10,7 +10,9 @@
  * and the rule that a program that closes the device gives the screen back.
  * The write is the contract of `kernel/fb_ops.h`: the device of the picture
  * may fill and copy the pixels itself, and the software path is the one that
- * answers when it has no such operation.
+ * answers when it has no such operation. `FBIO_PRESENT` carries the same
+ * contract one step further: a complete RAM surface may become the displayed
+ * surface without a copy, with the same software fallback when it cannot.
  *
  * There is no clipping: a rectangle that leaves the picture is refused, so a
  * drawing bug of a program is a visible error and not a picture that almost
@@ -21,10 +23,12 @@
 #include <string.h>
 
 #include "devfs/devfs.h"
+#include "kernel/blit.h"
 #include "kernel/errno.h"
 #include "kernel/fb.h"
 #include "kernel/fb_ops.h"
 #include "kernel/log.h"
+#include "kernel/port/exec.h"
 #include "kernel/types.h"
 #include "port_x86_64_screen.h"
 
@@ -93,10 +97,44 @@ static int fbdev_write(const char *buf, k_size_t size)
     return (int)size;
 }
 
+static int fbdev_present(k_u64_t argument)
+{
+    struct fb_present_surface request;
+    struct fb_info info;
+    struct k_fb_surface destination;
+    struct k_fb_surface source;
+    k_u64_t bytes;
+
+    if (!k_port_exec_contains((const void *)(uintptr_t)argument, sizeof(request))) {
+        return KERR_FAULT;
+    }
+
+    k_port_exec_user_access_begin();
+    memcpy(&request, (const void *)(uintptr_t)argument, sizeof(request));
+    k_port_exec_user_access_end();
+
+    if (request.base == 0u || request.width == 0u || request.height == 0u ||
+        request.pitch < request.width || !port_x86_64_fb_info(&info) ||
+        !port_x86_64_fb_surface(&destination) || request.width != info.width ||
+        request.height != info.height || request.pitch != destination.pitch) {
+        return KERR_INVAL;
+    }
+
+    bytes = (k_u64_t)request.pitch * (k_u64_t)request.height * FB_PIXEL_BYTES;
+    if (bytes > (k_u64_t)((k_size_t)-1)) {
+        return KERR_TOOBIG;
+    }
+
+    source.base = (k_u16_t *)(uintptr_t)request.base;
+    source.width = request.width;
+    source.height = request.height;
+    source.pitch = request.pitch;
+
+    return k_blit_present(&destination, &source);
+}
+
 static int fbdev_ioctl(k_u32_t request, k_u64_t arg)
 {
-    K_UNUSED(arg);
-
     switch (request) {
     case FBIO_TAKE:
         port_x86_64_fb_console_take();
@@ -110,10 +148,13 @@ static int fbdev_ioctl(k_u32_t request, k_u64_t arg)
          * the editor it started.
          */
         if (g_open_count <= 1) {
+            (void)k_blit_present_release();
             port_x86_64_fb_console_give();
             kinfo("fb: the console is given back and the grid repainted");
         }
         return 0;
+    case FBIO_PRESENT:
+        return fbdev_present(arg);
     default:
         return KERR_INVAL;
     }
@@ -133,6 +174,7 @@ static void fbdev_close(void)
     /* A program that closed the framebuffer is a program that is done with
      * the picture, whether it asked or not. */
     if (g_open_count == 0) {
+        (void)k_blit_present_release();
         port_x86_64_fb_console_give();
     }
 }

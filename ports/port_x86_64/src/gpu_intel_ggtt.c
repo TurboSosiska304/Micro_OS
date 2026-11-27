@@ -236,6 +236,44 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_si
     return GPU_INTEL_GGTT_OK;
 }
 
+enum gpu_intel_ggtt_result gpu_intel_ggtt_install(volatile k_u64_t *entries, k_size_t entry_count,
+                                                  const struct gpu_intel_gtt_run *run,
+                                                  const k_u64_t *physical, k_u64_t *saved)
+{
+    k_u32_t i;
+
+    if (entries == NULL || run == NULL || physical == NULL || saved == NULL || run->count == 0u ||
+        (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count ||
+        (run->original & GPU_INTEL_GTT_PRESENT) == 0u) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+
+    for (i = 0u; i < run->count; i++) {
+        k_u64_t page = physical[i];
+
+        if (entries[run->start + i] != run->original || page == 0u ||
+            (page & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u ||
+            (page & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u) {
+            return GPU_INTEL_GGTT_INVALID;
+        }
+    }
+
+    *saved = run->original;
+    for (i = 0u; i < run->count; i++) {
+        entries[run->start + i] = physical[i] | GPU_INTEL_GTT_PRESENT;
+    }
+    for (i = 0u; i < run->count; i++) {
+        k_u64_t expected = physical[i] | GPU_INTEL_GTT_PRESENT;
+
+        if (entries[run->start + i] != expected) {
+            (void)gpu_intel_ggtt_restore(entries, entry_count, run, *saved);
+            return GPU_INTEL_GGTT_INVALID;
+        }
+    }
+
+    return GPU_INTEL_GGTT_OK;
+}
+
 enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_size_t entry_count,
                                                   const struct gpu_intel_gtt_run *run,
                                                   k_u64_t saved)

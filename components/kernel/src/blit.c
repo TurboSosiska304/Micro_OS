@@ -12,6 +12,15 @@
 #include <string.h>
 
 #include "kernel/errno.h"
+#include "kernel/port/exec.h"
+
+/* A card which cannot flip is not asked once per frame. The identity and
+ * registration generation of the backend are part of the latch: a newly
+ * registered driver gets its one attempt, while repeated frames do not. */
+static const struct k_fb_ops *s_present_ops;
+static void *s_present_context;
+static k_u32_t s_present_generation;
+static bool s_present_failed;
 
 static bool clip_rect(const k_blit_surface *surface, const k_blit_rect *rect, k_blit_rect *out)
 {
@@ -222,6 +231,82 @@ int k_blit_copy(k_blit_surface *dst, const k_blit_rect *dst_rect, const k_blit_s
                 const k_blit_rect *src_rect)
 {
     return software_copy(dst, dst_rect, src, src_rect);
+}
+
+static bool present_surfaces_valid(const k_blit_surface *dst, const k_blit_surface *src)
+{
+    k_u64_t bytes;
+
+    if (dst == NULL || src == NULL || dst->base == NULL || src->base == NULL || dst->width == 0u ||
+        dst->height == 0u || src->width != dst->width || src->height != dst->height ||
+        dst->width > 0x7FFFFFFFu || dst->height > 0x7FFFFFFFu || dst->pitch < dst->width ||
+        src->pitch < src->width) {
+        return false;
+    }
+
+    bytes = (k_u64_t)src->pitch * (k_u64_t)src->height * sizeof(k_u16_t);
+    if (bytes > (k_u64_t)((k_size_t)-1)) {
+        return false;
+    }
+
+    return k_port_exec_contains(src->base, (k_size_t)bytes);
+}
+
+int k_blit_present(k_blit_surface *dst, const k_blit_surface *src)
+{
+    void *context;
+    const struct k_fb_ops *ops = k_fb_ops_device(&context);
+    k_u32_t generation = k_fb_ops_generation();
+    k_blit_rect whole;
+    int rc;
+
+    if (!present_surfaces_valid(dst, src)) {
+        return KERR_INVAL;
+    }
+
+    if (ops != s_present_ops || context != s_present_context ||
+        generation != s_present_generation) {
+        s_present_ops = ops;
+        s_present_context = context;
+        s_present_generation = generation;
+        s_present_failed = false;
+    }
+
+    if (ops != NULL && ops->present != NULL && !s_present_failed) {
+        rc = ops->present(context, dst, src);
+        if (rc == 0) {
+            return 0;
+        }
+
+        /* A refusal is a capability answer, not a frame error. The copy below
+         * is the same software path a machine without a GPU has always used. */
+        s_present_failed = true;
+    } else if (ops == NULL || ops->present == NULL) {
+        s_present_failed = true;
+    }
+
+    whole.x = 0;
+    whole.y = 0;
+    whole.w = (k_i32_t)src->width;
+    whole.h = (k_i32_t)src->height;
+
+    k_port_exec_user_access_begin();
+    rc = software_copy(dst, &whole, src, &whole);
+    k_port_exec_user_access_end();
+
+    return rc == 0 ? 1 : rc;
+}
+
+int k_blit_present_release(void)
+{
+    void *context;
+    const struct k_fb_ops *ops = k_fb_ops_device(&context);
+
+    if (ops == NULL || ops->present_release == NULL) {
+        return 0;
+    }
+
+    return ops->present_release(context);
 }
 
 int k_blit_flush(k_blit_surface *surface, const k_blit_rect *rects, k_u32_t count)

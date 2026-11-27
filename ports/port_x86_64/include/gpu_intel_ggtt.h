@@ -97,4 +97,11 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_restore(volatile k_u64_t *entries, k_s
                                                   const struct gpu_intel_gtt_run *run,
                                                   k_u64_t saved);
 
+/* Install one physical page per PTE. User RAM is not required to be
+ * contiguous; every page is validated and the whole run is restored if any
+ * write fails to read back. */
+enum gpu_intel_ggtt_result gpu_intel_ggtt_install(volatile k_u64_t *entries, k_size_t entry_count,
+                                                  const struct gpu_intel_gtt_run *run,
+                                                  const k_u64_t *physical, k_u64_t *saved);
+
 #endif /* MICRO_OS_PORT_X86_64_GPU_INTEL_GGTT_H */
