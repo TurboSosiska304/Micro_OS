@@ -37,6 +37,9 @@ void k_sched_tick(void);
 /* Number of ticks since k_sched_init(). */
 k_u32_t k_sched_ticks(void);
 
+/* Lock-free tick read for diagnostics (watchdog/panic). */
+k_u32_t k_sched_ticks_raw(void);
+
 /* The ticks one core has taken since the boot (0 for a core that is not
  * there). With KERNEL_SMP off only the core 0 has any. */
 k_u32_t k_sched_cpu_ticks(k_u32_t cpu);
@@ -145,6 +148,9 @@ struct k_sched_sleeper {
 };
 
 k_size_t k_sched_sleepers(struct k_sched_sleeper *out, k_size_t max);
+
+/* Lock-free sleepers snapshot for diagnostics (watchdog/panic). */
+k_size_t k_sched_sleepers_raw(struct k_sched_sleeper *out, k_size_t max);
 
 /*
  * Move a task to the queue of another core. Only the scheduler decides where

@@ -20,12 +20,28 @@
  * A mutex. The zero value is a valid mutex that has not been used yet:
  * the handle is created on the first lock, so a static mutex needs no
  * initialisation and no construction order.
+ *
+ * The debug fields are best-effort: the watchdog reads them without taking a
+ * lock, so they may be slightly stale, but a hang dump needs to be useful, not
+ * perfectly serialized.
  */
 typedef struct k_mutex {
     void *handle;
+    const char *name;
+    k_u32_t owner_pid;
+    k_u16_t depth;
 } k_mutex_t;
 
-#define K_MUTEX_INITIALIZER {NULL}
+#define K_MUTEX_INITIALIZER {NULL, NULL, 0u, 0u}
+
+struct k_mutex_debug_info {
+    const char *name;
+    k_u32_t owner_pid;
+    k_u16_t depth;
+};
+
+/* Lock-free snapshot for the hang watchdog. */
+k_size_t k_mutex_debug_snapshot(struct k_mutex_debug_info *out, k_size_t max);
 
 /*
  * Take the mutex, waiting as long as it takes; a task that already owns

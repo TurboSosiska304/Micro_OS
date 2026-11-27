@@ -176,6 +176,7 @@ struct task {
     int exec_status;
     k_u64_t runtime_ticks; /* bookkeeping: ticks spent running */
     k_u32_t quantum_left;  /* ticks left in the current time slice */
+    k_u32_t last_run_tick; /* last tick this task was claimed to run (watchdog) */
     void *stack;           /* owned by the port */
     k_size_t stack_size;
     void *ctx; /* port context: FreeRTOS handle / pthread */

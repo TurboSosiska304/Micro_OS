@@ -27,7 +27,9 @@ from __future__ import annotations
 
 import os
 import select
+import socket
 import subprocess
+import tempfile
 import time
 
 PROMPT = "microos> "
@@ -139,6 +141,11 @@ class Machine:
         self.prompts = 0
         self.last_output = 0.0
         self.boot_seconds = 0.0
+        self.monitor_path = os.path.join(
+            tempfile.gettempdir(),
+            f"microos-qemu-{os.getpid()}-{id(self)}.mon",
+        )
+        self.dump_triggered = False
 
     # --- the command line of QEMU -------------------------------------
 
@@ -155,6 +162,8 @@ class Machine:
             # A reset is the end of the machine, not a new boot: the session
             # of 1.0 is one boot, and a reboot is a failure of it.
             "-no-reboot",
+            "-monitor",
+            f"unix:{self.monitor_path},server,nowait",
         ]
 
         command += machine_args(self.disk)
@@ -228,8 +237,64 @@ class Machine:
         process.stdout.close()
         process.stdin.close()
         self.process = None
+        self._remove_monitor()
 
         return self.transcript.decode("utf-8", errors="replace")
+
+    def _remove_monitor(self) -> None:
+        try:
+            os.unlink(self.monitor_path)
+        except FileNotFoundError:
+            pass
+
+    def trigger_dump(self, reason: str = "timeout") -> None:
+        """Ask the guest to print a hang diagnosis, then drain its output.
+
+        The dump is the only thing a hung machine can still tell us: the
+        watchdog of the kernel prints it on request, and QEMU's NMI reaches a
+        core even when interrupts are off. The serial debug byte is sent too,
+        because a polite guest can answer it without the NMI path.
+        """
+        if self.dump_triggered:
+            return
+        self.dump_triggered = True
+
+        note = f"\n[smoke] requesting hang dump ({reason})\n"
+        self.transcript += note.encode("utf-8", errors="replace")
+
+        # The serial debug trigger: a byte the console input path turns into a
+        # watchdog dump. Harmless if the guest never reads it.
+        try:
+            self.send_raw(b"\x14")
+        except Exception:
+            pass
+
+        # NMI through the QEMU monitor: reaches the guest even with IRQs off.
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as mon:
+                mon.settimeout(1.0)
+                mon.connect(self.monitor_path)
+                # Read the greeting prompt if any, then send NMI.
+                mon.settimeout(0.2)
+                try:
+                    mon.recv(4096)
+                except Exception:
+                    pass
+                mon.sendall(b"nmi\n")
+                time.sleep(0.2)
+                try:
+                    mon.recv(4096)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Give the guest a moment to write the dump, then drain what arrived.
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            self._drain()
+            time.sleep(0.05)
+        self._drain()
 
     def __enter__(self) -> "Machine":
         return self
@@ -291,6 +356,7 @@ class Machine:
             if now >= deadline:
                 return False
             if now - self.last_output >= hang:
+                self.trigger_dump(f"machine wrote nothing for {hang:.0f} s")
                 raise MachineTimeout(f"the machine wrote nothing for {hang:.0f} s")
 
             ready, _, _ = select.select([descriptor], [], [], 0.05)
@@ -329,11 +395,13 @@ class Machine:
 
             now = time.monotonic()
             if now >= deadline:
+                self.trigger_dump(f"shell answered nothing in {timeout:.0f} s")
                 raise MachineTimeout(
                     f"the shell answered nothing in {timeout:.0f} s"
                 )
 
             if now - self.last_output >= hang:
+                self.trigger_dump(f"machine wrote nothing for {hang:.0f} s")
                 raise MachineTimeout(
                     f"the machine wrote nothing for {hang:.0f} s"
                 )

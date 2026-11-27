@@ -29,6 +29,7 @@
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
 #include "kernel/task.h"
+#include "kernel/watchdog.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
@@ -496,7 +497,12 @@ int k_port_console_getchar(void)
         }
 
         if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
-            return (int)port_inb(COM1);
+            int byte = (int)port_inb(COM1);
+            if (byte == 0x14) {
+                k_watchdog_trigger("serial debug");
+                continue;
+            }
+            return byte;
         }
 
         if (interrupts_enabled()) {
@@ -525,12 +531,17 @@ int k_port_console_poll(void)
     }
 
     if (g_com1_present && (port_inb(COM1_LSR) & 0x01) != 0) {
+        int byte = (int)port_inb(COM1);
+        if (byte == 0x14) {
+            k_watchdog_trigger("serial debug");
+            return -1;
+        }
         /* The serial port has no interrupt of its own in this port: the byte
          * is found by a poll, and finding it is the moment a task that waits
          * for the console in `poll` can be told. */
         k_console_input_notify();
 
-        return (int)port_inb(COM1);
+        return byte;
     }
 
     return -1;
@@ -983,6 +994,11 @@ static const char *exception_name(k_u64_t vector)
 
 int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
 {
+    if (vector == 2u) {
+        k_watchdog_trigger("NMI");
+        return 1;
+    }
+
     /*
      * The guard page under the stack of a kernel task (ADR 0048). A fault of
      * ring 0 whose address is in that page is an overflow of the stack and
@@ -2130,6 +2146,16 @@ k_u32_t port_x86_64_critical_depth_cpu(k_u32_t cpu)
     }
 
     return __atomic_load_n(&g_critical_depth[cpu], __ATOMIC_RELAXED);
+}
+
+k_u32_t k_port_cpu_critical_depth(k_u32_t cpu)
+{
+    return port_x86_64_critical_depth_cpu(cpu);
+}
+
+k_u64_t k_port_debug_tsc(void)
+{
+    return port_rdtsc();
 }
 
 void k_port_enter_critical(void)

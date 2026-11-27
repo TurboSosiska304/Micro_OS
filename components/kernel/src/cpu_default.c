@@ -30,3 +30,20 @@ K_WEAK void k_port_cpu_wake(k_u32_t cpu)
 {
     K_UNUSED(cpu);
 }
+
+K_WEAK k_u32_t k_port_cpu_critical_depth(k_u32_t cpu)
+{
+    K_UNUSED(cpu);
+    return 0u;
+}
+
+K_WEAK k_u64_t k_port_cpu_saved_rip(k_u32_t cpu)
+{
+    K_UNUSED(cpu);
+    return 0u;
+}
+
+K_WEAK k_u64_t k_port_debug_tsc(void)
+{
+    return 0u;
+}
