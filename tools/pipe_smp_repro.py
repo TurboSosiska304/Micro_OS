@@ -29,7 +29,9 @@ NUMBER = re.compile(r"(?m)^\s*[1-9]\d*\s*$")
 
 
 def main() -> int:
-    machine = Machine(BUILD, IMAGE)
+    # The point of this tool is the eighth core: without `-smp 8` the machine
+    # is the one-core port and the hang it reproduces never arrives.
+    machine = Machine(BUILD, IMAGE, extra_args=["-smp", "8"])
 
     try:
         machine.open(timeout=120.0)
