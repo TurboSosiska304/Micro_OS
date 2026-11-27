@@ -1227,7 +1227,7 @@ static bool signal_controls_state(int sig)
  * the timer, which would end a task from the context of another.
  */
 static void signal_log_delivery(int sig, k_u32_t to_pid, k_u32_t to_pgid, k_u32_t from_pid,
-                                 int si_code);
+                                int si_code);
 
 bool task_cpu_tick(struct task *t)
 {
@@ -1326,17 +1326,17 @@ k_u32_t task_signal_pending(const struct task *t)
 }
 
 static void signal_log_delivery(int sig, k_u32_t to_pid, k_u32_t to_pgid, k_u32_t from_pid,
-                                 int si_code)
+                                int si_code)
 {
     if (from_pid == K_SIG_SRC_KERNEL) {
-        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=kernel si_code=%d", sig,
-              (unsigned)to_pid, (unsigned)to_pgid, si_code);
+        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=kernel si_code=%d", sig, (unsigned)to_pid,
+              (unsigned)to_pgid, si_code);
     } else if (from_pid == K_SIG_SRC_TTY) {
         kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=tty si_code=%d", sig, (unsigned)to_pid,
               (unsigned)to_pgid, si_code);
     } else {
-        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=pid:%u si_code=%d", sig,
-              (unsigned)to_pid, (unsigned)to_pgid, (unsigned)from_pid, si_code);
+        kinfo("sig: deliver sig=%d to=pid:%u pgid:%u from=pid:%u si_code=%d", sig, (unsigned)to_pid,
+              (unsigned)to_pgid, (unsigned)from_pid, si_code);
     }
 }
 
@@ -1723,7 +1723,8 @@ void task_signal_check(struct task *t, k_ssize_t result, bool from_syscall)
         if (rc < 0) {
             /* The frame of the task cannot carry the handler: the signal ends
              * it, as it does when the handler cannot be called at all. */
-            kinfo("sig: frame sig=%d ends pid:%u pgid:%u", sig, (unsigned)t->pid, (unsigned)t->pgid);
+            kinfo("sig: frame sig=%d ends pid:%u pgid:%u", sig, (unsigned)t->pid,
+                  (unsigned)t->pgid);
             task_exit(128 + sig);
             return;
         }
