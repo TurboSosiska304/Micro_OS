@@ -91,7 +91,9 @@ reordered pairs.
   full gate result is recorded below after the branch gate run.
 * `make integrity`: **pass**, 30/30 checks.
 * `make x86-build`: **pass**.
-* `make x86-smoke`: pending a quiet host (no other QEMU, load average below 2).
+* `make x86-smoke`: **pass**, 431/431 checks. The smoke driver now counts only
+  prompts at the start of a line; prompt text saved in `/etc/run.log` no longer
+  sends the next command early or shifts the answer blocks.
 
 ## Before the night of fuzzing
 
