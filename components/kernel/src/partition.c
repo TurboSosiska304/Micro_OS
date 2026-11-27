@@ -172,11 +172,11 @@ static int child_sync(void *ctx_ptr)
  * of naming its sectors: the mount of a partition opens the writes of the
  * controller below it (ADR 0041 §2). The child ops carry the call only when
  * the parent's do, so k_blockdev_gated() answers for the pair. */
-static int child_writes(void *ctx_ptr, bool open)
+static int child_writes(void *ctx_ptr, bool open, const char **reason)
 {
     const struct partition_ctx *ctx = (const struct partition_ctx *)ctx_ptr;
 
-    return ctx->parent->ops->writes(ctx->parent->ctx, open);
+    return ctx->parent->ops->writes(ctx->parent->ctx, open, reason);
 }
 
 /* A disk needs no erase, and a partition of it neither. */

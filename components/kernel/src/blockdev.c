@@ -877,7 +877,7 @@ static int cache_flush(void *ctx)
  * policy is emptied before the door closes, so a sector it still holds is
  * not lost (the two disks of ADR 0041 are write-through and have none).
  */
-static int cache_writes(void *ctx, bool open)
+static int cache_writes(void *ctx, bool open, const char **reason)
 {
     struct k_blockdev_cache *cache = ctx;
     const struct k_blockdev *dev = cache->owner;
@@ -890,7 +890,7 @@ static int cache_writes(void *ctx, bool open)
         k_mutex_unlock(&g_blockdev_lock);
     }
 
-    return dev->ops->writes(dev->ctx, open);
+    return dev->ops->writes(dev->ctx, open, reason);
 }
 
 /* --- the table ------------------------------------------------------------ */
@@ -1307,17 +1307,29 @@ bool k_blockdev_gated(const struct k_blockdev *dev)
     return dev != NULL && dev->ops != NULL && dev->ops->writes != NULL;
 }
 
-int k_blockdev_writes(const struct k_blockdev *dev, bool open)
+int k_blockdev_writes(const struct k_blockdev *dev, bool open, const char **reason)
 {
+    if (reason != NULL) {
+        *reason = NULL;
+    }
+
     if (dev == NULL || dev->ops == NULL) {
+        if (reason != NULL) {
+            *reason = "the device is not there";
+        }
+
         return KERR_INVAL;
     }
 
     if (dev->ops->writes == NULL) {
+        if (reason != NULL) {
+            *reason = "the device has no write gate";
+        }
+
         return KERR_NOTSUP;
     }
 
-    return dev->ops->writes(dev->ctx, open);
+    return dev->ops->writes(dev->ctx, open, reason);
 }
 
 /* --- the grain of a volume ------------------------------------------------ */
@@ -1422,11 +1434,11 @@ static int view_flush(void *ctx)
 
 /* The door of the writes is the medium's: a view is a way of reading and
  * writing the same bytes, not a medium with a rule of its own. */
-static int view_writes(void *ctx, bool open)
+static int view_writes(void *ctx, bool open, const char **reason)
 {
     struct k_blockdev_view *view = ctx;
 
-    return view->medium->ops->writes(view->medium->ctx, open);
+    return view->medium->ops->writes(view->medium->ctx, open, reason);
 }
 
 int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *medium,

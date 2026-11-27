@@ -218,8 +218,9 @@ static int gated_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
     return g_gate_open ? g_gate_write(ctx, sector, buf, count) : -1;
 }
 
-static int gated_writes(void *ctx, bool open)
+static int gated_writes(void *ctx, bool open, const char **reason)
 {
+    K_UNUSED(reason);
     K_UNUSED(ctx);
     g_gate_open = open;
     return 0;

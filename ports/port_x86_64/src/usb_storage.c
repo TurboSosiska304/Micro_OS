@@ -488,7 +488,7 @@ static int usb_sync(void *ctx)
  * partition the rule names is the one the kernel took for a root - `usb0p2`
  * of a stick of this system - and not the whole disk.
  */
-static int usb_writes(void *ctx, bool open)
+static int usb_writes(void *ctx, bool open, const char **reason)
 {
     const char *why = NULL;
 
@@ -500,11 +500,19 @@ static int usb_writes(void *ctx, bool open)
     }
 
     if (g_storage.volume == NULL) {
+        if (reason != NULL) {
+            *reason = "no USB volume was identified";
+        }
+
         return KERR_ROFS;
     }
 
     if (k_volume_identify(g_storage.volume, &g_storage.volume_id) != 0 ||
         !k_volume_may_write(g_storage.volume, &g_storage.volume_id, &why)) {
+        if (reason != NULL) {
+            *reason = why != NULL ? why : "the volume rule refused the writes";
+        }
+
         if (!g_storage.refused) {
             g_storage.refused = true;
             kwarn("usb0: the writes of %s are refused: %s",

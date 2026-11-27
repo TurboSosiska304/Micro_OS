@@ -64,8 +64,9 @@ static const struct k_blockdev s_device = {
 static bool s_gate_open;
 static int s_gate_calls;
 
-static int test_writes(void *ctx, bool open)
+static int test_writes(void *ctx, bool open, const char **reason)
 {
+    K_UNUSED(reason);
     K_UNUSED(ctx);
 
     s_gate_calls++;
@@ -132,8 +133,8 @@ void test_blockdev(void)
 
     /* A medium with no door answers the question every device is asked. */
     KT_CHECK(!k_blockdev_gated(&s_device));
-    KT_CHECK_INT_EQ(k_blockdev_writes(&s_device, true), KERR_NOTSUP);
-    KT_CHECK_INT_EQ(k_blockdev_writes(NULL, true), KERR_INVAL);
+    KT_CHECK_INT_EQ(k_blockdev_writes(&s_device, true, NULL), KERR_NOTSUP);
+    KT_CHECK_INT_EQ(k_blockdev_writes(NULL, true, NULL), KERR_INVAL);
 
     /* A controller that put the door there is asked through the table. */
     KT_CHECK_INT_EQ(k_blockdev_register(&s_gate_device), 0);
@@ -145,9 +146,9 @@ void test_blockdev(void)
     s_gate_open = false;
     s_gate_calls = 0;
 
-    KT_CHECK_INT_EQ(k_blockdev_writes(found, true), 0);
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, true, NULL), 0);
     KT_CHECK(s_gate_open);
-    KT_CHECK_INT_EQ(k_blockdev_writes(found, false), 0);
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, false, NULL), 0);
     KT_CHECK(!s_gate_open);
     KT_CHECK_INT_EQ(s_gate_calls, 2);
 
@@ -167,7 +168,7 @@ void test_blockdev(void)
 
     s_gate_open = false;
 
-    KT_CHECK_INT_EQ(k_blockdev_writes(found, true), 0);
+    KT_CHECK_INT_EQ(k_blockdev_writes(found, true, NULL), 0);
     KT_CHECK(s_gate_open);
 
     KT_CHECK_INT_EQ(k_blockdev_unregister(&s_gate_device), 0);
@@ -226,8 +227,9 @@ static int part_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
 
 static int s_part_gate_open;
 
-static int part_writes(void *ctx, bool open)
+static int part_writes(void *ctx, bool open, const char **reason)
 {
+    K_UNUSED(reason);
     K_UNUSED(ctx);
 
     s_part_gate_open = open;
@@ -470,9 +472,9 @@ void test_partition(void)
         KT_CHECK(k_blockdev_gated(child));
 
         s_part_gate_open = false;
-        KT_CHECK_INT_EQ(k_blockdev_writes(child, true), 0);
+        KT_CHECK_INT_EQ(k_blockdev_writes(child, true, NULL), 0);
         KT_CHECK(s_part_gate_open);
-        KT_CHECK_INT_EQ(k_blockdev_writes(child, false), 0);
+        KT_CHECK_INT_EQ(k_blockdev_writes(child, false, NULL), 0);
         KT_CHECK(!s_part_gate_open);
     }
 

@@ -255,8 +255,9 @@ static int gate_ram_write(void *ctx, k_u32_t sector, const void *buf, k_size_t c
     return s_ram_write(ctx, sector, buf, count);
 }
 
-static int gate_ram_writes(void *ctx, bool open)
+static int gate_ram_writes(void *ctx, bool open, const char **reason)
 {
+    K_UNUSED(reason);
     K_UNUSED(ctx);
 
     s_gate_ram_open = open;

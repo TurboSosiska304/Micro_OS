@@ -113,11 +113,19 @@ static int module_sync(void *ctx)
  * RAM and not of a medium, so it is refused at the door and the root stays
  * read-only, which is what it is.
  */
-static int module_writes(void *ctx, bool open)
+static int module_writes(void *ctx, bool open, const char **reason)
 {
     K_UNUSED(ctx);
 
-    return open ? KERR_ROFS : 0;
+    if (open) {
+        if (reason != NULL) {
+            *reason = "the boot module is a read-only image in memory";
+        }
+
+        return KERR_ROFS;
+    }
+
+    return 0;
 }
 
 static const struct k_blockdev_ops g_module_ops = {

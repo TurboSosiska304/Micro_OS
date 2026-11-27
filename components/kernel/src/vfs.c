@@ -206,7 +206,7 @@ int vfs_umount(const char *point)
              * written what it held a line ago, so nothing is lost here.
              */
             if (g_mounts[i].rw && g_mounts[i].dev != NULL) {
-                (void)k_blockdev_writes(g_mounts[i].dev, false);
+                (void)k_blockdev_writes(g_mounts[i].dev, false, NULL);
             }
 
             kinfo("vfs: '%s' is unmounted", g_mounts[i].point);
@@ -425,12 +425,16 @@ static int mount_type(const char *point, const char *type, const char *device, b
 
     if (k_blockdev_gated(dev)) {
         if (write) {
-            rc = k_blockdev_writes(dev, true);
+            {
+                const char *wreason = NULL;
+                rc = k_blockdev_writes(dev, true, &wreason);
 
-            if (rc != 0) {
-                kerror("vfs: %s cannot open its writes (%d), the mount is undone", device, rc);
-                (void)vfs_umount(point);
-                return rc;
+                if (rc != 0) {
+                    kerror("vfs: %s cannot open its writes (error %d%s%s), the mount is undone",
+                           device, rc, wreason != NULL ? ": " : "", wreason != NULL ? wreason : "");
+                    (void)vfs_umount(point);
+                    return rc;
+                }
             }
 
             slot->rw = true;
@@ -477,6 +481,7 @@ int vfs_mount_root_writes(const char *point, const char *device)
     const struct k_blockdev *dev;
     struct k_volume_id id;
     const char *why = NULL;
+    int rc;
 
     if (caller_uid() != VFS_UID) {
         return KERR_PERM;
@@ -503,24 +508,30 @@ int vfs_mount_root_writes(const char *point, const char *device)
 
     if (k_volume_identify(dev, &id) != 0) {
         slot->rw = false;
-        (void)k_blockdev_writes(dev, false);
+        (void)k_blockdev_writes(dev, false, NULL);
         kwarn("root: the head of %s cannot be read, the root stays read-only", device);
         return KERR_ROFS;
     }
 
     if (!k_volume_may_write(dev, &id, &why)) {
         slot->rw = false;
-        (void)k_blockdev_writes(dev, false);
+        (void)k_blockdev_writes(dev, false, NULL);
         kwarn("root: %s is mounted read-only: %s", device,
               why != NULL ? why : "the rule of ADR 0041 refuses the writes");
         return KERR_ROFS;
     }
 
-    if (k_blockdev_writes(dev, true) != 0) {
-        slot->rw = false;
-        (void)k_blockdev_writes(dev, false);
-        kwarn("root: %s cannot open its writes, the root stays read-only", device);
-        return KERR_ROFS;
+    {
+        const char *wreason = NULL;
+        rc = k_blockdev_writes(dev, true, &wreason);
+
+        if (rc != 0) {
+            slot->rw = false;
+            (void)k_blockdev_writes(dev, false, NULL);
+            kwarn("root: %s cannot open its writes (error %d%s%s), the root stays read-only",
+                  device, rc, wreason != NULL ? ": " : "", wreason != NULL ? wreason : "");
+            return KERR_ROFS;
+        }
     }
 
     slot->rw = true;

@@ -62,8 +62,11 @@ struct k_blockdev_ops {
      *
      * A partition, a view and a cache forward the call to the medium below
      * them: the mounted device is not the one the controller registered.
+     *
+     * `reason`, when not NULL and the call fails, receives a short string
+     * that names the refusal; it is not set on success.
      */
-    int (*writes)(void *ctx, bool open);
+    int (*writes)(void *ctx, bool open, const char **reason);
 };
 
 /*
@@ -297,6 +300,6 @@ const struct k_blockdev *k_blockdev_find(const char *name);
  * was not asked for the write leaves it closed.
  */
 bool k_blockdev_gated(const struct k_blockdev *dev);
-int k_blockdev_writes(const struct k_blockdev *dev, bool open);
+int k_blockdev_writes(const struct k_blockdev *dev, bool open, const char **reason);
 
 #endif /* MICRO_OS_KERNEL_BLOCKDEV_H */

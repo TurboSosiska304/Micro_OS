@@ -274,7 +274,7 @@ static int fault_flush(void *ctx)
     return barrier_apply(ctx, K_BLOCKDEV_FAULT_OP_FLUSH);
 }
 
-static int fault_writes(void *ctx, bool open)
+static int fault_writes(void *ctx, bool open, const char **reason)
 {
     struct k_blockdev_fault *fault = ctx;
     k_u32_t operation;
@@ -287,10 +287,14 @@ static int fault_writes(void *ctx, bool open)
     operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_WRITES, 0);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
+        if (reason != NULL) {
+            *reason = "the fault device refused the write gate";
+        }
+
         return rc;
     }
 
-    rc = fault->medium->ops->writes(fault->medium->ctx, open);
+    rc = fault->medium->ops->writes(fault->medium->ctx, open, reason);
     operation_cut(fault, operation);
 
     return rc;

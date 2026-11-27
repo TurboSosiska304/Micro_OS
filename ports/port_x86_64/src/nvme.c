@@ -676,7 +676,7 @@ static int nvme_sync(void *ctx)
  * boot has no root to read it from until the root is mounted, and the driver
  * is asked at the mount. A refusal is KERR_ROFS and a sentence in the log.
  */
-static int nvme_writes(void *ctx, bool open)
+static int nvme_writes(void *ctx, bool open, const char **reason)
 {
     K_UNUSED(ctx);
 
@@ -686,11 +686,19 @@ static int nvme_writes(void *ctx, bool open)
     }
 
     if (g_volume == NULL) {
+        if (reason != NULL) {
+            *reason = "no NVMe volume was identified";
+        }
+
         return KERR_ROFS;
     }
 
     if (k_volume_identify(g_volume, &g_id) != 0 ||
         !k_volume_may_write(g_volume, &g_id, &g_refusal)) {
+        if (reason != NULL) {
+            *reason = g_refusal != NULL ? g_refusal : "the volume rule refused the writes";
+        }
+
         if (!g_refused) {
             g_refused = true;
             kwarn("nvme0: the writes of %s are refused: %s",
