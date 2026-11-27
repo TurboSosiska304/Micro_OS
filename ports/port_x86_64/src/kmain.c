@@ -691,6 +691,15 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 
     /*
+     * The phases of the bring-up went to the screen and COM1 while they
+     * happened. Say them once more into the log of the kernel now, at the end
+     * of the boot: `dmesg` keeps the newest lines, so a summary placed here
+     * survives the boot lines that follow, and a core that did not join the
+     * scheduler is named even on a machine without a serial wire.
+     */
+    port_x86_64_smp_log_bringup();
+
+    /*
      * The init process owns the rest of the boot: the shell comes from it.
      * The context of kmain is the idle context of the core 0: it looks at the
      * queue and waits, and it is where the port returns when the last task of

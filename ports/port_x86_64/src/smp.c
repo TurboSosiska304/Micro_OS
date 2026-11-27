@@ -21,17 +21,21 @@
  * queue array is the failure this whole exercise is about, and a core that
  * was started but not counted is the one place it could happen.
  *
- * Third, the log is not available here. klog is a sink of the boot level of
- * kernel_boot(), which has not run when this file works; the bring-up
- * records its status in the arrays below and kmain() prints it once the
- * console of the kernel exists.
+ * Third, a failure of one core never resets the machine. The signature of the
+ * trampoline is checked before a SIPI is sent: an AP that executes the bytes
+ * a firmware left at 0x7000 can write to a reset port, and the whole desktop
+ * goes back to the firmware instead of reaching a shell that could say why.
+ * Every phase of the sequence is printed as it happens - to the screen and to
+ * COM1 - and repeated in the log once the kernel has booted.
  */
 #include "port_x86_64.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/cpu.h"
 #include "kernel/log.h"
+#include "kernel/port/console.h"
 #include "kernel/port/cpu.h"
 #include "kernel/port/lock.h"
 #include "kernel/port/mem.h"
@@ -52,13 +56,25 @@ static k_u32_t g_checked_in = 1;
 
 /*
  * The start-up IPI names a page of 4 KiB: vector 7 is 0x7000, where the
- * loader copied the trampoline (src/ap_trampoline.S), and the parameters of
- * that page live on the next one, 0x8000, writable and NX in the map of the
- * kernel. Both addresses are physical and the first gigabyte is identity
- * mapped, so a pointer is the address.
+ * trampoline lives (src/ap_trampoline.S), and the parameters live on the next
+ * page, 0x8000, writable and NX in the map of the kernel. The signature at
+ * 0x7F00 is written into the blob and copied with it; a page without it is
+ * not code the bring-up is willing to run on another processor. Both
+ * addresses are physical and the first gigabyte is identity mapped, so a
+ * pointer here is the address.
  */
 #define AP_TRAMPOLINE_VECTOR 7u
+#define AP_TRAMPOLINE_PHYS 0x7000u
+#define AP_SIGNATURE_PHYS 0x7F00u
 #define AP_PARAM_PHYS 0x8000u
+
+/* The signature is eight bytes of the trampoline, including the two zeros. */
+static const k_u8_t g_ap_signature[8] = {'M', 'O', 'S', 'A', 'P', '1', 0, 0};
+
+/* The same blob is linked into the image so that a firmware loader, which
+ * does not carry it, can still give an AP a way into long mode. */
+extern const k_u8_t port_x86_64_ap_trampoline_image[];
+extern const k_u8_t port_x86_64_ap_trampoline_image_end[];
 
 /* The stack of a core lasts the life of the machine: nothing frees it. It is
  * larger than the stack of a task because the idle loop of a core and its
@@ -75,6 +91,53 @@ static k_u32_t g_checked_in = 1;
 #define AP_AFTER_INIT_US 10000u
 #define AP_SIPI_GAP_US 200u
 #define AP_START_WAIT_US 100000u
+
+/* The phases a core can be in. They are also the names in the lines that go
+ * to the screen during the bring-up and to `dmesg` after it. */
+enum ap_phase {
+    AP_PHASE_NONE = 0u,
+    AP_PHASE_TRAMPOLINE,
+    AP_PHASE_PARAMS,
+    AP_PHASE_INIT,
+    AP_PHASE_AFTER_INIT,
+    AP_PHASE_SIPI1,
+    AP_PHASE_GAP,
+    AP_PHASE_SIPI2,
+    AP_PHASE_IN_C,
+    AP_PHASE_ACCEPTED,
+    AP_PHASE_COUNT
+};
+
+static const char *const g_phase_names[AP_PHASE_COUNT] = {
+    "not started", "trampoline signature", "parameters", "INIT", "10 ms after INIT",
+    "SIPI 1",      "200 us gap",           "SIPI 2",     "in C", "accepted"};
+
+static const char *const g_icr_step_names[] = {"ok", "INIT assert", "INIT deassert", "SIPI", "IPI"};
+
+struct ap_bringup {
+    k_u64_t start_tsc;
+    k_u32_t apic_id;
+    k_u32_t seen_id;
+    k_u32_t phase;
+    k_u32_t waited_us;
+    k_u32_t elapsed_us;
+    bool ok;
+};
+
+/* One record per core, written by the boot while the cores are brought up one
+ * at a time. The AP writes only its own identifier and the `reached` flag. */
+static struct ap_bringup g_ap_bringup[KERNEL_CPUS_MAX];
+
+/* The lines of the bring-up, kept so the log of the kernel can say them again
+ * once kernel_boot() has made its ring. A hundred is more than eight cores
+ * need for the nine phases of the sequence. */
+#define AP_LOG_LINES 100u
+#define AP_LOG_LINE_MAX 128u
+static char g_ap_log[AP_LOG_LINES][AP_LOG_LINE_MAX];
+static k_u8_t g_ap_log_cpu[AP_LOG_LINES];
+static k_u32_t g_ap_log_count;
+static k_u32_t g_trampoline_source; /* 0 none, 1 loader, 2 kernel image */
+static bool g_trampoline_ok;
 
 /* What the bring-up learned about one core. The bits are the ones of
  * port_x86_64_smp.h; the writer is the core itself until the boot accepts
@@ -182,6 +245,139 @@ static bool wait_flag(bool *flag, k_u32_t us)
     return __atomic_load_n(flag, __ATOMIC_ACQUIRE);
 }
 
+/* --- what the boot says about each phase ------------------------------------ */
+
+/* Keep a line for `dmesg` and put it on the screen and COM1 now. Before the
+ * console exists the caller writes the same line straight to COM1; the ring
+ * of the kernel replays it once kernel_boot() has run. */
+static void ap_emit(const char *line, bool live, k_u32_t cpu)
+{
+    k_size_t len = strlen(line);
+
+    if (len >= AP_LOG_LINE_MAX) {
+        len = AP_LOG_LINE_MAX - 1u;
+    }
+
+    if (g_ap_log_count < AP_LOG_LINES) {
+        memcpy(g_ap_log[g_ap_log_count], line, len);
+        g_ap_log[g_ap_log_count][len] = '\0';
+        g_ap_log_cpu[g_ap_log_count] = (k_u8_t)cpu;
+        g_ap_log_count++;
+    }
+
+    if (live) {
+        k_port_write(line, len);
+        k_port_write("\n", 1u);
+    }
+}
+
+/* Microseconds since the start of one core, measured by the clock of the boot. */
+static k_u32_t ap_us_since(k_u64_t start)
+{
+    const struct port_x86_64_info *info = port_x86_64_info();
+    k_u64_t hz;
+
+    if (info == NULL || info->cpu_hz == 0u) {
+        return 0u;
+    }
+
+    hz = info->cpu_hz;
+    return (k_u32_t)(((port_rdtsc() - start) * 1000000u) / hz);
+}
+
+static bool ap_signature_ok(void)
+{
+    return memcmp((const void *)(uintptr_t)AP_SIGNATURE_PHYS, g_ap_signature,
+                  sizeof(g_ap_signature)) == 0;
+}
+
+/*
+ * Make sure the page vector 7 names really holds the trampoline. The BIOS
+ * loader copies it there before the kernel runs; a firmware loader does not,
+ * and a SIPI to a page of firmware leftovers can end in a write to a reset
+ * port on real metal. The copy happens while the map of the loader is still
+ * writable and before the kernel marks the page executable and read-only.
+ */
+void port_x86_64_ap_trampoline_install(void)
+{
+    const k_u8_t *image = port_x86_64_ap_trampoline_image;
+    k_size_t bytes = (k_size_t)(port_x86_64_ap_trampoline_image_end - image);
+    char line[AP_LOG_LINE_MAX];
+    int n;
+
+    /* The blob also carries the zeroed parameter block on the next page. */
+    if (bytes == 0u || bytes > 8192u) {
+        g_trampoline_ok = false;
+        n = snprintf(line, sizeof(line),
+                     "x86-64: ap trampoline: the image has %u byte(s), cannot install",
+                     (unsigned)bytes);
+    } else if (ap_signature_ok()) {
+        g_trampoline_source = 1u;
+        g_trampoline_ok = true;
+        n = snprintf(line, sizeof(line),
+                     "x86-64: ap trampoline at 0x7000 from loader, signature ok, boot %s",
+                     port_x86_64_boot_name());
+    } else {
+        memcpy((void *)(uintptr_t)AP_TRAMPOLINE_PHYS, image, bytes);
+        g_trampoline_source = 2u;
+        g_trampoline_ok = ap_signature_ok();
+        n = snprintf(line, sizeof(line),
+                     "x86-64: ap trampoline at 0x7000 from kernel image, signature %s, boot %s",
+                     g_trampoline_ok ? "ok" : "missing", port_x86_64_boot_name());
+    }
+
+    if (n > 0) {
+        /* The framebuffer console is not up yet on this path. */
+        ap_emit(line, false, KERNEL_CPUS_MAX);
+        port_x86_64_debug_write(line, (k_size_t)n);
+        port_x86_64_debug_write("\n", 1u);
+    }
+}
+
+/* One line per phase, on the screen and in the boot log of the kernel. */
+static void ap_phase(k_u32_t cpu, enum ap_phase phase, k_u32_t limit_us, bool ok)
+{
+    struct ap_bringup *record = &g_ap_bringup[cpu];
+    char line[AP_LOG_LINE_MAX];
+    int n;
+
+    record->phase = phase;
+    record->waited_us = limit_us;
+    record->elapsed_us = ap_us_since(record->start_tsc);
+    record->ok = ok;
+
+    n = snprintf(line, sizeof(line), "x86-64: ap cpu %u apic 0x%x: %s %s, %u us of %u us",
+                 (unsigned)cpu, (unsigned)record->apic_id, g_phase_names[phase],
+                 ok ? "ok" : "failed", record->elapsed_us, limit_us);
+
+    if (n > 0) {
+        ap_emit(line, true, cpu);
+    }
+}
+
+/* A command stuck in the local APIC: say which one and how long it waited. */
+static void ap_icr_failure(k_u32_t cpu, enum ap_phase phase)
+{
+    k_u32_t step = 0u;
+    k_u32_t waited_us = 0u;
+    char line[AP_LOG_LINE_MAX];
+    int n;
+
+    port_x86_64_apic_last_icr(&step, &waited_us);
+    n = snprintf(
+        line, sizeof(line), "x86-64: ap cpu %u apic 0x%x: ICR %s did not finish, waited %u us",
+        (unsigned)cpu, (unsigned)g_ap_bringup[cpu].apic_id,
+        step < sizeof(g_icr_step_names) / sizeof(g_icr_step_names[0]) ? g_icr_step_names[step]
+                                                                      : "command",
+        waited_us);
+
+    if (n > 0) {
+        ap_emit(line, true, cpu);
+    }
+
+    ap_phase(cpu, phase, AP_IPI_TIMEOUT_US, false);
+}
+
 /* --- starting one core ------------------------------------------------------ */
 
 /*
@@ -204,18 +400,42 @@ static void ap_params_write(k_u32_t cpu)
 /*
  * Give one core a stack and send it the sequence of the PC: INIT, ten
  * milliseconds, the start-up IPI, two hundred microseconds, the start-up IPI
- * again. The answer is false when a command did not leave the local APIC or
- * the core did not reach C in time; the caller counts it and goes on to the
- * next one, because one silent core must not cost the others.
+ * again. Every phase writes one line before the next begins, so a machine
+ * that stops in the middle of the sequence says where it stopped. The answer
+ * is false when a command did not leave the local APIC, the trampoline has no
+ * signature, or the core did not reach C in time; the caller counts it and
+ * goes on to the next one, because one silent core must not cost the others.
  */
 static bool ap_start(k_u32_t cpu)
 {
+    struct ap_bringup *record = &g_ap_bringup[cpu];
     k_u8_t *block;
-    k_u32_t apic_id = port_x86_64_cpu_apic_id(cpu);
+    k_u32_t apic_id = record->apic_id;
+    bool reached;
+
+    record->start_tsc = port_rdtsc();
+    record->seen_id = 0u;
+    record->ok = false;
+
+    /*
+     * The page a SIPI names has to be ours. Without this check an AP of a
+     * firmware boot executes whatever was at 0x7000, and on real metal that
+     * can reach a port that resets the whole machine before a line is read.
+     */
+    if (!g_trampoline_ok || !ap_signature_ok()) {
+        kinfo("x86-64: ap cpu %u apic 0x%x: no trampoline signature, SIPI not sent", (unsigned)cpu,
+              (unsigned)apic_id);
+        ap_phase(cpu, AP_PHASE_TRAMPOLINE, 0u, false);
+        return false;
+    }
+
+    ap_phase(cpu, AP_PHASE_TRAMPOLINE, 0u, true);
 
     block = (k_u8_t *)k_port_alloc(AP_STACK_BYTES, false);
 
     if (block == NULL) {
+        kinfo("x86-64: ap cpu %u apic 0x%x: no 64 KiB stack", (unsigned)cpu, (unsigned)apic_id);
+        ap_phase(cpu, AP_PHASE_PARAMS, 0u, false);
         return false;
     }
 
@@ -226,21 +446,36 @@ static bool ap_start(k_u32_t cpu)
     g_ap_stack_top[cpu] = ((k_u64_t)(uintptr_t)block + AP_STACK_BYTES) & ~(k_u64_t)15u;
 
     ap_params_write(cpu);
+    ap_phase(cpu, AP_PHASE_PARAMS, 0u, true);
 
     if (!port_x86_64_apic_send_init(apic_id, AP_IPI_TIMEOUT_US)) {
+        ap_icr_failure(cpu, AP_PHASE_INIT);
         return false;
     }
+    ap_phase(cpu, AP_PHASE_INIT, AP_IPI_TIMEOUT_US, true);
 
     tsc_delay(AP_AFTER_INIT_US);
+    ap_phase(cpu, AP_PHASE_AFTER_INIT, AP_AFTER_INIT_US, true);
 
     if (!port_x86_64_apic_send_startup(apic_id, AP_TRAMPOLINE_VECTOR, AP_IPI_TIMEOUT_US)) {
+        ap_icr_failure(cpu, AP_PHASE_SIPI1);
         return false;
     }
+    ap_phase(cpu, AP_PHASE_SIPI1, AP_IPI_TIMEOUT_US, true);
 
     tsc_delay(AP_SIPI_GAP_US);
-    (void)port_x86_64_apic_send_startup(apic_id, AP_TRAMPOLINE_VECTOR, AP_IPI_TIMEOUT_US);
+    ap_phase(cpu, AP_PHASE_GAP, AP_SIPI_GAP_US, true);
 
-    return wait_flag(&g_reached[cpu], AP_START_WAIT_US);
+    if (!port_x86_64_apic_send_startup(apic_id, AP_TRAMPOLINE_VECTOR, AP_IPI_TIMEOUT_US)) {
+        ap_icr_failure(cpu, AP_PHASE_SIPI2);
+        return false;
+    }
+    ap_phase(cpu, AP_PHASE_SIPI2, AP_IPI_TIMEOUT_US, true);
+
+    reached = wait_flag(&g_reached[cpu], AP_START_WAIT_US);
+    ap_phase(cpu, AP_PHASE_IN_C, AP_START_WAIT_US, reached);
+
+    return reached;
 }
 
 /*
@@ -256,20 +491,27 @@ void port_x86_64_smp_init(void)
     k_u32_t cpu;
     k_u32_t started = 1;
 
+    available = port_x86_64_cpu_available();
+    count = (available < KERNEL_CPUS_MAX) ? available : KERNEL_CPUS_MAX;
+
+    /* A record for every core the firmware named, even the ones that are
+     * never sent an IPI: `smp` and `dmesg` name them all afterwards. */
+    for (cpu = 0u; cpu < count; cpu++) {
+        g_ap_bringup[cpu].apic_id = port_x86_64_cpu_apic_id(cpu);
+        g_ap_bringup[cpu].phase = AP_PHASE_NONE;
+    }
+
     if (!port_x86_64_apic_init()) {
         /*
          * A machine without a local APIC has no way to send INIT or a
          * start-up IPI: it runs on the processor of the boot and the boot
-         * says so. The cores of the firmware are all missing.
+         * says so. The cores of the firmware are all left idle.
          */
-        available = port_x86_64_cpu_available();
+        kinfo("x86-64: no local APIC, %u core(s) left idle", (unsigned)(count - 1u));
         g_failures = (available > 1u) ? available - 1u : 0u;
         g_checked_in = 1;
         return;
     }
-
-    available = port_x86_64_cpu_available();
-    count = (available < KERNEL_CPUS_MAX) ? available : KERNEL_CPUS_MAX;
 
     /*
      * One core at a time, and the parameters written before each start: the
@@ -277,18 +519,77 @@ void port_x86_64_smp_init(void)
      * at once would take the stack of the other.
      */
     for (cpu = 1; cpu < count; cpu++) {
+        k_u32_t seen;
+
         if (!ap_start(cpu)) {
             continue;
         }
 
-        /* The core is in C and its own stack. From here the boot owns the
-         * record, and the release below lets it into the kernel. */
+        /*
+         * The processor answers with the identifier its own local APIC
+         * reports, not the one the firmware listed for the core number. A
+         * mismatch means the MADT and the machine disagree: the core stops
+         * on its stack instead of joining the run queues of other numbers.
+         */
+        seen = __atomic_load_n(&g_ap_bringup[cpu].seen_id, __ATOMIC_ACQUIRE);
+        if (seen != g_ap_bringup[cpu].apic_id) {
+            kinfo("x86-64: ap cpu %u apic 0x%x answered as 0x%x, not accepted", (unsigned)cpu,
+                  (unsigned)g_ap_bringup[cpu].apic_id, (unsigned)seen);
+            ap_phase(cpu, AP_PHASE_ACCEPTED, 0u, false);
+            continue;
+        }
+
+        /* The core is in C with its own GDT, IDT, stack and clock. From here
+         * the boot owns the record, and the release below lets it into the
+         * kernel. */
         __atomic_store_n(&g_online[cpu], true, __ATOMIC_RELEASE);
+        ap_phase(cpu, AP_PHASE_ACCEPTED, 0u, true);
         started++;
     }
 
     g_failures = (available > started) ? available - started : 0u;
     g_checked_in = started;
+}
+
+/*
+ * The replay in the log of the kernel. The live lines have already been on
+ * the framebuffer and COM1. A summary of every core is put in the ring of the
+ * kernel, where `dmesg` can still find it after the boot; the full sequence
+ * of a core that failed is repeated as well, because that is the part a
+ * person needs when the machine came up with fewer cores than the firmware
+ * named.
+ */
+void port_x86_64_smp_log_bringup(void)
+{
+    k_u32_t available = port_x86_64_cpu_available();
+    k_u32_t limit = (available < KERNEL_CPUS_MAX) ? available : KERNEL_CPUS_MAX;
+    k_u32_t cpu;
+    k_u32_t i;
+
+    kinfo("x86-64: ap trampoline from %s, signature %s",
+          g_trampoline_source == 1u ? "loader" : "kernel image",
+          g_trampoline_ok ? "ok" : "missing");
+
+    for (cpu = 1u; cpu < limit; cpu++) {
+        const struct ap_bringup *record = &g_ap_bringup[cpu];
+        k_u32_t phase = record->phase < AP_PHASE_COUNT ? record->phase : AP_PHASE_NONE;
+
+        kinfo("x86-64: ap cpu %u apic 0x%x: last phase %s %s after %u us, waited %u us",
+              (unsigned)cpu, (unsigned)record->apic_id, g_phase_names[phase],
+              record->ok ? "ok" : "failed", (unsigned)record->elapsed_us,
+              (unsigned)record->waited_us);
+    }
+
+    for (i = 0u; i < g_ap_log_count; i++) {
+        k_u32_t owner = g_ap_log_cpu[i];
+
+        if (owner < KERNEL_CPUS_MAX && !g_ap_bringup[owner].ok) {
+            kinfo("%s", g_ap_log[i]);
+        }
+    }
+
+    kinfo("x86-64: %u AP(s) reached C of %u named by the firmware, %u failure(s)",
+          (unsigned)g_checked_in - 1u, (unsigned)available - 1u, (unsigned)g_failures);
 }
 
 void port_x86_64_smp_release(void)
@@ -379,6 +680,14 @@ void port_x86_64_ap_entry(k_u32_t cpu)
      */
     port_x86_64_paging_init_cpu();
 
+    /*
+     * The core says which identifier its own local APIC reports before the
+     * boot is told it reached C. The boot compares this with the identifier
+     * of the MADT entry and refuses a core that arrived under another number:
+     * it is the check that keeps a machine of many sockets from putting two
+     * processors in one slot of the run queues.
+     */
+    __atomic_store_n(&g_ap_bringup[cpu].seen_id, port_x86_64_apic_id(), __ATOMIC_RELEASE);
     __atomic_store_n(&g_reached[cpu], true, __ATOMIC_RELEASE);
 
     /*
@@ -455,6 +764,32 @@ static void smp_print_unlock(void)
 static void smp_report_wake(void);
 static void smp_report_console(void);
 
+/*
+ * The state of the bring-up, including the cores that never joined the
+ * scheduler. This is the line to read on a machine that boots on one core:
+ * it names the phase the last AP reached and the time the boot waited.
+ */
+static void smp_report_bringup(void)
+{
+    k_u32_t available = port_x86_64_cpu_available();
+    k_u32_t limit = (available < KERNEL_CPUS_MAX) ? available : KERNEL_CPUS_MAX;
+    k_u32_t cpu;
+
+    kshell_printf("smp: ap trampoline from %s, signature %s\n",
+                  g_trampoline_source == 1u ? "loader" : "kernel image",
+                  g_trampoline_ok ? "ok" : "missing");
+
+    for (cpu = 1u; cpu < limit; cpu++) {
+        const struct ap_bringup *record = &g_ap_bringup[cpu];
+        k_u32_t phase = record->phase < AP_PHASE_COUNT ? record->phase : AP_PHASE_NONE;
+
+        kshell_printf("smp: ap cpu %u apic 0x%x: %s %s, self 0x%x, %u us of %u us\n", (unsigned)cpu,
+                      (unsigned)record->apic_id, g_phase_names[phase], record->ok ? "ok" : "failed",
+                      (unsigned)record->seen_id, (unsigned)record->elapsed_us,
+                      (unsigned)record->waited_us);
+    }
+}
+
 static int smp_status(void)
 {
     struct line {
@@ -503,6 +838,8 @@ static int smp_status(void)
         kshell_printf("smp: cpu %u apic 0x%x ticks %u current %s\n", (unsigned)cpu,
                       (unsigned)lines[cpu].apic_id, (unsigned)lines[cpu].ticks, lines[cpu].current);
     }
+
+    smp_report_bringup();
 
     smp_print_unlock();
 
@@ -1110,6 +1447,11 @@ void port_x86_64_smp_init(void)
 }
 
 void port_x86_64_smp_release(void) {}
+
+/* A one-core build sends no IPI, so there is no trampoline to install and no
+ * bring-up to replay. The kernel still calls both steps of the boot. */
+void port_x86_64_ap_trampoline_install(void) {}
+void port_x86_64_smp_log_bringup(void) {}
 
 k_u32_t port_x86_64_smp_failures(void)
 {

@@ -1558,6 +1558,21 @@ add_libc_program(awk
         -Wno-unused-parameter -Wno-unused-but-set-variable -Os
 )
 
+# The AP trampoline is a flat binary the BIOS loader carries to 0x7000. A
+# firmware loader has no copy of it, so the kernel carries the same bytes and
+# installs them before its own page tables make the page read-only. The source
+# is generated because .incbin needs the absolute path of the linked binary.
+set(AP_TRAMPOLINE_BIN "${CMAKE_BINARY_DIR}/ap_trampoline.bin")
+configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/ap_trampoline_image.S.in"
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
+    @ONLY
+)
+set_source_files_properties(
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
+    PROPERTIES OBJECT_DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.bin"
+)
+
 add_executable(microos64
 
     ${KERNEL_SOURCES}
@@ -1574,6 +1589,7 @@ add_executable(microos64
     ${PKG_SOURCES}
     ${TELNET_SOURCES}
     src/boot64.S
+    "${CMAKE_BINARY_DIR}/ap_trampoline_image.S"
     src/kmain.c
     src/port_x86_64.c
     src/console.c
@@ -1834,6 +1850,10 @@ add_custom_command(
     COMMENT "linking the AP trampoline at 0x7000"
     VERBATIM
 )
+
+# The kernel compiles the blob above; make sure the binary exists first.
+add_custom_target(ap_trampoline_image DEPENDS "${CMAKE_BINARY_DIR}/ap_trampoline.bin")
+add_dependencies(microos64 ap_trampoline_image)
 
 add_custom_command(
     OUTPUT "${CMAKE_BINARY_DIR}/loader32.o"
