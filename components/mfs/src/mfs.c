@@ -3733,6 +3733,8 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
         return rc;
     }
 
+    mfs_at_cursor_invalidate();
+
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
     }
