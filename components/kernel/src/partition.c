@@ -679,9 +679,17 @@ static int gpt_collect(const struct k_blockdev *disk, const struct gpt_geometry 
             first = read_le64(entry + PARTITION_GPT_ENTRY_FIRST);
             last = read_le64(entry + PARTITION_GPT_ENTRY_LAST);
 
-            if (last < first || first < geo->first_usable || last > geo->last_usable) {
+            if (last < first || first < geo->first_usable) {
                 return KERR_INVAL;
             }
+
+            /*
+             * last_usable is the range the GPT reserves for partitions, but a
+             * real disk may carry a partition that ends past it and still
+             * inside the disk (a recovery partition, a table a tool wrote with
+             * a stale field) - sgdisk -v accepts it. The bound that matters is
+             * the disk itself, which found_check enforces after the scan.
+             */
 
             if (*count == K_PARTITION_MAX) {
                 return KERR_NOSPC;
