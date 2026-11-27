@@ -900,6 +900,9 @@ int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern, bool confirmed)
         }
     }
 
+    /* The aperture is write-combining: drain the stores before a later
+     * readback or a scanout flip can observe them. */
+    __asm__ volatile("mfence" : : : "memory");
     b->pattern = pattern;
     b->filled = true;
     kshell_printf("gpu vramfill: id=%u pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
@@ -1146,6 +1149,7 @@ int port_x86_64_gpu_amd_buffill(k_u32_t id, bool confirmed)
         }
     }
 
+    __asm__ volatile("mfence" : : : "memory");
     b->pattern = pattern;
     b->filled = true;
     kshell_printf("gpu buffill: id=%u name=%s pattern=0x%08x size=%u KiB OK\n", (unsigned)id,
@@ -1187,6 +1191,9 @@ int port_x86_64_gpu_amd_bufread(k_u32_t id)
         return 1;
     }
 
+    /* A write-combining store of a previous fill may still sit in the CPU
+     * buffer; fence it so this readback sees the memory the card sees. */
+    __asm__ volatile("mfence" : : : "memory");
     for (off = 0; off < b->size; off += GPU_AMD_VRAM_BLOCK_SIZE) {
         volatile k_u32_t *p;
         k_u64_t chunk = b->size - off;
@@ -2090,6 +2097,7 @@ int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep)
         goto out;
     }
     memcpy((void *)vram, staging, (k_size_t)frame_bytes);
+    __asm__ volatile("mfence" : : : "memory");
 
     /* Verify the VRAM copy before touching scanout registers. */
     if (memcmp((const void *)vram, staging, (k_size_t)frame_bytes) != 0) {
