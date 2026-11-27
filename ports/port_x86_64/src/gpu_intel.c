@@ -550,6 +550,70 @@ out:
     return ok ? 0 : -1;
 }
 
+/* A read-only census: the owner needs to know who owns the aperture before a
+ * present can reserve any of it. No PTE and no display register is written. */
+static int gpu_intel_ggtt_map(const struct gpu_intel_info *info)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    struct gpu_intel_ggtt_stats stats;
+    struct gpu_intel_gtt_run run;
+    k_size_t excluded_count = 0u;
+    k_size_t i;
+    k_u32_t needed = 1u;
+
+    if (s_gtt_entries == NULL) {
+        kshell_printf("gpu: no GGTT is mapped\n");
+        return -1;
+    }
+    gpu_intel_ggtt_stats(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &stats);
+    kshell_printf("gpu: ggtt map: %u entries of %u bytes, %u MiB aperture\n",
+                  (unsigned)GPU_INTEL_GTT_APERTURE_ENTRIES, (unsigned)GPU_INTEL_GTT_PAGE_SIZE,
+                  (unsigned)(GPU_INTEL_GTT_APERTURE_SIZE >> 20));
+    kshell_printf("gpu: ggtt map: %u present, %u unmapped, %u identity-mapped pages\n",
+                  (unsigned)stats.present, (unsigned)stats.unmapped, (unsigned)stats.identity);
+    kshell_printf("gpu: ggtt map: %u runs of equal PTEs, longest %u, most common 0x%llx (%u)\n",
+                  (unsigned)stats.scratch_ranges, (unsigned)stats.longest_scratch,
+                  (unsigned long long)stats.common, (unsigned)stats.common_count);
+    kshell_printf("gpu: ggtt map: longest unmapped run %u pages\n",
+                  (unsigned)stats.longest_unmapped);
+
+    if (info->framebuffer_known) {
+        needed = info->framebuffer.pte_count;
+        kshell_printf("gpu: ggtt map: the live plane occupies %u pages at entry %u (pitch %u)\n",
+                      (unsigned)info->framebuffer.pte_count, (unsigned)info->framebuffer.pte_start,
+                      (unsigned)info->framebuffer.pitch);
+    }
+    if (gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        for (i = 0u; i < excluded_count; i++) {
+            kshell_printf("gpu: ggtt map: excluded range %u: entries %u..%u (%u pages)\n",
+                          (unsigned)i, (unsigned)excluded[i].start,
+                          (unsigned)(excluded[i].start + excluded[i].count - 1u),
+                          (unsigned)excluded[i].count);
+        }
+    } else {
+        kshell_printf("gpu: ggtt map: the live planes cannot be excluded safely\n");
+    }
+
+    if (gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, needed, excluded,
+                                 excluded_count, &run) == GPU_INTEL_GGTT_OK) {
+        kshell_printf("gpu: ggtt map: a guarded run of %u pages is available at entry %u\n",
+                      (unsigned)needed, (unsigned)run.start);
+    } else if (stats.longest_unmapped < (k_size_t)needed + 2u &&
+               stats.longest_scratch < (k_size_t)needed + 2u) {
+        kshell_printf("gpu: ggtt map: no run of %u pages has two guards: neither unmapped nor "
+                      "identical scratch PTEs are long enough\n",
+                      (unsigned)needed);
+    } else {
+        kshell_printf("gpu: ggtt map: no guarded run of %u pages outside the live surfaces\n",
+                      (unsigned)needed);
+    }
+    kshell_printf("gpu: ggtt map: %s\n",
+                  stats.identity != 0u
+                      ? "identity pages exist: a matching RAM surface needs no PTE write"
+                      : "no identity pages: a scanned RAM surface needs a GGTT slot");
+    return 0;
+}
+
 static bool gpu_intel_flip_laptop(const struct gpu_intel_info *info)
 {
     return info->common.vendor == 0x8086u && info->common.device == 0x5917u &&
@@ -1804,6 +1868,15 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
 
 int gpu_intel_command(int argc, char **argv)
 {
+    if (argc == 2 && strcmp(argv[1], "ggtt-map") == 0) {
+        if (g_gpu_intel.common.probe_result != GPU_PROBE_OK) {
+            kshell_printf("gpu: ggtt-map refused: probe result %d\n",
+                          (int)g_gpu_intel.common.probe_result);
+            return KSHELL_ERROR;
+        }
+        return gpu_intel_ggtt_map(&g_gpu_intel) == 0 ? KSHELL_OK : KSHELL_ERROR;
+    }
+
     if (argc == 2 && strcmp(argv[1], "ggtt-test") == 0) {
         if (g_gpu_intel.common.probe_result != GPU_PROBE_OK || !g_gpu_intel.framebuffer_known ||
             !gpu_intel_flip_laptop(&g_gpu_intel)) {
@@ -1844,7 +1917,7 @@ int gpu_intel_command(int argc, char **argv)
         return gpu_intel_display_enable(&g_gpu_intel, argc == 4) == 0 ? KSHELL_OK : KSHELL_ERROR;
     }
 
-    kshell_printf(
-        "usage: gpu [info|ggtt-test|flip [--yes]|plane-linear [--yes]|display enable [--yes]]\n");
+    kshell_printf("usage: gpu [info|ggtt-map|ggtt-test|flip [--yes]|plane-linear [--yes]|"
+                  "display enable [--yes]]\n");
     return KSHELL_USAGE;
 }

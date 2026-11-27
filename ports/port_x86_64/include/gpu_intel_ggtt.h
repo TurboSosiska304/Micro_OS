@@ -75,6 +75,21 @@ struct gpu_intel_gtt_run {
     k_u64_t original;
 };
 
+/* A read-only census of the aperture: how many translations the firmware left
+ * behind, how many are unmapped and whether a linear surface can be scanned
+ * from RAM without installing a new translation. */
+struct gpu_intel_ggtt_stats {
+    k_size_t entries;
+    k_size_t present;
+    k_size_t unmapped;
+    k_size_t identity;
+    k_size_t scratch_ranges;
+    k_size_t longest_scratch;
+    k_size_t longest_unmapped;
+    k_u64_t common;
+    k_size_t common_count;
+};
+
 enum gpu_intel_ggtt_result {
     GPU_INTEL_GGTT_OK = 0,
     GPU_INTEL_GGTT_INVALID = -1,
@@ -94,17 +109,31 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_decode_fb(const volatile k_u64_t *entr
                                                     k_u32_t width, k_u32_t height,
                                                     struct gpu_intel_fb *out);
 
+/* Count present, unmapped and identity-mapped PTEs and the longest run of each
+ * kind. Nothing is written; the caller may run this on a live display. */
+void gpu_intel_ggtt_stats(const volatile k_u64_t *entries, k_size_t entry_count,
+                          struct gpu_intel_ggtt_stats *out);
+
 /*
- * Find a run which still has the same valid scratch PTE on both guard entries.
- * The caller excludes every live display surface. This is deliberately more
- * conservative than a zero test: unused gen8 GGTT slots normally point at the
- * driver's scratch page, and a guard catches the edge of an allocation.
+ * Find a run with one unmapped guard entry on either side, or, when the
+ * firmware left no unmapped range, a run of identical scratch PTEs with the
+ * same value on both guards. The caller excludes every live display surface
+ * and both guards; a guard catches the edge of an allocation.
  */
 enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entries,
                                                     k_size_t entry_count, k_u32_t needed,
                                                     const struct gpu_intel_gtt_range *excluded,
                                                     k_size_t excluded_count,
                                                     struct gpu_intel_gtt_run *out);
+
+/* An identity run maps each aperture page to its own physical page. A surface
+ * whose pages are already there needs no PTE write before a plane flip. */
+enum gpu_intel_ggtt_result gpu_intel_ggtt_find_identity(const volatile k_u64_t *entries,
+                                                        k_size_t entry_count,
+                                                        const k_u64_t *physical, k_u32_t count,
+                                                        const struct gpu_intel_gtt_range *excluded,
+                                                        k_size_t excluded_count,
+                                                        struct gpu_intel_gtt_run *out);
 
 /* Borrow one run and restore it byte-for-byte; both verify the PTE readback. */
 enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_size_t entry_count,
