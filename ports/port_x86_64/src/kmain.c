@@ -554,23 +554,15 @@ void kmain(k_u64_t boot_info, k_u64_t boot_magic, k_u64_t kernel_phys)
     }
 
     /*
-     * The two bits of CR4 that keep the kernel out of the memory of a program
-     * (ADR 0052). SMEP refuses a fetch of a page of ring 3 from ring 0 and
-     * SMAP a read or a write of one; both are turned on when the processor
-     * advertises them and named here either way, because a machine that has
-     * neither is protected by the supervisor bit of every kernel page and
-     * that is the line a person reads when an attack does not work.
+     * The two bits of CR4 are cleared in paging.c before the first program,
+     * and the register before and after is in the log of the boot. The
+     * supervisor bit of every kernel page and the checks of the copy edge
+     * are the boundary until the kernel has a map of its own (ADR 0052).
+     * Saying so here keeps the line an honest one on a machine whose firmware
+     * advertised the bits: they are off here by policy, not by absence.
      */
-    if (port_x86_64_smep_on() && port_x86_64_smap_on()) {
-        kinfo("x86-64: SMEP and SMAP are on, the kernel cannot run or read a page of a program");
-    } else if (port_x86_64_smep_on()) {
-        kinfo("x86-64: SMEP is on, SMAP is not on this processor");
-    } else if (port_x86_64_smap_on()) {
-        kinfo("x86-64: SMAP is on, SMEP is not on this processor");
-    } else {
-        kinfo("x86-64: this processor has no SMEP or SMAP, the supervisor bit of every kernel "
-              "page is the boundary");
-    }
+    kinfo("x86-64: SMEP and SMAP are off by policy, the supervisor bit of every kernel page is "
+          "the boundary (ADR 0052)");
 
     /*
      * The filesystem, before the tasks: the type of the volume is read from

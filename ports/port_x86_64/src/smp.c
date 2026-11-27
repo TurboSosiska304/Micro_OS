@@ -567,7 +567,8 @@ void port_x86_64_smp_log_bringup(void)
     k_u32_t i;
 
     kinfo("x86-64: ap trampoline from %s, signature %s",
-          g_trampoline_source == 1u ? "loader" : "kernel image",
+          g_trampoline_source == 1u ? "loader"
+                                    : (g_trampoline_source == 2u ? "kernel image" : "none"),
           g_trampoline_ok ? "ok" : "missing");
 
     for (cpu = 1u; cpu < limit; cpu++) {
@@ -776,7 +777,8 @@ static void smp_report_bringup(void)
     k_u32_t cpu;
 
     kshell_printf("smp: ap trampoline from %s, signature %s\n",
-                  g_trampoline_source == 1u ? "loader" : "kernel image",
+                  g_trampoline_source == 1u ? "loader"
+                                            : (g_trampoline_source == 2u ? "kernel image" : "none"),
                   g_trampoline_ok ? "ok" : "missing");
 
     for (cpu = 1u; cpu < limit; cpu++) {
