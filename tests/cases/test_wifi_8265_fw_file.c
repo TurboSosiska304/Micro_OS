@@ -9,6 +9,7 @@
 
 #include <string.h>
 
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/vfs.h"
 #include "mfs/mfs_vfs.h"
@@ -88,11 +89,16 @@ void test_wifi_8265_fw_file(void)
 {
     int rc;
 
+    (void)vfs_umount("/");
+    (void)ramfs_vfs_reset();
     rc = ramfs_vfs_register_type();
-    KT_CHECK_INT_EQ(rc, 0);
+    if (rc != 0 && rc != KERR_EXIST) {
+        KT_CHECK_INT_EQ(rc, 0);
+    }
     rc = vfs_mount_type("ramfs", "/", "ram0");
     KT_CHECK_INT_EQ(rc, 0);
     if (rc != 0) {
+        (void)vfs_unregister_type("ramfs");
         return;
     }
 
@@ -100,4 +106,5 @@ void test_wifi_8265_fw_file(void)
     test_reads_large_firmware();
 
     (void)vfs_umount("/");
+    (void)vfs_unregister_type("ramfs");
 }
