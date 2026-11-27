@@ -136,8 +136,20 @@ static void test_background_stop_bg(void)
     snprintf(command, sizeof(command), "kill -STOP %u", pid);
     KT_CHECK_INT_EQ(run_capture(command, buf, sizeof(buf)), KSHELL_OK);
 
-    (void)run_capture("jobs", buf, sizeof(buf));
-    KT_CHECK(strstr(buf, "Stopped") != NULL);
+    {
+        int waited;
+        bool stopped = false;
+
+        for (waited = 0; waited < 600; waited++) {
+            (void)run_capture("jobs", buf, sizeof(buf));
+            if (strstr(buf, "Stopped") != NULL) {
+                stopped = true;
+                break;
+            }
+            k_sched_sleep_ms(5);
+        }
+        KT_CHECK(stopped);
+    }
 
     snprintf(command, sizeof(command), "bg %%%u", number);
     rc = run_capture(command, buf, sizeof(buf));
