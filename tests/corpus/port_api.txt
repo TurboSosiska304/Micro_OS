@@ -45,8 +45,11 @@ k_port_console_size kernel/port/console.h
 
 # kernel/port/cpu.h — the cores of the machine (a weak default is one core)
 k_port_cpu_count kernel/port/cpu.h weak
+k_port_cpu_critical_depth kernel/port/cpu.h weak
 k_port_cpu_id kernel/port/cpu.h weak
+k_port_cpu_saved_rip kernel/port/cpu.h weak
 k_port_cpu_wake kernel/port/cpu.h weak
+k_port_debug_tsc kernel/port/cpu.h weak
 
 # kernel/port/exec.h — the window of the programs and the jump into one
 k_port_exec_supported kernel/port/exec.h
