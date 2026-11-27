@@ -55,8 +55,9 @@ A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 - `wm` frame wait on real Intel GOP has a tick deadline and a spin bound, so a
   stalled or missing tick source cannot turn a frame wait into an infinite
   loop.
-- ESP32 DRAM: the logfile batch buffer is trimmed on the board so the static
-  DRAM stays below the 8 KiB program-data window.
+- ESP32 DRAM: the logfile console batch buffers are allocated from the heap on
+  the kernel, not in static DRAM, because the 8 KiB program-data window left no
+  safe margin; allocation failure is reported as `KERR_NOMEM`.
 
 ## [2.2.0] - 2026-11-27
 
