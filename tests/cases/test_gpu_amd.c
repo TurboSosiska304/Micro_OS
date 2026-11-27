@@ -4,12 +4,16 @@
  * The lookup is pure data: no PCI, no MMIO, no port dependencies. It guards
  * the "hello GPU" probe so a known card is identified and an unknown one is
  * not claimed. The vendor table is the stable surface Intel work will attach to.
+ *
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #include "ktest.h"
 #include "tests/tests.h"
 
 #include "kernel/kmod.h"
 #include "port_x86_64_gpu.h"
+#include "port_x86_64_gpu_amd.h"
 #include "port_x86_64_gpu_ids.h"
 
 /* The vendor table in the header references the real AMD probe symbol. Host
@@ -94,6 +98,101 @@ static void test_kmod_state_names(void)
     KT_CHECK(KMOD_UNKNOWN != KMOD_SKIP);
 }
 
+static void test_mc_memsize_decode(void)
+{
+    ktest_begin("gpu_amd: CONFIG_MEMSIZE decode clamps garbage upper bits");
+
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(8192u), 8192);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(4096u), 4096);
+    /* Linux gmc_v8_0.c: if upper 16 bits set and lower 16 nonzero, clamp. */
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0xDEAD2000u), 0x2000);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0xFFFF0000u), 0);
+    KT_CHECK_INT_EQ((long long)gpu_amd_decode_memsize_mb(0u), 0);
+}
+
+static void test_mc_chmap_decode(void)
+{
+    ktest_begin("gpu_amd: MC_SHARED_CHMAP NOOFCHAN decode");
+
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(0u << 12), 1);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(1u << 12), 2);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(2u << 12), 4);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(3u << 12), 8);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(4u << 12), 3);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(5u << 12), 6);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(6u << 12), 10);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(7u << 12), 12);
+    KT_CHECK_INT_EQ(gpu_amd_decode_noofchan(8u << 12), 16);
+}
+
+static void test_mc_ramcfg_decode(void)
+{
+    ktest_begin("gpu_amd: MC_ARB_RAMCFG CHANSIZE decode");
+
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(0u), 32);
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(1u << 8), 64);
+    KT_CHECK_INT_EQ(gpu_amd_decode_chansize(0xFFFFFEFFu), 32);
+}
+
+static void test_scanout_size_decode(void)
+{
+    ktest_begin("gpu_amd: scanout size decode is conservative");
+
+    /* 1920 * 1080 * 4 = 8294400, clamped to >= 1 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(1920u, 1079u), 1920ll * 1080ll * 4ll);
+    /* Zero pitch -> 0; small surface clamps up to 1 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(0u, 1079u), 0);
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(64u, 0u), 1024ll * 1024ll);
+    /* Clamp to 256 MiB */
+    KT_CHECK_INT_EQ((long long)gpu_amd_scanout_size(0x7FFFu, 0x3FFFu), 256ll * 1024ll * 1024ll);
+}
+
+static void test_scanout_overlap(void)
+{
+    struct gpu_amd_scanout_region r;
+
+    ktest_begin("gpu_amd: vram test refuses overlap with scanout");
+
+    memset(&r, 0, sizeof(r));
+    r.pipe = 0;
+    r.primary = true;
+    r.enabled = true;
+    r.address = 8ull * 1024ull * 1024ull * 1024ull - 4ull * 1024ull * 1024ull;
+    r.size_bytes = 16ull * 1024ull * 1024ull;
+
+    KT_CHECK(gpu_amd_ranges_overlap(r.address, r.size_bytes, r.address + 0x1000u, 4096u));
+    KT_CHECK(!gpu_amd_ranges_overlap(r.address, r.size_bytes, r.address - 4096u - 1ull, 4096u));
+
+    /* choose_test_offset must refuse when last-4MiB candidate overlaps scanout. */
+    {
+        k_u64_t vram = 8ull * 1024ull * 1024ull * 1024ull;
+        k_u64_t off = gpu_amd_choose_test_offset(vram, &r, 1);
+        /* It should either find a non-overlapping lower candidate or return 0. */
+        if (off != 0u) {
+            KT_CHECK(!gpu_amd_scanout_overlaps(off, GPU_AMD_VRAM_TEST_BYTES, &r, 1));
+            KT_CHECK(off >= GPU_AMD_VRAM_TEST_MIN_OFFSET);
+        }
+    }
+}
+
+static void test_scanout_overlap_refuses(void)
+{
+    struct gpu_amd_scanout_region regions[2];
+    k_u64_t vram = 256ull * 1024ull * 1024ull;
+    k_u64_t off;
+
+    ktest_begin("gpu_amd: vram test refuses when all candidates overlap scanout");
+
+    memset(regions, 0, sizeof(regions));
+    /* Cover the whole usable area above 16MiB with scanout regions. */
+    regions[0].enabled = true;
+    regions[0].address = 16ull * 1024ull * 1024ull;
+    regions[0].size_bytes = 240ull * 1024ull * 1024ull;
+
+    off = gpu_amd_choose_test_offset(vram, regions, 1);
+    KT_CHECK_INT_EQ((long long)off, 0);
+}
+
 void test_gpu_amd(void)
 {
     test_known_ids();
@@ -102,4 +201,10 @@ void test_gpu_amd(void)
     test_table_has_live_card();
     test_vendor_table();
     test_kmod_state_names();
+    test_mc_memsize_decode();
+    test_mc_chmap_decode();
+    test_mc_ramcfg_decode();
+    test_scanout_size_decode();
+    test_scanout_overlap();
+    test_scanout_overlap_refuses();
 }

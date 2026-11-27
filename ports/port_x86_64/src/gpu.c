@@ -10,6 +10,8 @@
  * observed on a live Sapphire Nitro+ RX 570 (1002:67df rev ef) on 26 Nov 2026
  * using lspci/sysfs/journalctl; no Linux source code was copied. See
  * docs/ports/x86/gpu-amd-recon.md and docs/plan-gpu.md section 5.
+ * Facts from drivers/gpu/drm/amd/amdgpu/gmc_v8_0.c (MIT, Linux v6.12).
+ * Code written here.
  */
 #include "port_x86_64_gpu.h"
 
@@ -21,7 +23,7 @@
 #include "kshell/kshell.h"
 
 static struct gpu_info g_gpu;
-static char g_gpu_line[192];
+static char g_gpu_line[256];
 static bool g_gpu_registered;
 
 static void format_size(char *buf, k_size_t size, k_u64_t bytes)
@@ -87,6 +89,19 @@ static void format_tail(char *buf, k_size_t size, const struct gpu_info *info)
         return;
     }
 
+    if (info->vram_mc_bytes != 0u) {
+        unsigned mc_mib = (unsigned)(info->vram_mc_bytes / (1024ull * 1024ull));
+        if (info->gc_num_se != 0u) {
+            snprintf(buf, size, "vram %u MiB (MC), mc chmap 0x%08x l1tlb 0x%08x, se %u sh/se %u",
+                     mc_mib, (unsigned)info->mc_shared_chmap, (unsigned)info->mc_vm_mx_l1_tlb_cntl,
+                     (unsigned)info->gc_num_se, (unsigned)info->gc_num_sh_per_se);
+        } else {
+            snprintf(buf, size, "vram %u MiB (MC), mc chmap 0x%08x l1tlb 0x%08x", mc_mib,
+                     (unsigned)info->mc_shared_chmap, (unsigned)info->mc_vm_mx_l1_tlb_cntl);
+        }
+        return;
+    }
+
     format_size(vram, sizeof(vram), info->vram_bytes);
     snprintf(buf, size, "vram %s", vram);
 }
@@ -94,7 +109,7 @@ static void format_tail(char *buf, k_size_t size, const struct gpu_info *info)
 const char *port_x86_64_gpu_format(char *buf, k_size_t size)
 {
     char mmio[32];
-    char tail[96];
+    char tail[128];
     const char *name;
 
     if (buf == NULL || size == 0u) {
@@ -241,21 +256,50 @@ static const struct kmod g_gpu_mod = {
     .detail = gpu_mod_detail,
 };
 
+int port_x86_64_gpu_amd_vramtest(bool do_write);
+
 static int cmd_gpu(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    if (argc == 1 || (argc == 2 && strcmp(argv[1], "info") == 0)) {
+        port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
+        kshell_printf("%s\n", g_gpu_line);
+        return g_gpu.present ? KSHELL_OK : KSHELL_ERROR;
+    }
 
-    port_x86_64_gpu_format(g_gpu_line, sizeof(g_gpu_line));
-    kshell_printf("%s\n", g_gpu_line);
-    return g_gpu.present ? 0 : 1;
+    if (argc >= 2 && strcmp(argv[1], "vramtest") == 0) {
+        bool do_write = false;
+        if (argc >= 3 && strcmp(argv[2], "--write") == 0) {
+            do_write = true;
+        } else if (argc >= 3) {
+            kshell_printf("usage: gpu vramtest [--write]\n");
+            return 1;
+        }
+        return port_x86_64_gpu_amd_vramtest(do_write);
+    }
+
+    if (gpu_intel_command != NULL &&
+        ((argc == 2 && strcmp(argv[1], "ggtt-test") == 0) ||
+         (argc == 2 && strcmp(argv[1], "flip") == 0) ||
+         (argc == 3 && strcmp(argv[1], "flip") == 0 && strcmp(argv[2], "--yes") == 0))) {
+        return gpu_intel_command(argc, argv);
+    }
+
+    kshell_printf("usage: gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]\n");
+    return KSHELL_USAGE;
 }
 
 int port_x86_64_gpu_register(void)
 {
+    static const struct kshell_help help = {
+        .summary = "display controller probe",
+        .usage = "gpu [info|vramtest [--write]|ggtt-test|flip [--yes]]",
+        .detail = "Without a subcommand, prints the shared display-controller report.\n"
+                  "Intel systems also accept info, ggtt-test and a flip dry-run; the\n"
+                  "flip write path requires the explicit --yes confirmation.\n",
+    };
     int rc;
 
-    rc = kshell_register("gpu", "display controller probe", cmd_gpu);
+    rc = kshell_register_help("gpu", &help, cmd_gpu);
     if (rc == 0) {
         kinfo("gpu: command registered");
     }

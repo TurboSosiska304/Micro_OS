@@ -457,7 +457,21 @@ void session_task(void *arg)
     {
         struct vfs_file tty_file;
         k_u8_t tty_priv[VFS_FILE_DATA_SIZE];
-        bool tty_opened = (vfs_open("/dev/tty", VFS_O_RDWR, &tty_file, tty_priv) == 0);
+        bool tty_opened;
+
+        /*
+         * The shell is its own process group: a foreground program gets the
+         * terminal foreground, and Ctrl+C must never reach init or the shell
+         * itself. A shell that inherited init's pgid would take the whole
+         * machine down with it. The shell ignores SIGINT at its own prompt;
+         * foreground jobs get their own process group and receive it.
+         */
+        if (self != NULL) {
+            task_set_pgid(self, self->pid);
+            (void)task_signal_set(self, K_SIGINT, K_SIG_IGN);
+        }
+
+        tty_opened = (vfs_open("/dev/tty", VFS_O_RDWR, &tty_file, tty_priv) == 0);
 
         if (self != NULL) {
             (void)k_tty_set_fg_pgrp(task_get_pgid(self));

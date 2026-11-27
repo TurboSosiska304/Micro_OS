@@ -1,9 +1,10 @@
 /*
  * Micro OS — the Intel GPU identity table and probe contract.
  *
- * Provenance: the PCI identifiers and Kaby Lake display topology are public
- * hardware facts learned from Intel documentation and the GPL-licensed Linux
- * i915 driver. No i915 source expression was copied into this test.
+ * Facts from drivers/gpu/drm/i915/i915_pciids.h,
+ * drivers/gpu/drm/i915/intel_step.c and
+ * drivers/gpu/drm/i915/display/intel_display_device.c (GPL-2.0, Linux v6.12);
+ * code written here for Micro OS (MIT).
  */
 #include "ktest.h"
 #include "tests/tests.h"
@@ -17,6 +18,16 @@
 static k_u16_t s_vendor;
 static k_u16_t s_device;
 static k_u8_t s_revision;
+
+/* The host case links the Intel source but not the x86-64 paging/timer port. */
+k_u64_t g_port_x86_64_kernel_phys;
+static k_u64_t s_ticks;
+
+k_u64_t port_x86_64_ticks(void)
+{
+    s_ticks++;
+    return s_ticks;
+}
 
 k_u32_t port_x86_64_pci_read32(const struct port_x86_64_pci_device *device, k_u8_t offset)
 {
@@ -50,6 +61,14 @@ void port_x86_64_pci_enable(const struct port_x86_64_pci_device *device, k_u16_t
 }
 
 k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
+{
+    (void)vaddr;
+    (void)paddr;
+    (void)len;
+    return 0u;
+}
+
+k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 {
     (void)vaddr;
     (void)paddr;
@@ -154,6 +173,31 @@ static void test_probe_unknown_intel(void)
     KT_CHECK_INT_EQ(info.function, 0u);
 }
 
+static void test_probe_known_intel_degraded(void)
+{
+    struct port_x86_64_pci_device pci = {0u, 2u, 0u};
+    struct gpu_info info;
+    enum gpu_probe_result res;
+
+    ktest_begin("gpu-intel: a known laptop fills the shared result before degrading");
+
+    s_vendor = 0x8086u;
+    s_device = 0x5917u;
+    s_revision = 0x07u;
+    memset(&info, 0, sizeof(info));
+    res = gpu_intel_probe(&pci, &info);
+
+    KT_CHECK_INT_EQ((int)res, (int)GPU_PROBE_DEGRADED);
+    KT_CHECK(info.present);
+    KT_CHECK(info.known);
+    KT_CHECK_STR_EQ(info.name, "Intel UHD 620");
+    KT_CHECK_INT_EQ(info.mmio_size, 16u * 1024u * 1024u);
+    KT_CHECK_INT_EQ(info.display_gen, 9);
+    KT_CHECK_INT_EQ(info.display_rel, 0);
+    KT_CHECK_STR_EQ(info.display_step, "C0");
+    KT_CHECK_INT_EQ(info.probe_result, GPU_PROBE_DEGRADED);
+}
+
 void test_gpu_intel(void)
 {
     test_laptop_identity();
@@ -161,4 +205,5 @@ void test_gpu_intel(void)
     test_rejections();
     test_probe_none_for_other_vendor();
     test_probe_unknown_intel();
+    test_probe_known_intel_degraded();
 }

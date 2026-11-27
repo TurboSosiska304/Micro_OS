@@ -32,6 +32,8 @@ struct port_x86_64_pci_device {
 #define PCI_CLASS 0x0Au    /* the sub-class, then the class */
 #define PCI_BAR0 0x10u
 #define PCI_BAR1 0x14u /* the upper half of a 64-bit window of BAR0 */
+#define PCI_BAR2 0x18u
+#define PCI_BAR3 0x1Cu /* the upper half of a 64-bit window of BAR2 */
 #define PCI_BAR4 0x20u /* the fifth window: the bus-master registers of IDE */
 
 /* The two bits of the command register a device needs to answer at all. */

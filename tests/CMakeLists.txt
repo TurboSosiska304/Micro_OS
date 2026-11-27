@@ -7,6 +7,7 @@ if(NOT ESP_PLATFORM)
     set(MICRO_OS_TEST_CASES
         cases/test_version.c
         cases/test_gpu_intel.c
+        cases/test_gpu_intel_ggtt.c
         cases/test_board.c
         cases/test_log.c
         cases/test_logfile.c
@@ -123,11 +124,12 @@ if(NOT ESP_PLATFORM)
         src/main.c
         framework/ktest.c
         "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel.c"
+        "${CMAKE_SOURCE_DIR}/ports/port_x86_64/src/gpu_intel_ggtt.c"
         ${MICRO_OS_TEST_CASES}
     )
 
-    # The Intel case links the real probe against an empty-bus PCI stub, so
-    # both the identity table and the no-card KMOD_SKIP path are exercised.
+    # The Intel case links the real probe against a PCI stub, so the shared
+    # GPU_PROBE_NONE/UNKNOWN_DEV contract and the identity table are exercised.
 
     set(MICROOS_ZLIB_DIR "${CMAKE_SOURCE_DIR}/third_party/zlib")
     set(MICROOS_ZSTD_DIR "${CMAKE_SOURCE_DIR}/third_party/zstd")

@@ -1213,21 +1213,26 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
      * on this stack. A program that returns a status goes through exit, and
      * a program that faults is taken down with 255 by the fault handler.
      *
-     * The wait is in small steps because the machine has no job control and
-     * no group of a terminal: Ctrl+C on the console of the foreground
-     * program is the one signal the port can hand it, and the console is
-     * read here, by the task that started the program. A key that is not
-     * Ctrl+C is dropped: a program that runs does not read a line, and a
-     * typeahead nobody asked for is not part of this contract.
+     * The foreground program gets its own process group and the terminal
+     * foreground, so Ctrl+C reaches the program and not the shell or init.
+     * The previous foreground group is restored when the program ends.
      *
      * A task that belongs to a job is a stage of a pipeline: the owner of
      * the job (the shell) reads the console and signals every stage at once,
      * so this wait must not take the key for itself.
      */
+    const bool own_console = (task_get_job(caller) == TASK_JOB_NONE);
+    k_u32_t old_fg = 0;
+
+    if (own_console) {
+        old_fg = k_tty_fg_pgrp();
+        (void)task_setpgid(program->pid, program->pid);
+        (void)k_tty_set_fg_pgrp(program->pid);
+    }
+
     {
         const k_u32_t step_ms = 5u;
         k_u32_t waited = 0;
-        const bool own_console = (task_get_job(caller) == TASK_JOB_NONE);
 
         for (;;) {
             /*
@@ -1283,17 +1288,26 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
             }
         }
         kerror("x86_64: the program ran past %u ms and was stopped", PORT_EXEC_WAIT_MS);
+        if (own_console) {
+            (void)k_tty_set_fg_pgrp(old_fg != 0u ? old_fg : task_get_pgid(caller));
+        }
         return -1;
     }
 
     if (rc != 0) {
         kerror("x86_64: the program did not end (%d)", rc);
+        if (own_console) {
+            (void)k_tty_set_fg_pgrp(old_fg != 0u ? old_fg : task_get_pgid(caller));
+        }
         return -1;
     }
 
     k_exec_exit(status);
     kinfo("x86-64: the program exited with %d", status & 0xFF);
 
+    if (own_console) {
+        (void)k_tty_set_fg_pgrp(old_fg != 0u ? old_fg : task_get_pgid(caller));
+    }
     return 0;
 }
 

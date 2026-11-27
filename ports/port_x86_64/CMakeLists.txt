@@ -1563,6 +1563,7 @@ add_executable(microos64
     src/vbe.c
     src/gop.c
     src/gpu_intel.c
+    src/gpu_intel_ggtt.c
     src/fb.c
     src/font_spleen.c
     src/pci.c
