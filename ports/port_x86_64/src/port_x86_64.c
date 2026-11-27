@@ -2056,6 +2056,15 @@ k_u32_t k_port_critical_depth(void)
     return g_critical_depth[cpu];
 }
 
+k_u32_t port_x86_64_critical_depth_cpu(k_u32_t cpu)
+{
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    return __atomic_load_n(&g_critical_depth[cpu], __ATOMIC_RELAXED);
+}
+
 void k_port_enter_critical(void)
 {
     k_u32_t cpu = k_port_cpu_id();

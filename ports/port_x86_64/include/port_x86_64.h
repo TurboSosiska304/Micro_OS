@@ -960,4 +960,7 @@ void port_x86_64_panic(const char *text);
 /* Write a diagnosis to COM1 without the console lock: see src/port_x86_64.c. */
 void port_x86_64_debug_write(const char *data, k_size_t len);
 
+/* The depth of the critical section of a core, for the same diagnosis. */
+k_u32_t port_x86_64_critical_depth_cpu(k_u32_t cpu);
+
 #endif /* MICRO_OS_PORT_X86_64_H */

@@ -1046,10 +1046,11 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
 
     len = snprintf(buf, sizeof(buf),
                    "\r\n[SLPDBG] sleep of %u ms over its deadline by %llu us, ticks %u/%llu, "
-                   "%u sleeper(s)\r\n",
+                   "if=%u depth=%u, %u sleeper(s)\r\n",
                    (unsigned)ms, (unsigned long long)(now - stall_deadline_us),
                    (unsigned)k_sched_ticks(), (unsigned long long)port_x86_64_ticks(),
-                   (unsigned)count);
+                   (unsigned)((port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF) != 0u),
+                   port_x86_64_critical_depth_cpu(k_cpu_id()), (unsigned)count);
     if (len > 0) {
         port_x86_64_debug_write(buf, (k_size_t)len);
     }
@@ -1067,11 +1068,13 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
         }
 
         cpu_record = k_cpu_by_id(cpu);
-        len = snprintf(
-            buf, sizeof(buf), "[SLPDBG] cpu=%u cur=%u:%s/%s rip=0x%016llx ticks=%u/%u wake=%u",
-            (unsigned)cpu, (task != NULL) ? task->pid : 0u, (task != NULL) ? task->name : "<idle>",
-            (task != NULL) ? task_state_name(task->state) : "-", (unsigned long long)rip,
-            (cpu_record != NULL) ? cpu_record->ticks : 0u, g_tick_start[cpu], g_wake_tick[cpu]);
+        len = snprintf(buf, sizeof(buf),
+                       "[SLPDBG] cpu=%u cur=%u:%s/%s rip=0x%016llx ticks=%u/%u wake=%u depth=%u",
+                       (unsigned)cpu, (task != NULL) ? task->pid : 0u,
+                       (task != NULL) ? task->name : "<idle>",
+                       (task != NULL) ? task_state_name(task->state) : "-", (unsigned long long)rip,
+                       (cpu_record != NULL) ? cpu_record->ticks : 0u, g_tick_start[cpu],
+                       g_wake_tick[cpu], port_x86_64_critical_depth_cpu(cpu));
 
         for (i = 0u; i < count && len >= 0 && (k_size_t)len < sizeof(buf) - 48u; i++) {
             if (sleepers[i].cpu != cpu) {
