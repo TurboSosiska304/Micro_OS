@@ -6,7 +6,6 @@
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
-#include "kernel/sched.h"
 
 #define PC_PAGE_SIZE PAGECACHE_PAGE_SIZE
 
@@ -40,10 +39,6 @@ static k_u64_t g_misses;
 static k_u64_t g_evictions;
 static k_mutex_t g_lock = K_MUTEX_INITIALIZER;
 static bool g_ready;
-static k_u64_t g_last_writeback_ms;
-
-#define PC_WRITEBACK_MS 1000u
-#define PC_WRITEBACK_DIRTY_MAX 16u
 
 static k_u32_t hash_key(void *fs_key, k_u32_t inode, k_u32_t page_index)
 {
@@ -718,86 +713,6 @@ int pagecache_sync_all(void)
 
     k_mutex_unlock(&g_lock);
     return rc;
-}
-
-void pagecache_tick(void)
-{
-    struct pagecache_page *p;
-    k_u64_t now;
-    k_u32_t dirty;
-    int rc = 0;
-    void *synced_fs[8];
-    const struct vfs_operations *synced_ops[8];
-    k_u32_t synced = 0;
-
-    if (k_mutex_lock(&g_lock) != 0) {
-        return;
-    }
-
-    if (!g_ready) {
-        k_mutex_unlock(&g_lock);
-        return;
-    }
-
-    dirty = count_dirty_locked();
-    now = k_sched_uptime_ms();
-    if (dirty == 0u) {
-        g_last_writeback_ms = now;
-        k_mutex_unlock(&g_lock);
-        return;
-    }
-
-    if (dirty < PC_WRITEBACK_DIRTY_MAX && now - g_last_writeback_ms < PC_WRITEBACK_MS) {
-        k_mutex_unlock(&g_lock);
-        return;
-    }
-
-    for (p = g_lru_head.lru_next; p != &g_lru_head; p = p->lru_next) {
-        if ((p->flags & PC_DIRTY) != 0u) {
-            int wrc = page_writeback(p);
-            if (wrc != 0) {
-                rc = wrc;
-            } else {
-                k_u32_t i;
-                bool seen = false;
-
-                p->flags &= (k_u16_t)~PC_DIRTY;
-                for (i = 0; i < synced; i++) {
-                    if (synced_fs[i] == p->fs_key) {
-                        seen = true;
-                        break;
-                    }
-                }
-                if (!seen && synced < 8u) {
-                    synced_fs[synced] = p->fs_key;
-                    synced_ops[synced] = p->ops;
-                    synced++;
-                }
-            }
-        }
-    }
-
-    /* Commit filesystem metadata/journal for every mount that received dirty
-     * pages. Data pages are on the medium already; without this, a sudden
-     * power loss can leave a consistent volume with an empty or stale file. */
-    {
-        k_u32_t i;
-        for (i = 0; i < synced; i++) {
-            if (synced_ops[i] != NULL && synced_ops[i]->sync != NULL) {
-                int src = synced_ops[i]->sync(synced_fs[i], 0);
-                if (src != 0 && rc == 0) {
-                    rc = src;
-                }
-            }
-        }
-    }
-
-    g_last_writeback_ms = now;
-    k_mutex_unlock(&g_lock);
-
-    if (rc != 0) {
-        kwarn("pagecache: writeback failed (%d)", rc);
-    }
 }
 
 void pagecache_invalidate(void *fs_key, k_u32_t inode)

@@ -18,7 +18,6 @@
 #include "kernel/kmod.h"
 #include "kernel/log.h"
 #include "kernel/logfile.h"
-#include "kernel/pagecache.h"
 #include "kernel/vfs.h"
 #include "kernel/port.h"
 #include "kernel/port/power.h"
@@ -378,7 +377,6 @@ static void init_task(void *arg)
         }
 
         k_logfile_tick();
-        pagecache_tick();
         k_sched_sleep_ms(100);
     }
 }

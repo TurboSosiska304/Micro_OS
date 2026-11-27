@@ -30,7 +30,6 @@
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/logfile.h"
-#include "kernel/pagecache.h"
 #include "kernel/port.h"
 #include "kernel/port/cpu.h"
 #include "kernel/root.h"
@@ -437,7 +436,6 @@ static void init_task(void *arg)
         /* The existing init loop owns the log batches: no extra task slot and
          * no writer left running when this task is signalled at shutdown. */
         k_logfile_tick();
-        pagecache_tick();
         k_sched_sleep_ms(100u);
     }
 }
