@@ -24,8 +24,11 @@ static void run_tests(void *arg)
     K_UNUSED(arg);
 
     test_version();
-    test_gpu_intel();
-    test_gpu_intel_ggtt();
+    test_wifi_8265_fw();
+    test_wifi_8265_fw_file();
+    test_wifi_8265_regs();
+    test_wifi_8265_power();
+    test_wifi_8265_attach();
     test_board();
     test_log();
     test_logfile();
@@ -96,6 +99,8 @@ static void run_tests(void *arg)
     test_initd();
     test_config();
     test_settings();
+    test_gpu_intel();
+    test_gpu_intel_ggtt();
 #if MICRO_OS_NET
     test_dhcp();
 #endif

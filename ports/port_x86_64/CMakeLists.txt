@@ -36,6 +36,7 @@ set(DEVFS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/devfs")
 set(CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/config")
 set(TELNET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/telnet")
 set(SETTINGS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/settings")
+set(WIFI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/wifi")
 
 # The second filesystem of the machine (ADR 0009). On: the boot of the root
 # reads the type of the volume out of the medium (ADR 0027), so the machine
@@ -241,6 +242,8 @@ set(SETTINGS_SOURCES
 # ESP-IDF. src/dns.c is the exception: the stack of the port asks it for every
 # name, in every image, and it is the cache the contract of K6 asks for.
 set(NET_SOURCES "${NET_DIR}/src/dns.c" "${NET_DIR}/src/dhcp.c")
+set(WIFI_SOURCES "${WIFI_DIR}/src/wifi.c" "${WIFI_DIR}/src/iwl8265_fw.c"
+                 "${WIFI_DIR}/src/iwl8265_fw_file.c" "${WIFI_DIR}/src/iwl8265_loader.c")
 
 if(MICRO_OS_X86_NET)
     list(APPEND NET_SOURCES
@@ -1567,6 +1570,7 @@ add_executable(microos64
     ${SETTINGS_SOURCES}
     ${HASH_SOURCES}
     ${NET_SOURCES}
+    ${WIFI_SOURCES}
     ${PKG_SOURCES}
     ${TELNET_SOURCES}
     src/boot64.S
@@ -1578,6 +1582,8 @@ add_executable(microos64
     src/gop.c
     src/gpu_intel.c
     src/gpu_intel_ggtt.c
+    src/wifi_8265.c
+    src/wifi.c
     src/fb.c
     src/font_spleen.c
     src/pci.c
@@ -1634,6 +1640,7 @@ target_include_directories(microos64 PRIVATE
     "${CONFIG_DIR}/include"
     "${TELNET_DIR}/include"
     "${SETTINGS_DIR}/include"
+    "${WIFI_DIR}/include"
     "${NET_DIR}/include"
     # The hash of /etc/shadow and of a signed image (components/config,
     # components/pkg): one SHA-256 for the machine.

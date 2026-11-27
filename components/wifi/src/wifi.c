@@ -21,6 +21,13 @@ static const struct wifi_storage *s_storage;
 static struct wifi_status s_status;
 static char s_ssid[WIFI_SSID_MAX];
 static char s_pass[WIFI_PASS_MAX];
+/*
+ * A read-only probe has not started the station. In particular, finding the
+ * card and loading its firmware must not make wifi_scan() or wifi_connect()
+ * possible through the ESP32-shaped core. The x86-64 port exposes its phase
+ * through its own `wifi` command until a radio backend really exists.
+ */
+static bool s_probe_only;
 static bool s_started;
 
 /*
@@ -132,6 +139,10 @@ int wifi_start(void)
         return WIFI_NO_RADIO;
     }
 
+    if (s_probe_only) {
+        return WIFI_NO_RADIO;
+    }
+
     if (s_started) {
         return WIFI_OK;
     }
@@ -179,6 +190,10 @@ int wifi_stop(void)
 int wifi_connect(const char *ssid, const char *pass)
 {
     int rc;
+
+    if (s_probe_only) {
+        return WIFI_NO_RADIO;
+    }
 
     if (s_radio == NULL || s_radio->connect == NULL) {
         return WIFI_NO_RADIO;

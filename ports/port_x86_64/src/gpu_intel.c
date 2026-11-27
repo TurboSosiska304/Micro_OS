@@ -15,6 +15,12 @@
  */
 #include "gpu_intel.h"
 
+#ifdef MICRO_OS_HOST_TEST
+#include "test_x86_64_ticks.h"
+#else
+#define wifi_test_ticks port_x86_64_ticks
+#endif
+
 #include "kernel/blit.h"
 #include "kernel/errno.h"
 #include "kernel/fb.h"
@@ -543,13 +549,13 @@ static bool gpu_intel_wait_frame(const struct gpu_intel_info *info)
     /* Kaby Lake uses the G4X full frame counter, not the split PIPEFRAME pair. */
     k_u32_t offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PIPE_FRAME_BASE);
     k_u32_t before = gpu_intel_mmio_read(offset);
-    k_u64_t deadline = port_x86_64_ticks() + 100u;
+    k_u64_t deadline = wifi_test_ticks() + 100u;
 
     do {
         if (gpu_intel_mmio_read(offset) != before) {
             return true;
         }
-    } while (port_x86_64_ticks() < deadline);
+    } while (wifi_test_ticks() < deadline);
     return false;
 }
 
