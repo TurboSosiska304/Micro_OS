@@ -477,6 +477,7 @@ int vfs_mount_root_writes(const char *point, const char *device)
     const struct k_blockdev *dev;
     struct k_volume_id id;
     const char *why = NULL;
+    int rc;
 
     if (caller_uid() != VFS_UID) {
         return KERR_PERM;
@@ -516,10 +517,11 @@ int vfs_mount_root_writes(const char *point, const char *device)
         return KERR_ROFS;
     }
 
-    if (k_blockdev_writes(dev, true) != 0) {
+    rc = k_blockdev_writes(dev, true);
+    if (rc != 0) {
         slot->rw = false;
         (void)k_blockdev_writes(dev, false);
-        kwarn("root: %s cannot open its writes, the root stays read-only", device);
+        kwarn("root: %s cannot open its writes (error %d), the root stays read-only", device, rc);
         return KERR_ROFS;
     }
 
