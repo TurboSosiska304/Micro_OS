@@ -1682,6 +1682,7 @@ target_compile_definitions(microos64 PRIVATE
     # The ring of a pipe (kernel/kfile.h): 64 KiB, the block of one call of
     # the system, and the memory comes from kmm_alloc() with the pipe.
     KFILE_PIPE_SIZE=65536
+    PAGECACHE_MAX_BYTES=8388608
     MICRO_OS_NET=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP=$<BOOL:${MICRO_OS_X86_NET}>
     MICRO_OS_NET_HTTP_SERVER=$<BOOL:${MICRO_OS_X86_NET}>

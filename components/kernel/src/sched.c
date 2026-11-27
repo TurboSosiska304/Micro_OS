@@ -471,8 +471,16 @@ void k_sched_tick(void)
 
 void k_sched_set_quantum(k_u32_t ticks)
 {
+    k_size_t i;
+
     sched_lock();
     g_quantum = (ticks < SCHED_QUANTUM_MIN) ? SCHED_QUANTUM_MIN : ticks;
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = task_get_by_index_unlocked(i);
+        if (t != NULL && t->quantum_left > g_quantum) {
+            t->quantum_left = g_quantum;
+        }
+    }
     sched_unlock();
 }
 

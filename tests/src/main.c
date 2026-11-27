@@ -34,6 +34,7 @@ static void run_tests(void *arg)
     test_blockdev();
     test_blockdev_cache();
     test_blockdev_fault();
+    test_pagecache();
     test_blockdev_view();
     test_partition();
     test_root();

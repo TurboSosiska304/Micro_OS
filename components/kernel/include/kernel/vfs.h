@@ -130,6 +130,27 @@ struct vfs_operations {
     int (*read)(void *ctx, struct vfs_file *file, void *buf, k_size_t size);
     int (*write)(void *ctx, struct vfs_file *file, const void *buf, k_size_t size);
     /*
+     * Read and write one page of the file at a page-aligned `offset`. The
+     * page cache calls them on a miss and on a dirty eviction; the cursor
+     * of the descriptor is not moved. `readpage` fills the whole page with
+     * up to `size` bytes from the file and returns the number of bytes it
+     * put there, 0 at or beyond the end, or a negative error. `writepage`
+     * writes `size` bytes at `offset` and returns the bytes written or a
+     * negative error. A filesystem that leaves them empty is not served
+     * through the page cache.
+     */
+    int (*readpage)(void *ctx, k_u32_t inode, k_u64_t offset, void *buf, k_size_t size);
+    int (*writepage)(void *ctx, k_u32_t inode, k_u64_t offset, const void *buf, k_size_t size);
+    /*
+     * Flush the file to the medium as far as the filesystem can: the page
+     * cache has already pushed the dirty pages through writepage, and this
+     * call gives the filesystem the chance to persist its own metadata. It
+     * is not a guarantee of the medium (the second half of the journal is
+     * that guarantee); a filesystem without extra work leaves it empty and
+     * the sync of the page cache is enough.
+     */
+    int (*sync)(void *ctx, k_u32_t inode);
+    /*
      * A control command of an open file (ADR 0028). The request and its
      * argument are the numbers of the ABI; a filesystem that has no command
      * of its own leaves the field empty and the caller learns KERR_INVAL. A
@@ -423,6 +444,8 @@ int vfs_truncate(struct vfs_file *file, k_u64_t size);
  */
 int vfs_fsync(struct vfs_file *file);
 int vfs_close(struct vfs_file *file);
+/* Flush the dirty pages of every file in the page cache. */
+int vfs_sync(void);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 /*
  * The entries of a directory that was opened with VFS_O_DIRECTORY. The
