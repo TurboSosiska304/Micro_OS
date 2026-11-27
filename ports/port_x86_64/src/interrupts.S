@@ -162,6 +162,14 @@ isr_exception_common:
     popq %r15
 
     addq $16, %rsp /* the vector and the error code, not part of the frame */
+    testb $3, 8(%rsp)
+    jz 2f
+    cmpq $0x23, 32(%rsp)
+    je 2f
+    cmpq $0x3b, 32(%rsp)
+    je 2f
+    movq $0x23, 32(%rsp)
+2:
     iretq
 .size isr_exception_common, . - isr_exception_common
 
@@ -233,6 +241,14 @@ isr_exception_common:
     popq %r13
     popq %r14
     popq %r15
+    testb $3, 8(%rsp)
+    jz 2f
+    cmpq $0x23, 32(%rsp)
+    je 2f
+    cmpq $0x3b, 32(%rsp)
+    je 2f
+    movq $0x23, 32(%rsp)
+2:
     iretq
 .size \name, . - \name
 .endm
@@ -542,6 +558,19 @@ ksys_return_iret:
     popq %r13
     popq %r14
     popq %r15
+    /* A frame of ring 3 must have a valid data selector in SS. On real
+     * metal a corrupted slot (seen as 0x30, the TSS high half) makes
+     * iretq raise #GP and stops the machine; clamp to the user data
+     * selector so the task faults cleanly instead of taking the kernel
+     * down. The cmpq/movq are memory-immediate: no register is clobbered. */
+    testb $3, 8(%rsp)
+    jz 1f
+    cmpq $0x23, 32(%rsp)
+    je 1f
+    cmpq $0x3b, 32(%rsp)
+    je 1f
+    movq $0x23, 32(%rsp)
+1:
     iretq
 
 /*
