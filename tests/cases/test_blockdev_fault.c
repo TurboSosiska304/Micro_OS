@@ -128,6 +128,8 @@ void test_blockdev_fault(void)
     KT_CHECK_INT_EQ(g_fault.dev.ops->write(g_fault.dev.ctx, 7, second, 1), 0);
     KT_CHECK(memcmp(g_medium.data[7], first, sizeof(first)) == 0);
     KT_CHECK_INT_EQ(g_fault.stats.dropped, 1);
+    KT_CHECK_INT_EQ(g_fault.dev.ops->sync(g_fault.dev.ctx), KERR_IO);
+    KT_CHECK(memcmp(g_stable + (k_size_t)7 * FAULT_SECTOR_SIZE, first, sizeof(first)) == 0);
 
     /* The cut happens after the command: volatile has the new byte, stable
      * keeps the old one, and the dead bus answers no further command. */

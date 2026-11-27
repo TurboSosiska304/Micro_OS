@@ -468,6 +468,8 @@ static int journal_header_read(struct mfs_journal_header *header)
  */
 static int journal_flush(void)
 {
+    struct mfs_journal_header committed;
+    k_u32_t map_crc;
     k_u32_t slot;
     int rc;
 
@@ -495,6 +497,52 @@ static int journal_flush(void)
         return rc;
     }
 
+    /*
+     * A device may lose a write and still answer zero. Check every slot before
+     * the commit names the transaction: otherwise a stale slot header can send
+     * its new image to an unrelated home, and a lost image is discovered only
+     * after earlier homes have already been replaced.
+     */
+    map_crc = crc32_start();
+
+    for (slot = 0; slot < g.txn_slots; slot++) {
+        struct mfs_journal_slot entry;
+        k_u8_t block[MFS_BLOCK_SIZE];
+        k_u32_t words[3];
+
+        rc = dev_read(journal_slot_header_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        memcpy(&entry, block, sizeof(entry));
+
+        rc = dev_read(journal_slot_image_block(slot), block);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
+        if (entry.sequence != g.journal_sequence || entry.home >= g.sb.total_blocks ||
+            entry.crc != crc32(block, MFS_BLOCK_SIZE)) {
+            kerror("mfs: the slot %u of the journal is not the one that was written",
+                   (unsigned)slot);
+            g.txn_failed = true;
+            return MFS_EIO;
+        }
+
+        words[0] = entry.home;
+        words[1] = entry.sequence;
+        words[2] = entry.crc;
+        map_crc = crc32_feed(map_crc, words, sizeof(words));
+    }
+
+    if (crc32_finish(map_crc) != crc32_finish(g.txn_map_crc)) {
+        kerror("mfs: the slots of the journal do not match the transaction (%08x != %08x)",
+               (unsigned)crc32_finish(map_crc), (unsigned)crc32_finish(g.txn_map_crc));
+        g.txn_failed = true;
+        return MFS_EIO;
+    }
+
     rc = journal_header_write(MFS_JOURNAL_STATE_COMMITTED, g.journal_sequence, g.txn_slots,
                               crc32_finish(g.txn_map_crc));
     if (rc != MFS_OK) {
@@ -507,6 +555,17 @@ static int journal_flush(void)
     rc = dev_sync();
     if (rc != MFS_OK) {
         return rc;
+    }
+
+    /* Read the commit back before touching a home. A lost header write must
+     * not turn into an unjournaled, possibly partial transaction. */
+    rc = journal_header_read(&committed);
+    if (rc != MFS_OK || committed.state != MFS_JOURNAL_STATE_COMMITTED ||
+        committed.sequence != g.journal_sequence || committed.slots != g.txn_slots ||
+        committed.map_crc != crc32_finish(g.txn_map_crc)) {
+        kerror("mfs: the commit of the journal did not reach the medium");
+        g.txn_failed = true;
+        return MFS_EIO;
     }
 
     for (slot = 0; slot < g.txn_slots; slot++) {
@@ -523,12 +582,6 @@ static int journal_flush(void)
         rc = dev_read(journal_slot_image_block(slot), block);
         if (rc != MFS_OK) {
             return rc;
-        }
-
-        if (entry.crc != crc32(block, MFS_BLOCK_SIZE) || entry.home >= g.sb.total_blocks) {
-            kerror("mfs: the slot %u of the journal is not the one that was written",
-                   (unsigned)slot);
-            return MFS_EIO;
         }
 
         rc = dev_write(entry.home, block);
@@ -848,9 +901,15 @@ static int journal_replay(void)
         }
 
         if (entry.crc != crc32(block, MFS_BLOCK_SIZE)) {
+            /* The commit was checked before any home was touched. A bad
+             * image therefore belongs to a transaction that can still be
+             * rolled back as a whole; refusing the mount would keep the
+             * machine from repairing the journal after a lost write. */
             kerror("mfs: the image of the slot %u is not the one that was committed",
                    (unsigned)slot);
-            return MFS_EIO;
+            (void)journal_header_write(MFS_JOURNAL_STATE_EMPTY, header.sequence, 0, 0);
+            (void)dev_sync();
+            return MFS_OK;
         }
 
         rc = dev_write(entry.home, block);
@@ -1649,8 +1708,12 @@ static int file_release_chain(k_u32_t first)
 
     for (i = 0; i < count; i++) {
         k_u32_t next = MFS_NEXT_NONE;
+        int rc = chain_next(block, &next);
 
-        chain_next(block, &next);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+
         block_release(block);
 
         if (next == MFS_NEXT_NONE) {
@@ -3154,7 +3217,7 @@ static int mfs_fsync_locked(struct mfs_file *file)
         return rc;
     }
 
-    return mfs_flush_medium();
+    return MFS_OK;
 }
 
 /* --- the pieces the repair pass of the check uses --- */
@@ -4378,12 +4441,16 @@ static int mfs_rename_locked(const char *from, const char *to)
      * name of a directory that somebody still has open would take the tree
      * below it with it, and a name that is a file is what an install
      * replaces. */
-    if (path_lookup(to, &replaced, NULL, &replaced_inode) == MFS_OK) {
+    rc = path_lookup(to, &replaced, NULL, &replaced_inode);
+    if (rc == MFS_OK) {
         if ((replaced.flags & MFS_INODE_DIR) != 0) {
             return MFS_EISDIR;
         }
 
         replacing = true;
+    } else if (rc != MFS_ENOENT) {
+        /* A medium that could not answer is not an absent destination. */
+        return rc;
     }
 
     same_dir = strcmp(from_dir_path, to_dir_path) == 0;
@@ -4833,7 +4900,25 @@ int mfs_fsync(struct mfs_file *file)
     int rc;
 
     mfs_lock();
+    mfs_txn_begin();
     rc = mfs_fsync_locked(file);
+
+    if (rc == MFS_OK) {
+        int commit = mfs_txn_commit();
+
+        if (commit != MFS_OK) {
+            rc = commit;
+        }
+    } else {
+        mfs_txn_abort();
+    }
+
+    /* The inode and the allocation map are one transaction. Only after that
+     * transaction is durable does the device's fsync barrier run. */
+    if (rc == MFS_OK) {
+        rc = mfs_flush_medium();
+    }
+
     mfs_unlock();
 
     return rc;

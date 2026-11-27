@@ -36,6 +36,7 @@ void test_fuzz(void);
 void test_mfs(void);
 void test_mfs_format(void);
 void test_mfs_journal(void);
+void test_mfs_fault(void);
 void test_mfs_persistence(void);
 void test_mfs_repair(void);
 void test_mfs_many(void);

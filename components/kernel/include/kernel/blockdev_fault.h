@@ -63,7 +63,9 @@ struct k_blockdev_fault_stats {
  *
  * The first write of a reorder pair is held until the second arrives. A sync
  * drains the held write before committing, because a device that reordered
- * writes across its own durability barrier would make fsync a lie.
+ * writes across its own durability barrier would make fsync a lie. A dropped
+ * write returns success but makes the medium unproven: the next sync or flush
+ * fails until a reboot, so no surrounding transaction is published over it.
  */
 struct k_blockdev_fault {
     struct k_blockdev dev;
@@ -75,7 +77,9 @@ struct k_blockdev_fault {
     struct k_blockdev_fault_plan plan;
     struct k_blockdev_fault_stats stats;
     k_u8_t trace[K_BLOCKDEV_FAULT_TRACE_MAX];
+    k_u32_t trace_sector[K_BLOCKDEV_FAULT_TRACE_MAX];
     bool power_lost;
+    bool write_lost;
     bool held;
     k_u32_t held_sector;
     k_size_t held_count;
@@ -98,6 +102,9 @@ void k_blockdev_fault_reboot(struct k_blockdev_fault *fault);
 
 /* The kind of a recorded operation, or zero when the number is out of range. */
 k_u32_t k_blockdev_fault_kind_at(const struct k_blockdev_fault *fault, k_u32_t operation);
+
+/* The first sector of a recorded operation, or zero for a barrier. */
+k_u32_t k_blockdev_fault_sector_at(const struct k_blockdev_fault *fault, k_u32_t operation);
 
 #endif /* K_BLOCKDEV_TEST */
 

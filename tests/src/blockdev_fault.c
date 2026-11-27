@@ -18,12 +18,13 @@ static bool span_ok(const struct k_blockdev_fault *fault, k_u32_t sector, k_size
     return sector < fault->medium->sectors && count <= fault->medium->sectors - sector;
 }
 
-static k_u32_t operation_begin(struct k_blockdev_fault *fault, k_u32_t kind)
+static k_u32_t operation_begin(struct k_blockdev_fault *fault, k_u32_t kind, k_u32_t sector)
 {
     k_u32_t operation;
 
     if (fault->stats.operations < K_BLOCKDEV_FAULT_TRACE_MAX) {
         fault->trace[fault->stats.operations] = (k_u8_t)kind;
+        fault->trace_sector[fault->stats.operations] = sector;
     } else {
         fault->stats.trace_overflow = true;
     }
@@ -117,7 +118,7 @@ static int fault_read(void *ctx, k_u32_t sector, void *buf, k_size_t count)
         return KERR_TIMEOUT;
     }
 
-    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_READ);
+    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_READ, sector);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
         return rc;
@@ -142,7 +143,7 @@ static int fault_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
         return KERR_TIMEOUT;
     }
 
-    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_WRITE);
+    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_WRITE, sector);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
         return rc;
@@ -151,6 +152,7 @@ static int fault_write(void *ctx, k_u32_t sector, const void *buf, k_size_t coun
     if ((fault->plan.modes & K_BLOCKDEV_FAULT_DROP_WRITE) != 0u && operation == fault->plan.at) {
         fault->stats.injected++;
         fault->stats.dropped++;
+        fault->write_lost = true;
         operation_cut(fault, operation);
         return KERR_NONE;
     }
@@ -205,7 +207,7 @@ static int fault_erase(void *ctx, k_u32_t sector, k_size_t count)
         return KERR_TIMEOUT;
     }
 
-    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_ERASE);
+    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_ERASE, sector);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
         return rc;
@@ -226,10 +228,18 @@ static int barrier_apply(struct k_blockdev_fault *fault, k_u32_t kind)
         return KERR_TIMEOUT;
     }
 
-    operation = operation_begin(fault, kind);
+    operation = operation_begin(fault, kind, 0);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
         return rc;
+    }
+
+    /* The write lied successfully, but the medium is no longer proven
+     * durable. A barrier must not publish the surrounding transaction over a
+     * block the device knows it lost. A reboot clears the condition with the
+     * volatile image. */
+    if (fault->write_lost) {
+        return KERR_IO;
     }
 
     /* The barrier drains a reordered write before it commits the image. */
@@ -274,7 +284,7 @@ static int fault_writes(void *ctx, bool open)
         return KERR_TIMEOUT;
     }
 
-    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_WRITES);
+    operation = operation_begin(fault, K_BLOCKDEV_FAULT_OP_WRITES, 0);
     rc = operation_error(fault, operation);
     if (rc != KERR_NONE) {
         return rc;
@@ -350,8 +360,10 @@ int k_blockdev_fault_arm(struct k_blockdev_fault *fault, const struct k_blockdev
     held_free(fault);
     memset(&fault->stats, 0, sizeof(fault->stats));
     memset(fault->trace, 0, sizeof(fault->trace));
+    memset(fault->trace_sector, 0, sizeof(fault->trace_sector));
     fault->plan = *plan;
     fault->power_lost = false;
+    fault->write_lost = false;
 
     return 0;
 }
@@ -376,6 +388,16 @@ k_u32_t k_blockdev_fault_kind_at(const struct k_blockdev_fault *fault, k_u32_t o
     }
 
     return fault->trace[operation - 1u];
+}
+
+k_u32_t k_blockdev_fault_sector_at(const struct k_blockdev_fault *fault, k_u32_t operation)
+{
+    if (fault == NULL || operation == 0u || operation > fault->stats.operations ||
+        operation > K_BLOCKDEV_FAULT_TRACE_MAX) {
+        return 0;
+    }
+
+    return fault->trace_sector[operation - 1u];
 }
 
 #endif /* K_BLOCKDEV_TEST */
