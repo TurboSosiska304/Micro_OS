@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "kernel/clock.h"
+#include "kernel/errno.h"
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
@@ -481,12 +482,28 @@ static int journal_flush(void)
         return MFS_OK;
     }
 
+    /*
+     * The order is the contract (the ADR of the durable order): journal slots
+     * on the medium, then data on the medium, then the commit header on the
+     * medium. The slots were written by journal_add and the data by dev_write
+     * to home; on a write-back cache they may still be dirty, so this barrier
+     * brings every write that came before the commit to the medium before the
+     * commit header is written.
+     */
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
     rc = journal_header_write(MFS_JOURNAL_STATE_COMMITTED, g.journal_sequence, g.txn_slots,
                               crc32_finish(g.txn_map_crc));
     if (rc != MFS_OK) {
         return rc;
     }
 
+    /* The commit barrier: the header that says "committed" reaches the medium
+     * before a single home block is touched. A cut before this sync leaves the
+     * transaction uncommitted and the recovery forgets it. */
     rc = dev_sync();
     if (rc != MFS_OK) {
         return rc;
@@ -520,6 +537,8 @@ static int journal_flush(void)
         }
     }
 
+    /* The checkpoint barrier: the home blocks are on the medium, so clearing
+     * the header cannot expose a half-applied transaction. */
     rc = dev_sync();
     if (rc != MFS_OK) {
         return rc;
@@ -3077,6 +3096,67 @@ static int mfs_sync_locked(void)
     return dev_sync();
 }
 
+/*
+ * The medium guarantee of fsync: the block device flushes its volatile cache
+ * so that the bytes a call returned to the filesystem are on the medium, not
+ * only in the device's write-back cache. A device without that guarantee
+ * answers MFS_ENOTSUP, and a caller that pretends otherwise lies.
+ */
+static int mfs_flush_medium(void)
+{
+    int rc;
+
+    if (g.dev == NULL) {
+        return MFS_EINVAL;
+    }
+
+    rc = k_blockdev_flush(g.dev);
+    if (rc == KERR_NOTSUP) {
+        return MFS_ENOTSUP;
+    }
+
+    return rc == 0 ? MFS_OK : MFS_EIO;
+}
+
+static int mfs_fsync_locked(struct mfs_file *file)
+{
+    struct mfs_inode inode;
+    int rc;
+
+    if (!g.mounted || file == NULL) {
+        return MFS_EINVAL;
+    }
+
+    rc = file_refresh(file);
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    if (file->dirty || file->pending) {
+        rc = inode_read(file->inode, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        inode.size = file->size;
+        inode.first_block = file->first_block;
+        inode.flags &= ~MFS_INODE_PENDING;
+        inode_stamp(&inode);
+        rc = inode_write(file->inode, &inode);
+        if (rc != MFS_OK) {
+            return rc;
+        }
+        file->dirty = false;
+        file->pending = false;
+    }
+
+    rc = mfs_sync_locked();
+    if (rc != MFS_OK) {
+        return rc;
+    }
+
+    return mfs_flush_medium();
+}
+
 /* --- the pieces the repair pass of the check uses --- */
 
 /*
@@ -3651,6 +3731,18 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
         return rc;
     }
 
+    /*
+     * The new data block must be on the medium before any chain link points
+     * to it: a cut between the link and the block would leave a chain that
+     * follows a pointer to garbage. The barrier is explicit (the durable
+     * order: data before metadata that names it).
+     */
+    rc = dev_sync();
+    if (rc != MFS_OK) {
+        block_release(block);
+        return rc;
+    }
+
     if (file->first_block == MFS_NEXT_NONE) {
         /* The first block of the file: the chain has a head that the
          * cursor of an earlier chain does not name. */
@@ -3689,6 +3781,15 @@ static int file_grow(struct mfs_file *file, k_u32_t *new_block)
     }
 
     rc = chain_set_next(last, block);
+    if (rc != MFS_OK) {
+        block_release(block);
+        return rc;
+    }
+
+    /* The chain link is on the medium before the write proceeds: a cut here
+     * leaves a longer chain but the file is still a draft (PENDING) and the
+     * recovery removes it. */
+    rc = dev_sync();
     if (rc != MFS_OK) {
         block_release(block);
         return rc;
@@ -4722,6 +4823,17 @@ int mfs_sync(void)
 
     mfs_lock();
     rc = mfs_sync_locked();
+    mfs_unlock();
+
+    return rc;
+}
+
+int mfs_fsync(struct mfs_file *file)
+{
+    int rc;
+
+    mfs_lock();
+    rc = mfs_fsync_locked(file);
     mfs_unlock();
 
     return rc;

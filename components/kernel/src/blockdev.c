@@ -827,6 +827,44 @@ static int cache_sync(void *ctx)
     return rc;
 }
 
+static int cache_flush(void *ctx)
+{
+    struct k_blockdev_cache *cache = ctx;
+    const struct k_blockdev *dev = cache->owner;
+    int rc = 0;
+
+    if (k_mutex_lock(&g_blockdev_lock) == 0) {
+        if (cache->live && cache_flush_all(cache) != 0) {
+            rc = -1;
+        }
+
+        k_mutex_unlock(&g_blockdev_lock);
+    }
+
+    if (rc != 0) {
+        return -1;
+    }
+
+    if (dev->ops->flush != NULL) {
+        rc = dev->ops->flush(dev->ctx);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc == KERR_NOTSUP) {
+            return KERR_NOTSUP;
+        }
+        return -1;
+    }
+
+    if (dev->ops->sync != NULL) {
+        return dev->ops->sync(dev->ctx) == 0 ? 0 : -1;
+    }
+
+    /* No flush and no sync: the device writes through, there is nothing to
+     * wait for and the bytes are already on the medium. */
+    return 0;
+}
+
 /*
  * The door of the writes crosses the cache: the mount is above the cache and
  * the controller is below it, and the sector the cache holds has to be
@@ -954,6 +992,7 @@ static int blockdev_add(const struct k_blockdev *dev, bool cached, bool write_ba
             cache->ops.write = cache_write;
             cache->ops.erase = dev->ops->erase != NULL ? cache_erase : NULL;
             cache->ops.sync = dev->ops->sync != NULL ? cache_sync : NULL;
+            cache->ops.flush = cache_flush;
             cache->ops.writes = dev->ops->writes != NULL ? cache_writes : NULL;
             cache->view.ops = &cache->ops;
 
@@ -1195,6 +1234,33 @@ int k_blockdev_sync_all(void)
     return rc;
 }
 
+int k_blockdev_flush(const struct k_blockdev *dev)
+{
+    int rc;
+
+    if (dev == NULL || dev->ops == NULL) {
+        return KERR_INVAL;
+    }
+
+    if (dev->ops->flush != NULL) {
+        rc = dev->ops->flush(dev->ctx);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc == KERR_NOTSUP) {
+            return KERR_NOTSUP;
+        }
+        return KERR_IO;
+    }
+
+    if (dev->ops->sync != NULL) {
+        return dev->ops->sync(dev->ctx) == 0 ? 0 : KERR_IO;
+    }
+
+    /* No volatile cache to flush: the write reached the medium at the call. */
+    return 0;
+}
+
 const struct k_blockdev *k_blockdev_find(const char *name)
 {
     const struct k_blockdev *found = NULL;
@@ -1342,6 +1408,13 @@ static int view_sync(void *ctx)
     return view->medium->ops->sync(view->medium->ctx);
 }
 
+static int view_flush(void *ctx)
+{
+    struct k_blockdev_view *view = ctx;
+
+    return k_blockdev_flush(view->medium);
+}
+
 /* The door of the writes is the medium's: a view is a way of reading and
  * writing the same bytes, not a medium with a rule of its own. */
 static int view_writes(void *ctx, bool open)
@@ -1382,6 +1455,7 @@ int k_blockdev_view_open(struct k_blockdev_view *view, const struct k_blockdev *
     view->ops.write = view_write;
     view->ops.erase = (medium->ops->erase != NULL) ? view_erase : NULL;
     view->ops.sync = (medium->ops->sync != NULL) ? view_sync : NULL;
+    view->ops.flush = view_flush;
     view->ops.writes = (medium->ops->writes != NULL) ? view_writes : NULL;
 
     view->dev.name = medium->name;

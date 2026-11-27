@@ -151,6 +151,13 @@ struct vfs_operations {
      */
     int (*truncate)(void *ctx, struct vfs_file *file, k_u64_t size);
     int (*close)(void *ctx, struct vfs_file *file);
+    /*
+     * Bring the data and the metadata of an open file to the medium, so that
+     * a power cut after the call returns keeps the bytes the file had at the
+     * call. A filesystem that cannot make that promise refuses with KERR_NOTSUP
+     * instead of answering success for a write that may still be in a cache.
+     */
+    int (*fsync)(void *ctx, struct vfs_file *file);
     int (*list)(void *ctx, const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
     /*
      * The next entries of an open directory. The position lives in the
@@ -408,6 +415,13 @@ int vfs_ioctl(struct vfs_file *file, k_u32_t request, k_u64_t arg);
  * format of the filesystem is its own refusal.
  */
 int vfs_truncate(struct vfs_file *file, k_u64_t size);
+/*
+ * Bring the data and the metadata of an open file to the medium. A power cut
+ * after the call returns KERR_NONE keeps the bytes the file had at the call;
+ * a filesystem or a medium that cannot make that promise answers KERR_NOTSUP
+ * and not a pretended success.
+ */
+int vfs_fsync(struct vfs_file *file);
 int vfs_close(struct vfs_file *file);
 int vfs_list(const char *path, struct vfs_dirent *out, k_size_t max, k_size_t *count);
 /*

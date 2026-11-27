@@ -640,6 +640,30 @@ static k_ssize_t sys_close(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg
     return kfile_close(self, (int)fd);
 }
 
+static k_ssize_t sys_fsync(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
+                           ksys_arg_t a4, ksys_arg_t a5)
+{
+    struct kfile *file = fd_get(fd);
+
+    K_UNUSED(a1);
+    K_UNUSED(a2);
+    K_UNUSED(a3);
+    K_UNUSED(a4);
+    K_UNUSED(a5);
+
+    if (file == NULL) {
+        return KERR_BADF;
+    }
+
+    /* A pipe is not a file of a volume: nothing of it can be brought to a
+     * medium, and the answer is KERR_INVAL as in POSIX. */
+    if (file->kind == KFILE_PIPE) {
+        return KERR_INVAL;
+    }
+
+    return vfs_fsync(&file->file);
+}
+
 static k_ssize_t sys_pipe(ksys_arg_t fds, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                           ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -3193,6 +3217,7 @@ void ksys_init(void)
     ksys_register(KSYS_GETRUSAGE, "getrusage", sys_getrusage);
     ksys_register(KSYS_GETPGID, "getpgid", sys_getpgid);
     ksys_register(KSYS_SETPGID, "setpgid", sys_setpgid);
+    ksys_register(KSYS_FSYNC, "fsync", sys_fsync);
 }
 
 /* --- the wrappers --- */
@@ -3217,6 +3242,11 @@ int ksys_open(const char *path, int flags)
 int ksys_close(int fd)
 {
     return (int)ksys_call(KSYS_CLOSE, (ksys_arg_t)fd, 0, 0, 0, 0, 0);
+}
+
+int ksys_fsync(int fd)
+{
+    return (int)ksys_call(KSYS_FSYNC, (ksys_arg_t)fd, 0, 0, 0, 0, 0);
 }
 
 int ksys_stat(const char *path, void *buf)
