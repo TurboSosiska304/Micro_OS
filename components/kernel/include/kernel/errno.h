@@ -49,6 +49,8 @@
  */
 #define KERR_MFILE (-24) /* too many open files */
 #define KERR_NOSPC (-28) /* no space left on device */
+/* A device did not finish the command before the budget of its driver. */
+#define KERR_TIMEOUT (-110)
 /* The volume is mounted, or asked for a mount, without the right to write:
  * a disk this system did not format, or one no mount has asked about yet
  * (ADR 0041 §2). */

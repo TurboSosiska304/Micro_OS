@@ -544,6 +544,11 @@ COMMANDS += ["ls /many", "tree /many", "rm -r /many"]
 # task never splits it, and the answers can be separated by it.
 PROMPT = "microos> "
 
+
+def prompt_count(text: str) -> int:
+    """The shell prompts in `text`, not prompt text inside a logged line."""
+    return len(re.findall(r"(?m)^microos> ", text))
+
 # What the kernel has to say before the shell exists. The banner is the proof
 # that the whole chain works: the loader, the switch to long mode, the
 # console of COM1, the contract of the port and the boot of the kernel.
@@ -1101,13 +1106,16 @@ def run_machine(loader: str, kernel: str, image: str, timeout: float, commands: 
 
             # One command per prompt: the shell prints the prompt before it
             # reads, so the line is written only when the shell is waiting.
-            while sent < len(lines) and text.count(PROMPT) > sent:
+            # A prompt saved in /etc/run.log is file content and must not send
+            # the next command early.
+            prompts = prompt_count(text)
+            while sent < len(lines) and prompts > sent:
                 process.stdin.write((lines[sent] + "\n").encode("ascii"))
                 process.stdin.flush()
                 sent += 1
 
             # The prompt after the last command means its answer is done.
-            if text.count(PROMPT) > len(lines):
+            if prompts > len(lines):
                 break
     finally:
         process.terminate()
@@ -1440,9 +1448,11 @@ def check(output: str) -> list:
         "the task substrate of the port is not there",
     )
 
-    # The answers, separated by the prompt. The echo of the typed line is
-    # part of the block; the checks below look for the answer itself.
-    blocks = output.split(PROMPT)[1:]
+    # The answers, separated by a prompt at the start of a line. The echo of
+    # the typed line is part of the block; the checks below look for the answer
+    # itself. A logged console line may contain the text of a prompt after
+    # "/etc/run.log:", and that is file content, not the shell asking for more.
+    blocks = re.split(r"(?m)^microos> ", output)[1:]
 
     def answer(command: str, occurrence: int = 0) -> str:
         """The answer of one command of the list, empty when it did not run.
