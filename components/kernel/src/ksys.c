@@ -1365,28 +1365,6 @@ static k_ssize_t sys_ftruncate(ksys_arg_t fd, ksys_arg_t size, ksys_arg_t a2, ks
     return vfs_truncate(&file->file, (k_u64_t)size);
 }
 
-static k_ssize_t sys_fsync(ksys_arg_t fd, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
-                           ksys_arg_t a4, ksys_arg_t a5)
-{
-    struct kfile *file = fd_get(fd);
-
-    K_UNUSED(a1);
-    K_UNUSED(a2);
-    K_UNUSED(a3);
-    K_UNUSED(a4);
-    K_UNUSED(a5);
-
-    if (file == NULL) {
-        return KERR_BADF;
-    }
-
-    if (file->kind == KFILE_PIPE) {
-        return KERR_INVAL;
-    }
-
-    return vfs_fsync(&file->file);
-}
-
 static k_ssize_t sys_unlink(ksys_arg_t path, ksys_arg_t a1, ksys_arg_t a2, ksys_arg_t a3,
                             ksys_arg_t a4, ksys_arg_t a5)
 {
@@ -3193,7 +3171,6 @@ void ksys_init(void)
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
     ksys_register(KSYS_RENAME, "rename", sys_rename);
     ksys_register(KSYS_FTRUNCATE, "ftruncate", sys_ftruncate);
-    ksys_register(KSYS_FSYNC, "fsync", sys_fsync);
     ksys_register(KSYS_GETUID, "getuid", sys_getuid);
     ksys_register(KSYS_GETEUID, "geteuid", sys_geteuid);
     ksys_register(KSYS_GETGID, "getgid", sys_getgid);
@@ -3290,11 +3267,6 @@ int ksys_ftruncate(int fd, k_u64_t size)
     }
 
     return (int)ksys_call(KSYS_FTRUNCATE, (ksys_arg_t)fd, (ksys_arg_t)size, 0, 0, 0, 0);
-}
-
-int ksys_fsync(int fd)
-{
-    return (int)ksys_call(KSYS_FSYNC, (ksys_arg_t)fd, 0, 0, 0, 0, 0);
 }
 
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count)

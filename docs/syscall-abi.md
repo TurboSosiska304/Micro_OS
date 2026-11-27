@@ -158,7 +158,6 @@ chose.
 | 51 | `chgrp` | `path, group` | 0, or an error |
 | 52 | `getpgid` | `pid` | the process group of `pid` (0 for the caller), or an error |
 | 53 | `setpgid` | `pid, pgid` | 0, or an error |
-| 54 | `fsync` | `fd` | 0, or an error |
 
 The numbers 0 to 22 are frozen, 23 to 26 were the next free ones; pipes took
 27 and 28 (ADR 0014), signals the three after them (ADR 0015), the limits of
@@ -856,15 +855,6 @@ now, and so do procfs and devfs: the call is honest about what the volume can
 do instead of pretending that a cut happened. The library of a program has
 `int ftruncate(int fd, long long size)` in `components/libc/user`, in the
 shape of POSIX (0 or -1 with `errno`).
-
-## The flush of a file
-
-`fsync(fd)` (number 54) writes the dirty pages of the file behind the
-descriptor back through the page cache and asks the filesystem to persist its
-own metadata. It returns 0, or a negative error. It does not promise the
-medium yet: the guarantee of the medium is the work of the journal, which
-comes after this slice. A pipe is `EINVAL`; a number that is not open is
-`EBADF`.
 
 ## The pipes and `dup2`
 

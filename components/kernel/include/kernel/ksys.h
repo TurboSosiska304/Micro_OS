@@ -76,8 +76,7 @@
 #define KSYS_CHGRP 51         /* chgrp(path, group) */
 #define KSYS_GETPGID 52       /* getpgid(pid) -> pgid */
 #define KSYS_SETPGID 53       /* setpgid(pid, pgid) */
-#define KSYS_FSYNC 54         /* fsync(fd) */
-#define KSYS_COUNT 55         /* the number of the system calls */
+#define KSYS_COUNT 54         /* the number of the system calls */
 
 /*
  * The resources of a limit. One number names one resource and the calls move
@@ -366,7 +365,6 @@ int ksys_rename(const char *from, const char *to);
  * the host and x86-64, 32 on the board.
  */
 int ksys_ftruncate(int fd, k_u64_t size);
-int ksys_fsync(int fd);
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count);
 k_u32_t ksys_getpid(void);
 /*

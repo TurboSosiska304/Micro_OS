@@ -601,17 +601,6 @@ int mfs_readdir(struct mfs_file *file, struct mfs_dirent *out, k_size_t max, k_s
 int mfs_read(struct mfs_file *file, void *buf, k_size_t size);
 int mfs_write(struct mfs_file *file, const void *buf, k_size_t size);
 /*
- * Read and write at a file offset without an open descriptor. The page
- * cache uses them to fill and to write back a page of an inode: the cursor
- * of no open file is moved, and the size of the file grows when a write
- * goes past the end. Returns the bytes read or written, or a negative
- * error.
- */
-int mfs_read_at(k_u32_t inode, k_u64_t offset, void *buf, k_size_t size);
-int mfs_write_at(k_u32_t inode, k_u64_t offset, const void *buf, k_size_t size);
-/* Read the on-disk inode record. */
-int mfs_inode_info(k_u32_t ino, struct mfs_inode *out);
-/*
  * Cut an open file to `size` bytes, the `ftruncate` of POSIX: the blocks of
  * the tail go back to the map, a larger size is filled with zeros, and the
  * position of the descriptor does not move. The descriptor has to be open

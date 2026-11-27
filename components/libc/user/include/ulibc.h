@@ -86,12 +86,6 @@ long lseek(int fd, long offset, int whence);
  */
 int ftruncate(int fd, long long size);
 /*
- * Flush the dirty pages of an open file to the medium as far as the kernel
- * can (page cache writeback and the filesystem's own metadata). 0 on
- * success, -1 with `errno` on error. No guarantee of the medium yet.
- */
-int fsync(int fd);
-/*
  * The next entries of a directory opened with ULIBC_O_DIRECTORY. `count` is a
  * number of bytes, not of entries, and has to be a whole number of them; the
  * answer is the number of bytes written or a negative error. The end of the
