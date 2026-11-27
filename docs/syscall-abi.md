@@ -871,15 +871,6 @@ do instead of pretending that a cut happened. The library of a program has
 `int ftruncate(int fd, long long size)` in `components/libc/user`, in the
 shape of POSIX (0 or -1 with `errno`).
 
-## The flush of a file
-
-`fsync(fd)` (number 54) writes the dirty pages of the file behind the
-descriptor back through the page cache and asks the filesystem to persist its
-own metadata. It returns 0, or a negative error. It does not promise the
-medium yet: the guarantee of the medium is the work of the journal, which
-comes after this slice. A pipe is `EINVAL`; a number that is not open is
-`EBADF`.
-
 ## The pipes and `dup2`
 
 `pipe(fds)` (number 27) makes a pipe and gives the caller two ordinary

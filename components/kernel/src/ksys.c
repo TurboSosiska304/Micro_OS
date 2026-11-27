@@ -3200,7 +3200,6 @@ void ksys_init(void)
     ksys_register(KSYS_SETLIMIT, "setlimit", sys_setlimit);
     ksys_register(KSYS_RENAME, "rename", sys_rename);
     ksys_register(KSYS_FTRUNCATE, "ftruncate", sys_ftruncate);
-    ksys_register(KSYS_FSYNC, "fsync", sys_fsync);
     ksys_register(KSYS_GETUID, "getuid", sys_getuid);
     ksys_register(KSYS_GETEUID, "geteuid", sys_geteuid);
     ksys_register(KSYS_GETGID, "getgid", sys_getgid);
@@ -3218,6 +3217,7 @@ void ksys_init(void)
     ksys_register(KSYS_GETRUSAGE, "getrusage", sys_getrusage);
     ksys_register(KSYS_GETPGID, "getpgid", sys_getpgid);
     ksys_register(KSYS_SETPGID, "setpgid", sys_setpgid);
+    ksys_register(KSYS_FSYNC, "fsync", sys_fsync);
 }
 
 /* --- the wrappers --- */

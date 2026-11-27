@@ -7,7 +7,6 @@
 #include "kernel/kmm.h"
 #include "kernel/lock.h"
 #include "kernel/log.h"
-#include "kernel/pagecache.h"
 #include "kernel/panic.h"
 #include "mfs_private.h"
 
@@ -42,10 +41,6 @@ static struct {
     k_u32_t journal_sequence;    /* the number of the last transaction */
     k_u32_t journal_replayed;    /* the blocks the mount restored */
     k_u8_t *bitmap_dirty_blocks; /* one byte per block of the map */
-    k_u8_t *bitmap_txn_bitmap;   /* snapshot of the map at txn begin, for rollback */
-    k_u8_t *bitmap_txn_dirty;    /* snapshot of dirty-block flags at txn begin */
-    bool bitmap_txn_was_dirty;   /* bitmap_dirty at txn begin */
-    bool bitmap_txn_active;      /* snapshot is valid for the current outermost txn */
     k_u32_t txn_depth;
     bool txn_open;             /* the journal holds a transaction in progress */
     k_u32_t txn_slots;         /* the slots it has written */
@@ -763,62 +758,8 @@ static int journal_add(k_u32_t home, const void *image)
  * leave the medium as it found it, or a boot that only reads would change a
  * volume (ADR 0047 §3).
  */
-static struct {
-    k_u32_t inode;
-    k_u32_t block;
-    k_u32_t index;
-    bool valid;
-} g_at_cursor;
-
-static void mfs_at_cursor_invalidate(void)
-{
-    g_at_cursor.valid = false;
-}
-
-static void bitmap_txn_snapshot(void)
-{
-    k_size_t size;
-
-    if (g.bitmap == NULL || g.bitmap_txn_bitmap == NULL || g.bitmap_txn_dirty == NULL) {
-        g.bitmap_txn_active = false;
-        return;
-    }
-
-    size = (k_size_t)g.bitmap_blocks * MFS_BLOCK_SIZE;
-    memcpy(g.bitmap_txn_bitmap, g.bitmap, size);
-    memcpy(g.bitmap_txn_dirty, g.bitmap_dirty_blocks, g.bitmap_blocks);
-    g.bitmap_txn_was_dirty = g.bitmap_dirty;
-    g.bitmap_txn_active = true;
-}
-
-static void bitmap_txn_rollback(void)
-{
-    k_size_t size;
-
-    if (!g.bitmap_txn_active || g.bitmap == NULL || g.bitmap_txn_bitmap == NULL ||
-        g.bitmap_txn_dirty == NULL) {
-        g.bitmap_txn_active = false;
-        return;
-    }
-
-    size = (k_size_t)g.bitmap_blocks * MFS_BLOCK_SIZE;
-    memcpy(g.bitmap, g.bitmap_txn_bitmap, size);
-    memcpy(g.bitmap_dirty_blocks, g.bitmap_txn_dirty, g.bitmap_blocks);
-    g.bitmap_dirty = g.bitmap_txn_was_dirty;
-    g.bitmap_txn_active = false;
-}
-
-static void bitmap_txn_discard(void)
-{
-    g.bitmap_txn_active = false;
-}
-
 static int mfs_txn_begin(void)
 {
-    g_at_cursor.valid = false;
-    if (g.txn_depth == 0u) {
-        bitmap_txn_snapshot();
-    }
     g.txn_depth++;
 
     return MFS_OK;
@@ -837,9 +778,6 @@ static int mfs_txn_commit(void)
 
     if (g.txn_depth == 0u) {
         rc = journal_flush();
-        if (rc == MFS_OK) {
-            bitmap_txn_discard();
-        }
     }
 
     return rc;
@@ -848,7 +786,6 @@ static int mfs_txn_commit(void)
 /* Forget the transaction: the home blocks were never touched. */
 static void mfs_txn_abort(void)
 {
-    bitmap_txn_rollback();
     g.txn_depth = 0u;
     g.txn_open = false;
     g.txn_slots = 0u;
@@ -1043,18 +980,6 @@ static void bitmap_release(void)
         g.bitmap_dirty_blocks = NULL;
     }
 
-    if (g.bitmap_txn_bitmap != NULL) {
-        kmm_free(g.bitmap_txn_bitmap);
-        g.bitmap_txn_bitmap = NULL;
-    }
-
-    if (g.bitmap_txn_dirty != NULL) {
-        kmm_free(g.bitmap_txn_dirty);
-        g.bitmap_txn_dirty = NULL;
-    }
-
-    g.bitmap_txn_active = false;
-
     if (g.txn_homes != NULL) {
         kmm_free(g.txn_homes);
         g.txn_homes = NULL;
@@ -1105,35 +1030,13 @@ static int bitmap_alloc(k_u32_t blocks)
         return MFS_ENOMEM;
     }
 
-    k_u8_t *snap = (k_u8_t *)kmm_alloc(size, KMM_PRIORITY_SYSTEM);
-    k_u8_t *snap_dirty = NULL;
-    if (snap != NULL) {
-        snap_dirty = (k_u8_t *)kmm_alloc(blocks, KMM_PRIORITY_SYSTEM);
-    }
-
-    if (snap == NULL || snap_dirty == NULL) {
-        kerror("mfs: no memory for the bitmap snapshot (%u block(s))", (unsigned)blocks);
-        if (snap != NULL)
-            kmm_free(snap);
-        if (snap_dirty != NULL)
-            kmm_free(snap_dirty);
-        kmm_free(dirty);
-        kmm_free(map);
-        return MFS_ENOMEM;
-    }
-
     memset(map, 0, size);
     memset(dirty, 0, blocks);
-    memset(snap, 0, size);
-    memset(snap_dirty, 0, blocks);
 
     /* A map of an earlier volume cannot describe this one. */
     bitmap_release();
     g.bitmap = map;
     g.bitmap_dirty_blocks = dirty;
-    g.bitmap_txn_bitmap = snap;
-    g.bitmap_txn_dirty = snap_dirty;
-    g.bitmap_txn_active = false;
 
     return MFS_OK;
 }
@@ -1691,32 +1594,23 @@ static void file_cursor_forget(struct mfs_file *file)
 }
 
 /*
- * Bring a descriptor of an open file up to the volume. The page-cache path
- * writes through mfs_write_at and commits the inode directly; an open handle
- * must pick up that on-disk state before it reads, truncates or closes, or
- * it would operate on stale size/first_block and leak the blocks the cache
- * just published. A dirty handle has in-RAM state that is authoritative
- * until close commits it.
+ * Bring a descriptor of an open file up to the volume after a growth of the
+ * table of the records (ADR 0038). The growth moves the blocks of the chains
+ * and patches the pointers of the chains, so the record of the object is the
+ * truth about the head of the chain and the cursors of the descriptor are
+ * not: the descriptor takes the head of its record again and walks from it.
+ * The number of the blocks of the chain does not change, and neither does
+ * the size the descriptor holds - a write that grew the chain past the
+ * record has that number in the descriptor, not on the medium yet.
+ *
+ * A descriptor of a volume that did not grow pays one comparison.
  */
 static int file_refresh(struct mfs_file *file)
 {
     struct mfs_inode inode;
     int rc;
 
-    if (file->dirty) {
-        if (file->generation == g.generation) {
-            return MFS_OK;
-        }
-        rc = inode_read(file->inode, &inode);
-        if (rc != MFS_OK) {
-            return rc;
-        }
-        /* Dirty handle keeps its own size/first_block; only generation moves. */
-        if (file->first_block != inode.first_block) {
-            file->first_block = inode.first_block;
-            file_cursor_forget(file);
-        }
-        file->generation = g.generation;
+    if (file->generation == g.generation) {
         return MFS_OK;
     }
 
@@ -1725,14 +1619,8 @@ static int file_refresh(struct mfs_file *file)
         return rc;
     }
 
-    if (file->first_block != inode.first_block || file->size != inode.size ||
-        file->pending != ((inode.flags & MFS_INODE_PENDING) != 0u)) {
-        file->first_block = inode.first_block;
-        file->size = inode.size;
-        file->pending = (inode.flags & MFS_INODE_PENDING) != 0u;
-        file_cursor_forget(file);
-        file->chain_blocks_valid = false;
-    }
+    file->first_block = inode.first_block;
+    file_cursor_forget(file);
     file->generation = g.generation;
 
     return MFS_OK;
@@ -3989,8 +3877,6 @@ static int mfs_write_locked(struct mfs_file *file, const void *buf, k_size_t siz
         return rc;
     }
 
-    mfs_at_cursor_invalidate();
-
     if ((file->flags & (MFS_O_WRONLY | MFS_O_RDWR)) == 0) {
         return MFS_EINVAL;
     }
@@ -4316,8 +4202,6 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
         return rc;
     }
 
-    mfs_at_cursor_invalidate();
-
     /* A cut of an open object is a write of it: a draft until the close. */
     if (!file->pending) {
         rc = inode_mark_pending(file->inode);
@@ -4357,7 +4241,6 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     inode.size = new_size;
     inode.first_block = file->first_block;
-    inode.flags &= ~MFS_INODE_PENDING;
     inode_stamp(&inode);
 
     rc = inode_write(file->inode, &inode);
@@ -4367,7 +4250,6 @@ static int mfs_truncate_locked(struct mfs_file *file, k_u64_t size)
 
     file->size = new_size;
     file->dirty = false;
-    file->pending = false;
     file->chain_blocks = needed;
     file->chain_blocks_valid = true;
 
@@ -4960,7 +4842,6 @@ int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t fla
     int rc;
 
     mfs_lock();
-    g_at_cursor.valid = false;
     rc = mfs_format_locked(dev, max_records, flags);
 
     /*
@@ -4970,7 +4851,6 @@ int mfs_format_ex(const struct k_blockdev *dev, k_u32_t max_records, k_u32_t fla
      */
     bitmap_release();
     mfs_unlock();
-    pagecache_drop_all();
 
     return rc;
 }
@@ -4985,10 +4865,8 @@ int mfs_mount(const struct k_blockdev *dev)
     int rc;
 
     mfs_lock();
-    g_at_cursor.valid = false;
     rc = mfs_mount_locked(dev);
     mfs_unlock();
-    pagecache_drop_all();
 
     return rc;
 }
@@ -4996,10 +4874,8 @@ int mfs_mount(const struct k_blockdev *dev)
 void mfs_unmount(void)
 {
     mfs_lock();
-    g_at_cursor.valid = false;
     mfs_unmount_locked();
     mfs_unlock();
-    pagecache_drop_all();
 }
 
 int mfs_sync(void)
@@ -5306,163 +5182,6 @@ int mfs_write(struct mfs_file *file, const void *buf, k_size_t size)
     mfs_unlock();
 
     return rc;
-}
-
-int mfs_inode_info(k_u32_t ino, struct mfs_inode *out)
-{
-    int rc;
-
-    if (out == NULL) {
-        return MFS_EINVAL;
-    }
-
-    mfs_lock();
-    rc = inode_read(ino, out);
-    mfs_unlock();
-    return rc;
-}
-
-int mfs_read_at(k_u32_t inode_num, k_u64_t offset, void *buf, k_size_t size)
-{
-    struct mfs_inode inode;
-    struct mfs_file tmp;
-    int rc;
-
-    if (buf == NULL) {
-        return MFS_EINVAL;
-    }
-
-    mfs_lock();
-
-    rc = inode_read(inode_num, &inode);
-    if (rc != MFS_OK) {
-        mfs_unlock();
-        return rc;
-    }
-
-    if ((inode.flags & MFS_INODE_USED) == 0u || (inode.flags & MFS_INODE_DIR) != 0u) {
-        mfs_unlock();
-        return MFS_EINVAL;
-    }
-
-    if (offset > (k_u64_t)0xFFFFFFFFu) {
-        mfs_unlock();
-        return 0;
-    }
-
-    memset(&tmp, 0, sizeof(tmp));
-    file_cursor_forget(&tmp);
-    tmp.inode = inode_num;
-    tmp.first_block = inode.first_block;
-    tmp.size = inode.size;
-    tmp.offset = (k_u32_t)offset;
-    tmp.flags = MFS_O_RDONLY;
-    tmp.generation = g.generation;
-    tmp.chain_blocks_valid = false;
-
-    if (g_at_cursor.valid && g_at_cursor.inode == inode_num) {
-        tmp.chain_block = g_at_cursor.block;
-        tmp.chain_index = g_at_cursor.index;
-        tmp.chain_valid = true;
-    }
-
-    rc = mfs_read_locked(&tmp, buf, size);
-    if (rc >= 0 && tmp.chain_valid) {
-        g_at_cursor.inode = inode_num;
-        g_at_cursor.block = tmp.chain_block;
-        g_at_cursor.index = tmp.chain_index;
-        g_at_cursor.valid = true;
-    } else if (rc < 0) {
-        mfs_at_cursor_invalidate();
-    }
-    mfs_unlock();
-    return rc;
-}
-
-int mfs_write_at(k_u32_t inode_num, k_u64_t offset, const void *buf, k_size_t size)
-{
-    struct mfs_inode inode;
-    struct mfs_file tmp;
-    int rc;
-    int written;
-
-    if (buf == NULL) {
-        return MFS_EINVAL;
-    }
-
-    mfs_lock();
-
-    rc = inode_read(inode_num, &inode);
-    if (rc != MFS_OK) {
-        mfs_unlock();
-        return rc;
-    }
-
-    if ((inode.flags & MFS_INODE_USED) == 0u || (inode.flags & MFS_INODE_DIR) != 0u) {
-        mfs_unlock();
-        return MFS_EINVAL;
-    }
-
-    if (offset > (k_u64_t)0xFFFFFFFFu || offset + size > (k_u64_t)0xFFFFFFFFu) {
-        mfs_unlock();
-        return MFS_E2BIG;
-    }
-
-    memset(&tmp, 0, sizeof(tmp));
-    file_cursor_forget(&tmp);
-    tmp.inode = inode_num;
-    tmp.first_block = inode.first_block;
-    tmp.size = inode.size;
-    tmp.offset = (k_u32_t)offset;
-    tmp.flags = MFS_O_RDWR;
-    tmp.generation = g.generation;
-    tmp.chain_blocks_valid = false;
-    tmp.pending = (inode.flags & MFS_INODE_PENDING) != 0u;
-
-    if (g_at_cursor.valid && g_at_cursor.inode == inode_num) {
-        tmp.chain_block = g_at_cursor.block;
-        tmp.chain_index = g_at_cursor.index;
-        tmp.chain_valid = true;
-    }
-
-    mfs_txn_begin();
-    written = mfs_write_locked(&tmp, buf, size);
-    if (written < 0) {
-        mfs_at_cursor_invalidate();
-        mfs_txn_abort();
-        mfs_unlock();
-        return written;
-    }
-
-    rc = inode_read(inode_num, &inode);
-    if (rc == MFS_OK) {
-        inode.size = tmp.size;
-        inode.first_block = tmp.first_block;
-        inode.flags &= ~MFS_INODE_PENDING;
-        inode_stamp(&inode);
-        rc = inode_write(inode_num, &inode);
-    }
-
-    if (rc == MFS_OK) {
-        int commit = mfs_txn_commit();
-        if (commit != MFS_OK) {
-            rc = commit;
-        }
-    } else {
-        mfs_txn_abort();
-    }
-
-    if (rc == MFS_OK && tmp.chain_valid) {
-        g_at_cursor.inode = inode_num;
-        g_at_cursor.block = tmp.chain_block;
-        g_at_cursor.index = tmp.chain_index;
-        g_at_cursor.valid = true;
-    } else if (rc != MFS_OK) {
-        mfs_at_cursor_invalidate();
-    }
-
-    mfs_unlock();
-    return (rc == MFS_OK) ? written : rc;
 }
 
 int mfs_truncate(struct mfs_file *file, k_u64_t size)
