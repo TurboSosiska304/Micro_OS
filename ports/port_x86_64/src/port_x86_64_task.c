@@ -1045,10 +1045,11 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
     }
 
     len = snprintf(buf, sizeof(buf),
-                   "\r\n[SLPDBG] sleep of %u ms over its deadline by %llu us, ticks %u, "
+                   "\r\n[SLPDBG] sleep of %u ms over its deadline by %llu us, ticks %u/%llu, "
                    "%u sleeper(s)\r\n",
                    (unsigned)ms, (unsigned long long)(now - stall_deadline_us),
-                   (unsigned)k_sched_ticks(), (unsigned)count);
+                   (unsigned)k_sched_ticks(), (unsigned long long)port_x86_64_ticks(),
+                   (unsigned)count);
     if (len > 0) {
         port_x86_64_debug_write(buf, (k_size_t)len);
     }
