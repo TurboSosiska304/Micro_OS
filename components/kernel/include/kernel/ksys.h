@@ -370,7 +370,6 @@ int ksys_rename(const char *from, const char *to);
  * the host and x86-64, 32 on the board.
  */
 int ksys_ftruncate(int fd, k_u64_t size);
-int ksys_fsync(int fd);
 k_ssize_t ksys_readdir(int fd, void *buf, k_size_t count);
 k_u32_t ksys_getpid(void);
 /*
