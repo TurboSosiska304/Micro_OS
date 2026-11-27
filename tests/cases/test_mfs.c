@@ -749,6 +749,9 @@ static void test_rename(void)
 {
     struct mfs_file file;
     struct mfs_inode inode;
+    struct mfs_info before;
+    struct mfs_info after;
+    struct mfs_check_report report;
     char buffer[32];
 
     ktest_begin("mfs: a name moves and a directory is removed by rmdir");
@@ -782,9 +785,50 @@ static void test_rename(void)
     KT_CHECK_INT_EQ(mfs_rename("/dir", "/other"), MFS_EISDIR);
 
     KT_CHECK_INT_EQ(mfs_create("/dir/other.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/dir/other.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "old target", 10), 10);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&before), MFS_OK);
     KT_CHECK_INT_EQ(mfs_rename("/dir/two.txt", "/dir/other.txt"), MFS_OK);
     KT_CHECK_INT_EQ(mfs_stat("/dir/two.txt", &inode, NULL), MFS_ENOENT);
     KT_CHECK_INT_EQ(mfs_stat("/dir/other.txt", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/dir/other.txt", MFS_O_RDONLY, &file), MFS_OK);
+    memset(buffer, 0, sizeof(buffer));
+    KT_CHECK_INT_EQ(mfs_read(&file, buffer, sizeof(buffer)), 5);
+    KT_CHECK_STR_EQ(buffer, "hello");
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+
+    /* Replacing a name removes one directory entry and one inode, and gives
+     * the old target's block back. A rotation over an existing .1 file used
+     * to leave the counter high and the replaced inode allocated. */
+    KT_CHECK_INT_EQ(mfs_stat("/dir", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.entries, 1);
+    KT_CHECK_INT_EQ(mfs_get_info(&after), MFS_OK);
+    KT_CHECK_INT_EQ(after.inodes_used, before.inodes_used - 1u);
+    KT_CHECK_INT_EQ(after.data_free, before.data_free + 1u);
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0u);
+
+    /* The same replacement in another directory gives the target inode back
+     * too, while the two parent counters move in opposite directions. */
+    KT_CHECK_INT_EQ(mfs_create("/other/target.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/other/target.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "old target", 10), 10);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/dir/source.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&before), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rename("/dir/source.txt", "/other/target.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_get_info(&after), MFS_OK);
+    KT_CHECK_INT_EQ(after.inodes_used, before.inodes_used - 1u);
+    KT_CHECK_INT_EQ(after.data_free, before.data_free + 1u);
+    KT_CHECK_INT_EQ(mfs_stat("/dir", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.entries, 1);
+    KT_CHECK_INT_EQ(mfs_stat("/other", &inode, NULL), MFS_OK);
+    KT_CHECK_INT_EQ(inode.entries, 1);
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0u);
 
     /* The two removals of POSIX do not stand in for each other. */
     KT_CHECK_INT_EQ(mfs_unlink("/dir"), MFS_EISDIR);
@@ -801,6 +845,9 @@ static void test_rename(void)
     KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
     KT_CHECK_INT_EQ(mfs_stat("/other", &inode, NULL), MFS_OK);
     KT_CHECK_INT_EQ(mfs_stat("/dir", &inode, NULL), MFS_ENOENT);
+    memset(&report, 0, sizeof(report));
+    KT_CHECK_INT_EQ(mfs_check(&report), MFS_OK);
+    KT_CHECK_INT_EQ(report.errors, 0u);
 
     teardown();
 }

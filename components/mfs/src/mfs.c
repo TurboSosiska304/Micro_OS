@@ -4239,11 +4239,13 @@ static int mfs_rename_locked(const char *from, const char *to)
     struct mfs_inode to_parent;
     struct mfs_inode inode;
     struct mfs_inode replaced;
+    struct mfs_inode free_inode;
     struct dir_buffer *dir = &g_dir_buffer;
     struct dir_buffer *other = &g_dir_buffer2;
     struct mfs_dirent entry;
     k_u32_t from_parent_inode = MFS_ROOT_INODE;
     k_u32_t to_parent_inode = MFS_ROOT_INODE;
+    k_u32_t replaced_inode = 0u;
     bool same_dir;
     bool replacing = false;
     int rc;
@@ -4275,7 +4277,7 @@ static int mfs_rename_locked(const char *from, const char *to)
      * name of a directory that somebody still has open would take the tree
      * below it with it, and a name that is a file is what an install
      * replaces. */
-    if (path_lookup(to, &replaced, NULL, NULL) == MFS_OK) {
+    if (path_lookup(to, &replaced, NULL, &replaced_inode) == MFS_OK) {
         if ((replaced.flags & MFS_INODE_DIR) != 0) {
             return MFS_EISDIR;
         }
@@ -4304,6 +4306,11 @@ static int mfs_rename_locked(const char *from, const char *to)
             rc = dir_remove(dir, to_name);
             if (rc != MFS_OK) {
                 return rc;
+            }
+
+            /* The destination name disappears before the source takes it. */
+            if (from_parent.entries > 0) {
+                from_parent.entries--;
             }
         }
 
@@ -4411,6 +4418,21 @@ static int mfs_rename_locked(const char *from, const char *to)
     rc = inode_write(entry.inode, &inode);
     if (rc != MFS_OK) {
         return rc;
+    }
+
+    /* The destination used to name another file. Its name is gone now, so its
+     * record and blocks belong to nobody; leaving them behind makes the next
+     * mount's check report an orphan and, in the same-directory case, used to
+     * leave the parent counter one too high. */
+    if (replacing) {
+        memset(&free_inode, 0, sizeof(free_inode));
+        rc = file_release_chain(replaced.first_block);
+        if (rc == MFS_OK) {
+            rc = inode_write(replaced_inode, &free_inode);
+        }
+        if (rc != MFS_OK) {
+            return rc;
+        }
     }
 
     return mfs_sync();

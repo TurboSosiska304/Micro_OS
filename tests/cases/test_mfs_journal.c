@@ -722,6 +722,108 @@ static void test_journal_write_read(void)
     volume_free();
 }
 
+/*
+ * Replacing an existing name adds one more metadata change to the rename: the
+ * old target's entry, inode and block all disappear. Every cut point must leave
+ * either the old pair or the new name, and the check must find a clean volume.
+ */
+static void test_journal_rename_replace(void)
+{
+    struct mfs_file file;
+    struct mfs_inode inode;
+    struct mfs_check_report report;
+    k_u8_t expected[KEEP_BYTES];
+    char text[KEEP_BYTES];
+    k_u32_t cut;
+    k_u32_t session_writes;
+    k_u32_t old_name = 0u;
+    k_u32_t new_name = 0u;
+
+    ktest_begin("mfs journal: a cut of a replacing rename leaves a clean volume");
+
+    KT_CHECK(volume_alloc());
+    if (g_volume == NULL || g_base == NULL) {
+        volume_free();
+        return;
+    }
+
+    KT_CHECK_INT_EQ(volume_make(), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_create("/target.txt"), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_open("/target.txt", MFS_O_WRONLY, &file), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_write(&file, "old target", 10), 10);
+    KT_CHECK_INT_EQ(mfs_close(&file), MFS_OK);
+    mfs_unmount();
+
+    memcpy(g_base, g_volume, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+    pattern(expected, 0, sizeof(expected));
+
+    g_writes = 0u;
+    g_limit = 0xFFFFFFFFu;
+    KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+    KT_CHECK_INT_EQ(mfs_rename("/keep.txt", "/target.txt"), MFS_OK);
+    session_writes = g_writes;
+    mfs_unmount();
+
+    for (cut = 0u; cut <= session_writes; cut++) {
+        bool has_old_name;
+        k_size_t used;
+
+        memcpy(g_volume, g_base, (size_t)CUT_BLOCKS * MFS_BLOCK_SIZE);
+        g_writes = 0u;
+        g_limit = cut;
+        g_dropped = false;
+
+        KT_CHECK_INT_EQ(mfs_mount(&g_device), MFS_OK);
+        (void)mfs_rename("/keep.txt", "/target.txt");
+        g_limit = 0xFFFFFFFFu;
+
+        if (mfs_mount(&g_device) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: the volume did not mount again", (unsigned)cut);
+            break;
+        }
+
+        memset(&report, 0, sizeof(report));
+        if (mfs_check(&report) != MFS_OK || report.errors != 0u) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: the check found %u problem(s): %s",
+                       (unsigned)cut, (unsigned)report.errors,
+                       report.first[0] != '\0' ? report.first : "(none)");
+            break;
+        }
+
+        has_old_name = mfs_stat("/keep.txt", &inode, NULL) == MFS_OK;
+        if (mfs_stat("/target.txt", &inode, NULL) != MFS_OK ||
+            mfs_open("/target.txt", MFS_O_RDONLY, &file) != MFS_OK) {
+            ktest_fail(__FILE__, __LINE__, "cut %u: the target name is gone", (unsigned)cut);
+            break;
+        }
+
+        memset(text, 0, sizeof(text));
+        used = (k_size_t)mfs_read(&file, text, sizeof(text));
+        (void)mfs_close(&file);
+
+        if (has_old_name) {
+            if (used != 10u || memcmp(text, "old target", 10u) != 0) {
+                ktest_fail(__FILE__, __LINE__, "cut %u: the old target changed", (unsigned)cut);
+                break;
+            }
+            old_name++;
+        } else {
+            if (used != sizeof(expected) || memcmp(text, expected, sizeof(expected)) != 0) {
+                ktest_fail(__FILE__, __LINE__, "cut %u: the new target is not whole",
+                           (unsigned)cut);
+                break;
+            }
+            new_name++;
+        }
+    }
+
+    mfs_unmount();
+    KT_CHECK(old_name > 0u);
+    KT_CHECK(new_name > 0u);
+    volume_free();
+}
+
 void test_mfs_journal(void)
 {
     test_journal_format();
@@ -729,4 +831,5 @@ void test_mfs_journal(void)
     test_journal_write_read();
     test_journal_cut();
     test_journal_rename();
+    test_journal_rename_replace();
 }
