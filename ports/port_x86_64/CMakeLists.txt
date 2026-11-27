@@ -90,12 +90,19 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
-# The older GCC of a CI runner spells C23 `c2x` (see the root CMakeLists).
-include(CheckCCompilerFlag)
-check_c_compiler_flag("-std=c23" MICRO_OS_C23_FLAG_PORT)
-if(NOT MICRO_OS_C23_FLAG_PORT)
-    add_compile_options("-std=c2x")
-endif()
+    # The compiler of an older distribution refuses the name `-std=c23` and
+    # knows the same language as `-std=c2x`; the tree is written so that it also
+    # compiles as C11 (the attributes have their macro), and on such a compiler
+    # the build takes the dialect it has instead of a flag it refuses.
+    include(CheckCCompilerFlag)
+    check_c_compiler_flag("-std=c23" MICRO_OS_C23_FLAG_PORT)
+    if(MICRO_OS_C23_FLAG_PORT)
+        set(MICRO_OS_PORT_C_DIALECT "-std=c23")
+    else()
+        # The same language, under the name an older GCC knows.
+        set(MICRO_OS_PORT_C_DIALECT "-std=c2x")
+    endif()
+
 
 # The kernel of the higher half: no red zone (an interrupt may use the stack
 # under us), no PIC, no SSE in the C of the kernel (the state of the units is
@@ -370,7 +377,7 @@ set(LIBC_USER_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../components/libc/user")
 # at every switch (docs/debts.md, K9), so two such programs may compute at
 # once. The kernel itself never touches them.
 set(USERLAND_CFLAGS
-    -std=c23 -O2 -ffreestanding -fno-stack-protector
+    ${MICRO_OS_PORT_C_DIALECT} -O2 -ffreestanding -fno-stack-protector
     -fno-pic -fno-pie -mno-red-zone -march=x86-64
     -fno-asynchronous-unwind-tables -fno-merge-constants -Wall -Wextra -Werror
 )
