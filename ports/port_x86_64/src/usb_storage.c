@@ -436,7 +436,15 @@ static int usb_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count)
             k_size_t chunk = bytes > USB_TRANSFER_MAX ? USB_TRANSFER_MAX : bytes;
 
             if (!scsi_rw10(true, lba, (k_u16_t)(chunk / 512u), (void *)source, (k_u32_t)chunk)) {
+                k_u8_t csw_status = g_csw[12];
+                k_u8_t sense_key = (k_u8_t)(g_sense[2] & 0x0Fu);
+                k_u8_t asc = g_sense[12];
+                k_u8_t ascq = g_sense[13];
+
                 bot_clear_halt();
+                kerror("usb0: WRITE(10) failed at lba %u (%u bytes): csw %u sense %02x/%02x/%02x",
+                       (unsigned)lba, (unsigned)chunk, (unsigned)csw_status, (unsigned)sense_key,
+                       (unsigned)asc, (unsigned)ascq);
                 rc = -1;
                 break;
             }
