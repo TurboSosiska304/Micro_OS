@@ -185,6 +185,7 @@ numbers of a system call: a new command takes the next free one.
 |---|---|---|
 | `FBIO_TAKE` 0x4D01 | `/dev/fb0` | the console stops drawing; the picture is the program's |
 | `FBIO_GIVE` 0x4D02 | `/dev/fb0` | the console repaints its grid and draws again; a give while another program holds the device changes nothing, so a program that starts a program keeps the picture |
+| `FBIO_PRESENT` 0x4D03 | `/dev/fb0` | show a `struct fb_present_surface` of RGB565 RAM: 0 for a device flip, 1 for the software copy, negative for an invalid surface |
 | `TCGETS` 0x5401 | `/dev/tty0`, `/dev/tty`, 0, 1 and 2 | the mode of the terminal, into a `struct termios` of 36 bytes |
 | `TCSETS` 0x5402 | the same | set the mode now; `TCSETSW` 0x5403 is the same and `TCSETSF` 0x5404 sets it and drops the input |
 | `TIOCGPGRP` 0x540F | the same | the foreground process group of the tty, into a `k_u32_t` |
@@ -215,6 +216,14 @@ by `w * h` pixels of RGB565, and `/dev/input0` reads a `struct input_event`
 with `EAGAIN` when the user is silent. The structures are in
 `kernel/fb.h` and `kernel/input.h`, which a program includes as it includes
 `kernel/ksys.h`.
+
+`FBIO_PRESENT` takes a pointer to `struct fb_present_surface`: the first pixel
+of a complete RAM frame, its width, height and pitch in pixels. The range
+`pitch * height` must remain mapped until `FBIO_GIVE` or the last close. A 0
+answer means the source itself is now the front surface and must not be drawn
+into until a later present replaces it; a 1 means the kernel copied it into
+the original framebuffer and the caller may keep drawing in the same surface.
+The command never turns a missing GPU capability into an error.
 
 The flags of `open` are the same as the ones of the VFS:
 

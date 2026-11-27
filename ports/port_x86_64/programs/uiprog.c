@@ -135,10 +135,11 @@ static int target_blit(void *context, const struct ui_rect *rect, const k_u16_t 
 /* A rectangle in the RAM backbuffer: no device, no header, one row at a time. */
 static int backbuffer_fill(struct uiprog *program, int x, int y, int w, int h, k_u16_t color)
 {
-    int pitch = (int)program->info.width;
+    int pitch = (int)program->info.pitch;
     int row;
 
-    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > pitch || y + h > (int)program->info.height) {
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > (int)program->info.width ||
+        y + h > (int)program->info.height) {
         return -1;
     }
 
@@ -174,12 +175,12 @@ static int backbuffer_fill(struct uiprog *program, int x, int y, int w, int h, k
 static int backbuffer_blit(struct uiprog *program, int x, int y, int w, int h,
                            const k_u16_t *pixels)
 {
-    int pitch = (int)program->info.width;
+    int pitch = (int)program->info.pitch;
     int row;
     size_t row_bytes;
 
-    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > pitch || y + h > (int)program->info.height ||
-        pixels == NULL) {
+    if (w <= 0 || h <= 0 || x < 0 || y < 0 || x + w > (int)program->info.width ||
+        y + h > (int)program->info.height || pixels == NULL) {
         return -1;
     }
 
@@ -541,21 +542,29 @@ void uiprog_close(struct uiprog *program)
         return;
     }
 
-    if (program->backbuffer != NULL) {
-        (void)munmap(program->backbuffer, program->backbuffer_size);
-        program->backbuffer = NULL;
-        program->backbuffer_size = 0u;
-    }
-
     if (program->input >= 0) {
         (void)close(program->input);
         program->input = -1;
     }
 
     if (program->fb >= 0) {
+        /* The GPU may still scan out one of the RAM surfaces. Give the device
+         * back while both mappings are alive; its release callback restores
+         * the original plane before the pages below are unmapped. */
         (void)prog_call(KSYS_IOCTL, program->fb, (long)FBIO_GIVE, 0, 0, 0, 0);
         (void)close(program->fb);
         program->fb = -1;
+    }
+
+    if (program->backbuffer_mapping != NULL) {
+        (void)munmap(program->backbuffer_mapping, program->backbuffer_mapping_size);
+        program->backbuffer_mapping = NULL;
+        program->backbuffer_mapping_size = 0u;
+        program->backbuffer = NULL;
+        program->sparebuffer = NULL;
+        program->backbuffer_size = 0u;
+        program->present_flip = false;
+        program->present_flipped = false;
     }
 }
 
@@ -891,6 +900,7 @@ int uiprog_enable_backbuffer(struct uiprog *program)
 {
     size_t bytes;
     size_t size;
+    size_t mapping_size;
     void *mapping;
 
     if (program == NULL || program->desktop || program->fb < 0) {
@@ -901,18 +911,27 @@ int uiprog_enable_backbuffer(struct uiprog *program)
         return 0;
     }
 
-    bytes = (size_t)program->info.width * (size_t)program->info.height * FB_PIXEL_BYTES;
+    bytes = (size_t)program->info.pitch * (size_t)program->info.height * FB_PIXEL_BYTES;
     size = (bytes + KSYS_PAGE_SIZE - 1u) / KSYS_PAGE_SIZE * KSYS_PAGE_SIZE;
+    if (size < bytes || size > (size_t)-1 / 2u) {
+        return -1;
+    }
+    mapping_size = size * 2u;
 
-    mapping =
-        mmap(NULL, size, KSYS_PROT_READ | KSYS_PROT_WRITE, KSYS_MAP_PRIVATE | MAP_ANON, -1, 0);
+    mapping = mmap(NULL, mapping_size, KSYS_PROT_READ | KSYS_PROT_WRITE,
+                   KSYS_MAP_PRIVATE | MAP_ANON, -1, 0);
     if (mapping == MAP_FAILED) {
         return -1;
     }
 
-    memset(mapping, 0, size);
+    memset(mapping, 0, mapping_size);
+    program->backbuffer_mapping = mapping;
+    program->backbuffer_mapping_size = mapping_size;
     program->backbuffer = (k_u16_t *)mapping;
+    program->sparebuffer = (k_u16_t *)((unsigned char *)mapping + size);
     program->backbuffer_size = size;
+    program->present_flip = true;
+    program->present_flipped = false;
 
     return 0;
 }
@@ -923,7 +942,7 @@ static int present_rect(struct uiprog *program, int x, int y, int w, int h)
     size_t row_bytes;
     int rows;
     int row;
-    int pitch = (int)program->info.width;
+    int pitch = (int)program->info.pitch;
 
     if (w <= 0 || h <= 0) {
         return 0;
@@ -986,9 +1005,62 @@ int uiprog_present(struct uiprog *program, const struct ui_rect *rects, int coun
         if (rect->w <= 0 || rect->h <= 0) {
             continue;
         }
-        if (present_rect(program, rect->x, rect->y, rect->w, rect->h) != 0) {
+        if (rect->x < 0 || rect->y < 0 || rect->x + rect->w > (int)program->info.width ||
+            rect->y + rect->h > (int)program->info.height) {
             return -1;
         }
+    }
+
+    if (!program->present_flip) {
+        for (index = 0; index < count; index++) {
+            const struct ui_rect *rect = &rects[index];
+
+            if (rect->w <= 0 || rect->h <= 0) {
+                continue;
+            }
+            if (present_rect(program, rect->x, rect->y, rect->w, rect->h) != 0) {
+                return -1;
+            }
+        }
+
+        return 0;
+    }
+
+    {
+        struct fb_present_surface request;
+        long rc;
+
+        request.base = (k_u64_t)(uintptr_t)program->backbuffer;
+        request.width = program->info.width;
+        request.height = program->info.height;
+        request.pitch = program->info.pitch;
+        rc = prog_call(KSYS_IOCTL, program->fb, (long)FBIO_PRESENT, (long)(uintptr_t)&request, 0, 0,
+                       0);
+        if (rc < 0) {
+            return -1;
+        }
+
+        if (rc != 0) {
+            /* The kernel already copied the complete surface into the original
+             * framebuffer. Keep the damage path for the rest of this owner. */
+            program->present_flip = false;
+            return 0;
+        }
+    }
+
+    /* The old front becomes the next backbuffer only after the new surface is
+     * live. Seed it once from the first complete frame; later turns repaint
+     * just their damage over that picture. */
+    if (!program->present_flipped) {
+        memcpy(program->sparebuffer, program->backbuffer, program->backbuffer_size);
+        program->present_flipped = true;
+    }
+
+    {
+        k_u16_t *swap = program->backbuffer;
+
+        program->backbuffer = program->sparebuffer;
+        program->sparebuffer = swap;
     }
 
     return 0;

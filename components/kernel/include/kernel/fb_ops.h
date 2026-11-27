@@ -9,7 +9,8 @@
  * the shape of the three operations a device may offer, the slot where it
  * offers them, and the software implementation that answers when the slot is
  * empty. The software path is the one of 1.6 and it stays the only one that
- * is always there.
+ * is always there. A complete RAM surface may also be presented by flipping
+ * the display to it; a device which cannot do that keeps the software copy.
  *
  * The numbers are the pixels of the picture the device was given: the
  * software path of this release writes the low sixteen bits of `pixel`, which
@@ -54,7 +55,7 @@ struct k_fb_surface {
 };
 
 /*
- * The operations of a device. All three may be NULL: an operation a device
+ * The operations of a device. All four may be NULL: an operation a device
  * does not have is the software one, and a device with no operations is the
  * machine of 1.6.
  *
@@ -63,12 +64,20 @@ struct k_fb_surface {
  * pixels a line into `dst`; `flush` makes a rectangle of the picture visible
  * to the display that is not the memory (the software picture of this system
  * needs nothing, and its flush is the empty answer).
+ *
+ * `present` shows a complete RAM surface instead of copying it into `dst`.
+ * The surfaces have the same shape and pixel format; a driver which cannot
+ * keep the source pages alive and mapped answers KERR_NOTSUP (or any error),
+ * and `k_blit_present` falls back to the software copy. `present_release`
+ * restores the original surface before the owner gives the device back.
  */
 struct k_fb_ops {
     int (*fill)(void *context, const struct k_fb_rect *rect, k_u32_t pixel);
     int (*blit)(void *context, const struct k_fb_rect *dst, const void *src, k_u32_t src_pitch,
                 k_u32_t src_x, k_u32_t src_y);
     int (*flush)(void *context, const struct k_fb_rect *rect);
+    int (*present)(void *context, const struct k_fb_surface *dst, const struct k_fb_surface *src);
+    int (*present_release)(void *context);
 };
 
 /*
@@ -82,6 +91,10 @@ int k_fb_ops_register(const struct k_fb_ops *ops, void *context);
 /* The operations of the picture and their context; NULL when the software
  * path is the whole of it. */
 const struct k_fb_ops *k_fb_ops_device(void **context);
+
+/* Changes whenever the slot is registered or cleared, even when the same
+ * operations structure is registered again. */
+k_u32_t k_fb_ops_generation(void);
 
 /*
  * The three operations as the system asks for them: the device answers the

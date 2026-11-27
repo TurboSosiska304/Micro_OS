@@ -396,6 +396,63 @@ Owner checklist:
 5. If the image is black/garbled or any error appears, stop, save the log and
    power-cycle; do not repeat the experiment.
 
+### 3.9 Stage 4: the compositor presents two RAM surfaces
+
+`/bin/wm` allocates two RGB565 surfaces. It draws damage and the pointer into
+the back surface, calls `FBIO_PRESENT`, and changes its drawing target only
+when the kernel answers 0 (the device showed that surface). The first
+successful present seeds the spare surface once; later presents only flip.
+The kernel's `k_blit_present` asks the registered device callback once. A
+missing callback, an incompatible format, no guarded GGTT run or a page which
+does not translate answers with the software copy, and the refusal is latched
+for that registration. QEMU and AMD therefore keep the damage-copy path.
+
+The Intel callback is registered only for the measured ThinkPad identity and
+only when the active primary plane is already linear RGB565 without surface
+flags, rotation or compression. It reserves two guarded GGTT runs, translates
+each RAM page through the caller's page tables, holds a reference to the
+physical frame, installs the non-contiguous pages, flushes the visible CPU
+cache lines and writes `PLANE_SURF`. It waits for `PLANE_SURFLIVE` before the
+old front may become the next back surface. `FBIO_GIVE` and the last close
+restore the original plane before the two mappings and frame references are
+released. If plane rollback itself fails, the references and GGTT mappings
+stay alive so a departing program cannot have its frame reused under the
+display engine.
+
+The reconnaissance measured a firmware-left **X-tiled XRGB8888** plane. A boot
+which still has that state cannot show the compositor's linear RGB565 surface
+by changing only `PLANE_SURF`; it must take the quiet copy fallback. The boot
+line `gpu: Intel page-flip backend ready (... linear RGB565)` is therefore the
+first capability check, not a promise that every later GGTT allocation will
+succeed. No mode, DDI/eDP, watermark, backlight or firmware state is changed.
+
+Owner checklist for the automatic present path:
+
+1. Boot with serial and power recovery ready. Save the `gpu:` lines. Require
+   `gpu ggtt-test` to pass before starting the desktop; if the page-flip
+   backend line is absent, record that the measured plane is incompatible and
+   expect the copy path rather than a failure.
+2. Start `/bin/wm`. The desktop, pointer, window moves, closes and the clock
+   must remain visible with no black frames, corrupted edges or stale cursor.
+3. Exercise damage for at least a minute: move and raise windows, type in the
+   editor, move the pointer and press F12 between actions. Compare the serial
+   `wm: the first frame took ... ns by TSC`, `wm: the first present took ... ns
+   by TSC` and `wm: present: ...` lines with the QEMU numbers in
+   `docs/bench.md`.
+4. Close every window (or Alt+F4 each one). The shell grid must return, which
+   exercises `FBIO_GIVE`, plane restore and GGTT cleanup before the RAM
+   surfaces are unmapped. Start and stop the desktop a second time.
+5. Reboot once more and confirm the display still comes up. If any frame is
+   black/garbled, a rollback error appears, or the shell does not return, stop,
+   save the complete serial log and power-cycle; do not keep testing the flip.
+
+Vsync is still a blocking wait for `SURFLIVE` in this stage. There are two
+surfaces, not three: the single WM task cannot compose the next frame while it
+waits for the current flip, so a later stage can overlap composition with the
+wait or add a third surface. The per-frame 2 MiB copy is gone only on the
+compatible Intel path; the first successful present still seeds the spare
+surface once.
+
 ## 4. EDID through AUX/DDC: the next, separate step
 
 Reading EDID is useful, but it is not part of this read-only probe. Both AUX

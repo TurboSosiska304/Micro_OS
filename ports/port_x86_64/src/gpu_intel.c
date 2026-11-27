@@ -9,11 +9,16 @@
  * code written here for Micro OS (MIT).
  *
  * The probe path never writes a display MMIO register. PCI memory decode is the
- * only control write there. The sole display-register write path is the
- * owner-confirmed `gpu flip --yes` experiment below.
+ * only control write there. Display-register writes live in the confirmed
+ * `gpu flip --yes` experiment and in the automatic `present` backend, which is
+ * registered only for the same measured laptop and a compatible linear plane.
  */
 #include "gpu_intel.h"
 
+#include "kernel/blit.h"
+#include "kernel/errno.h"
+#include "kernel/fb.h"
+#include "kernel/fb_ops.h"
 #include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kshell/kshell.h"
@@ -120,6 +125,27 @@ static const char *gpu_intel_display_step(k_u16_t device, k_u8_t revision)
 static volatile k_u32_t *s_mmio;
 static volatile k_u64_t *s_gtt_entries;
 static k_u64_t s_aperture_base;
+
+#define GPU_INTEL_FLIP_SURFACES 2u
+#define GPU_INTEL_CACHE_LINE 64u
+
+struct gpu_intel_flip_slot {
+    bool mapped;
+    k_u64_t base;
+    k_u32_t width;
+    k_u32_t height;
+    k_u32_t pitch;
+    struct gpu_intel_gtt_run run;
+    k_u64_t *physical;
+};
+
+struct gpu_intel_flip_state {
+    bool reserved;
+    int active;
+    struct gpu_intel_flip_slot slots[GPU_INTEL_FLIP_SURFACES];
+};
+
+static struct gpu_intel_flip_state s_flip;
 
 static k_u32_t gpu_intel_mmio_read(k_u32_t offset)
 {
@@ -558,6 +584,300 @@ static bool gpu_intel_plane_restore(const struct gpu_intel_info *info, k_u32_t c
            gpu_intel_mmio_read(control_offset) == control;
 }
 
+static bool gpu_intel_present_ready(const struct gpu_intel_info *info)
+{
+    return info->display_ready && info->framebuffer_known &&
+           info->panel_pipe != GPU_INTEL_PANEL_PIPE_UNKNOWN && s_gtt_entries != NULL &&
+           gpu_intel_flip_laptop(info) &&
+           (info->plane_surface & ~GPU_INTEL_PLANE_SURFACE_MASK) == 0u &&
+           (info->plane_control & GPU_INTEL_RENDER_DECOMPRESSION) == 0u &&
+           (info->plane_control & 3u) == 0u && info->framebuffer.bpp == 2u &&
+           info->framebuffer.format == GPU_INTEL_FORMAT_RGB_565 &&
+           info->framebuffer.tiling == GPU_INTEL_TILE_LINEAR;
+}
+
+static bool gpu_intel_present_compatible(const struct gpu_intel_info *info,
+                                         const struct k_fb_surface *dst,
+                                         const struct k_fb_surface *src)
+{
+    return info->common.probe_result == GPU_PROBE_OK && gpu_intel_present_ready(info) &&
+           dst != NULL && src != NULL && dst->width == info->framebuffer.width &&
+           dst->height == info->framebuffer.height && src->width == dst->width &&
+           src->height == dst->height &&
+           (k_u64_t)dst->pitch * FB_PIXEL_BYTES == info->framebuffer.pitch &&
+           src->pitch == dst->pitch;
+}
+
+/* Reserve two guarded runs before the first flip. Both surfaces stay mapped
+ * while they alternate, so a frame never has to allocate or copy. */
+static bool gpu_intel_present_reserve(const struct gpu_intel_info *info)
+{
+    struct gpu_intel_gtt_range excluded[16];
+    k_size_t excluded_count = 0u;
+    enum gpu_intel_ggtt_result rc;
+
+    if (s_flip.reserved) {
+        return true;
+    }
+    if (!gpu_intel_collect_exclusions(info, excluded, K_ARRAY_SIZE(excluded), &excluded_count)) {
+        return false;
+    }
+
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->framebuffer.pte_count, excluded, excluded_count,
+                                  &s_flip.slots[0].run);
+    if (rc != GPU_INTEL_GGTT_OK ||
+        !gpu_intel_add_range(excluded, &excluded_count, K_ARRAY_SIZE(excluded),
+                             s_flip.slots[0].run.start, s_flip.slots[0].run.count)) {
+        return false;
+    }
+
+    rc = gpu_intel_ggtt_find_free(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES,
+                                  info->framebuffer.pte_count, excluded, excluded_count,
+                                  &s_flip.slots[1].run);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        return false;
+    }
+
+    s_flip.reserved = true;
+    s_flip.active = -1;
+    return true;
+}
+
+static int gpu_intel_present_map(const struct gpu_intel_info *info, const struct k_fb_surface *src)
+{
+    k_size_t index;
+    k_size_t count = info->framebuffer.pte_count;
+    int free_slot = -1;
+    int slot_index;
+    struct gpu_intel_flip_slot *slot;
+    k_u64_t saved = 0u;
+    k_size_t held = 0u;
+    enum gpu_intel_ggtt_result rc;
+
+    for (slot_index = 0; slot_index < (int)GPU_INTEL_FLIP_SURFACES; slot_index++) {
+        slot = &s_flip.slots[slot_index];
+        if (!slot->mapped) {
+            if (free_slot < 0) {
+                free_slot = slot_index;
+            }
+            continue;
+        }
+        if (slot->base == (k_u64_t)(uintptr_t)src->base) {
+            if (slot->width != src->width || slot->height != src->height ||
+                slot->pitch != src->pitch || port_x86_64_dma_phys(src->base) != slot->physical[0] ||
+                port_x86_64_dma_phys((const k_u8_t *)src->base +
+                                     (k_size_t)(count - 1u) * GPU_INTEL_GTT_PAGE_SIZE) !=
+                    slot->physical[count - 1u]) {
+                return KERR_NOTSUP;
+            }
+            return 0;
+        }
+    }
+
+    if (free_slot < 0 || ((k_u64_t)(uintptr_t)src->base & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u) {
+        return KERR_NOTSUP;
+    }
+    slot = &s_flip.slots[free_slot];
+    slot->physical = kmm_alloc(count * sizeof(*slot->physical), KMM_PRIORITY_KERNEL);
+    if (slot->physical == NULL) {
+        return KERR_NOMEM;
+    }
+
+    for (index = 0u; index < count; index++) {
+        k_u64_t physical =
+            port_x86_64_dma_phys((const k_u8_t *)src->base + index * GPU_INTEL_GTT_PAGE_SIZE);
+
+        if (physical == 0u || (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u ||
+            (physical & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u || !port_x86_64_frame_hold(physical)) {
+            goto fail;
+        }
+        slot->physical[index] = physical;
+        held++;
+    }
+
+    rc = gpu_intel_ggtt_install(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
+                                slot->physical, &saved);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        goto fail;
+    }
+
+    slot->mapped = true;
+    slot->base = (k_u64_t)(uintptr_t)src->base;
+    slot->width = src->width;
+    slot->height = src->height;
+    slot->pitch = src->pitch;
+    return 0;
+
+fail:
+    for (index = 0u; index < held; index++) {
+        port_x86_64_frame_release(slot->physical[index]);
+    }
+    kmm_free(slot->physical);
+    slot->physical = NULL;
+    return KERR_NOTSUP;
+}
+
+/* The display engine reads physical RAM, not the CPU cache of this port. Make
+ * the visible cache lines write-back before the plane is allowed to fetch. */
+static void gpu_intel_present_flush(const struct k_fb_surface *src)
+{
+    const k_u8_t *base = (const k_u8_t *)src->base;
+    k_size_t bytes = (k_size_t)src->pitch * (k_size_t)src->height * FB_PIXEL_BYTES;
+    k_size_t offset;
+
+    for (offset = 0u; offset < bytes; offset += GPU_INTEL_CACHE_LINE) {
+        const void *line = base + offset;
+
+        __asm__ volatile("clflush (%0)" : : "r"(line) : "memory");
+    }
+    __asm__ volatile("mfence" : : : "memory");
+}
+
+static k_u32_t gpu_intel_present_address(const struct gpu_intel_flip_slot *slot)
+{
+    return slot->run.start * GPU_INTEL_GTT_PAGE_SIZE;
+}
+
+static bool gpu_intel_present_is_live(const struct gpu_intel_info *info, k_u32_t surface)
+{
+    k_u32_t live_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURFLIVE_BASE);
+
+    return (gpu_intel_mmio_read(live_offset) & GPU_INTEL_PLANE_SURFACE_MASK) ==
+           (surface & GPU_INTEL_PLANE_SURFACE_MASK);
+}
+
+static bool gpu_intel_present_restore(const struct gpu_intel_info *info)
+{
+    if (!gpu_intel_wait_frame(info) ||
+        !gpu_intel_plane_restore(info, info->plane_control, info->plane_stride,
+                                 info->plane_surface) ||
+        !gpu_intel_wait_frame(info) || !gpu_intel_present_is_live(info, info->plane_surface)) {
+        return false;
+    }
+
+    s_flip.active = -1;
+    return true;
+}
+
+static int gpu_intel_present(void *context, const struct k_fb_surface *dst,
+                             const struct k_fb_surface *src)
+{
+    const struct gpu_intel_info *info = (const struct gpu_intel_info *)context;
+    k_u32_t control_offset;
+    k_u32_t stride_offset;
+    k_u32_t surface_offset;
+    k_u32_t expected_surface;
+    k_u32_t target_surface;
+    bool display_touched = false;
+    int slot_index;
+    int rc;
+
+    if (!gpu_intel_present_compatible(info, dst, src) || !gpu_intel_present_reserve(info)) {
+        if (s_flip.active >= 0 && !gpu_intel_present_restore(info)) {
+            kerror("gpu: present could not restore the original plane after a refusal");
+        }
+        return KERR_NOTSUP;
+    }
+
+    rc = gpu_intel_present_map(info, src);
+    if (rc != 0) {
+        if (s_flip.active >= 0 && !gpu_intel_present_restore(info)) {
+            kerror("gpu: present could not restore the original plane after a mapping refusal");
+        }
+        return rc;
+    }
+    for (slot_index = 0; slot_index < (int)GPU_INTEL_FLIP_SURFACES; slot_index++) {
+        if (s_flip.slots[slot_index].mapped &&
+            s_flip.slots[slot_index].base == (k_u64_t)(uintptr_t)src->base) {
+            break;
+        }
+    }
+    if (slot_index == (int)GPU_INTEL_FLIP_SURFACES) {
+        goto fail;
+    }
+
+    control_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_CTL_BASE);
+    stride_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_STRIDE_BASE);
+    surface_offset = gpu_intel_pipe_register(info->panel_pipe, GPU_INTEL_PLANE_SURF_BASE);
+    expected_surface = s_flip.active >= 0 ? gpu_intel_present_address(&s_flip.slots[s_flip.active])
+                                          : info->plane_surface;
+    if (gpu_intel_mmio_read(control_offset) != info->plane_control ||
+        gpu_intel_mmio_read(stride_offset) != info->plane_stride ||
+        gpu_intel_mmio_read(surface_offset) != expected_surface ||
+        !gpu_intel_present_is_live(info, expected_surface)) {
+        goto fail;
+    }
+
+    target_surface = gpu_intel_present_address(&s_flip.slots[slot_index]);
+    if (s_flip.active == slot_index) {
+        return 0;
+    }
+
+    gpu_intel_present_flush(src);
+    display_touched = true;
+    if (!gpu_intel_plane_program(info, info->plane_control, info->plane_stride, target_surface) ||
+        !gpu_intel_wait_frame(info) || !gpu_intel_present_is_live(info, target_surface)) {
+        goto fail;
+    }
+
+    s_flip.active = slot_index;
+    return 0;
+
+fail:
+    /* Once a RAM surface has been live, even a failure before the next plane
+     * write must restore the original surface: the software fallback copies
+     * into that framebuffer, not into the last RAM front buffer. */
+    if ((display_touched || s_flip.active >= 0) && !gpu_intel_present_restore(info)) {
+        kerror("gpu: present rollback is not live; keeping both GGTT surfaces mapped");
+    }
+    return KERR_NOTSUP;
+}
+
+static int gpu_intel_present_release(void *context)
+{
+    const struct gpu_intel_info *info = (const struct gpu_intel_info *)context;
+    bool ok = true;
+    k_size_t index;
+    int slot_index;
+
+    if (!s_flip.reserved) {
+        return 0;
+    }
+    if (!gpu_intel_present_restore(info)) {
+        return -1;
+    }
+
+    for (slot_index = 0; slot_index < (int)GPU_INTEL_FLIP_SURFACES; slot_index++) {
+        struct gpu_intel_flip_slot *slot = &s_flip.slots[slot_index];
+
+        if (!slot->mapped) {
+            continue;
+        }
+        if (gpu_intel_ggtt_restore(s_gtt_entries, GPU_INTEL_GTT_APERTURE_ENTRIES, &slot->run,
+                                   slot->run.original) != GPU_INTEL_GGTT_OK) {
+            ok = false;
+            continue;
+        }
+        for (index = 0u; index < slot->run.count; index++) {
+            port_x86_64_frame_release(slot->physical[index]);
+        }
+        kmm_free(slot->physical);
+        memset(slot, 0, sizeof(*slot));
+    }
+
+    if (ok) {
+        s_flip.reserved = false;
+        s_flip.active = -1;
+    }
+    return ok ? 0 : -1;
+}
+
+static const struct k_fb_ops s_gpu_intel_present_ops = {
+    .present = gpu_intel_present,
+    .present_release = gpu_intel_present_release,
+};
+
 static int gpu_intel_flip(const struct gpu_intel_info *info, bool confirmed)
 {
     struct gpu_intel_gtt_range excluded[16];
@@ -917,6 +1237,12 @@ enum gpu_probe_result gpu_intel_probe(const struct port_x86_64_pci_device *pci,
     if ((info->common.panel_width != 0u || info->common.panel_height != 0u) &&
         !gpu_intel_read_framebuffer(info)) {
         return gpu_intel_finish(info, out, GPU_PROBE_DEGRADED);
+    }
+
+    if (gpu_intel_present_ready(info)) {
+        k_fb_ops_register(&s_gpu_intel_present_ops, &g_gpu_intel);
+        kinfo("gpu: Intel page-flip backend ready (%ux%u linear RGB565)",
+              (unsigned)info->framebuffer.width, (unsigned)info->framebuffer.height);
     }
 
     return gpu_intel_finish(info, out, GPU_PROBE_OK);

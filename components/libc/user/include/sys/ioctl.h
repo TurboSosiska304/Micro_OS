@@ -37,8 +37,9 @@ struct winsize {
 #define FIONREAD 0x541Bu   /* int *: the bytes that wait to be read */
 
 /* --- the framebuffer (ADR 0028) --- */
-#define FBIO_TAKE 0x4D01u /* the console of the machine is the program's */
-#define FBIO_GIVE 0x4D02u /* and it is given back */
+#define FBIO_TAKE 0x4D01u    /* the console of the machine is the program's */
+#define FBIO_GIVE 0x4D02u    /* and it is given back */
+#define FBIO_PRESENT 0x4D03u /* struct fb_present_surface *: flip or copy */
 
 int ioctl(int fd, unsigned long request, ...);
 

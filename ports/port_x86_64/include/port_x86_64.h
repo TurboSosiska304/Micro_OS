@@ -430,6 +430,12 @@ void port_x86_64_paging_space_destroy(k_u64_t cr3);
 k_u64_t port_x86_64_frame_alloc(void);
 void port_x86_64_frame_release(k_u64_t paddr);
 
+/* Hold one frame of the program arena for a device which reads it after the
+ * program may unmap or exit. The matching release is safe only after the
+ * device has stopped using the frame. False means the address is not an arena
+ * frame or its reference count is already exhausted. */
+bool port_x86_64_frame_hold(k_u64_t paddr);
+
 /*
  * Map `len` bytes of `vaddr` in the window of the programs onto the physical
  * pages at `paddr`. Both addresses must be page aligned and inside their

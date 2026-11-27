@@ -177,6 +177,45 @@ static void test_borrow_and_restore(void)
     }
 }
 
+static void test_install_fragmented_pages(void)
+{
+    struct gpu_intel_gtt_run run;
+    k_u64_t physical[3];
+    k_u64_t snapshot[32];
+    k_u64_t saved = 0u;
+    k_u32_t i;
+    enum gpu_intel_ggtt_result rc;
+
+    ktest_begin("gpu-intel: a RAM surface may install non-contiguous GGTT pages");
+
+    for (i = 0u; i < 32u; i++) {
+        g_entries[i] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+        snapshot[i] = g_entries[i];
+    }
+    rc = gpu_intel_ggtt_find_free(g_entries, 32u, 3u, NULL, 0u, &run);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    if (rc != GPU_INTEL_GGTT_OK) {
+        return;
+    }
+
+    physical[0] = 0x000000100000ULL;
+    physical[1] = 0x000000180000ULL;
+    physical[2] = 0x000000120000ULL;
+    rc = gpu_intel_ggtt_install(g_entries, 32u, &run, physical, &saved);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    for (i = 0u; i < run.count; i++) {
+        KT_CHECK(g_entries[run.start + i] == (physical[i] | GPU_INTEL_GTT_PRESENT));
+    }
+    KT_CHECK(g_entries[run.start - 1u] == snapshot[run.start - 1u]);
+    KT_CHECK(g_entries[run.start + run.count] == snapshot[run.start + run.count]);
+
+    rc = gpu_intel_ggtt_restore(g_entries, 32u, &run, saved);
+    KT_CHECK_INT_EQ(rc, GPU_INTEL_GGTT_OK);
+    for (i = 0u; i < 32u; i++) {
+        KT_CHECK(g_entries[i] == snapshot[i]);
+    }
+}
+
 static void test_rejections(void)
 {
     struct gpu_intel_fb fb;
@@ -207,5 +246,6 @@ void test_gpu_intel_ggtt(void)
     test_free_run_and_exclusions();
     test_free_run_requires_guards();
     test_borrow_and_restore();
+    test_install_fragmented_pages();
     test_rejections();
 }

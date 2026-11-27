@@ -67,11 +67,17 @@ struct uiprog {
     int pointer_y;
     bool pointer_button;
 
-    /* A backbuffer in ordinary RAM: the program composes into it and presents
-     * the rectangles that changed to the device. A program that draws straight
-     * to the device leaves it NULL. */
+    /* Two RAM surfaces: drawing happens in `backbuffer`; after a device flip
+     * it becomes the front surface and `sparebuffer` is the next drawing
+     * target. A software device keeps drawing in the same surface and copies
+     * the damage, so the spare is never shown. */
+    void *backbuffer_mapping;
+    k_size_t backbuffer_mapping_size;
     k_u16_t *backbuffer;
+    k_u16_t *sparebuffer;
     k_size_t backbuffer_size;
+    bool present_flip;
+    bool present_flipped;
 };
 
 /*
@@ -175,15 +181,18 @@ bool uiprog_close_requested(const struct uiprog *program);
 bool uiprog_pointer(const struct uiprog *program, int *x, int *y, bool *pressed);
 
 /*
- * A backbuffer in ordinary RAM for a program of the whole screen: the picture
- * is composed here and `uiprog_present` copies the rectangles that changed to
- * the device. A window of the desktop draws into its shared buffer already and
- * answers 0. 0 on success.
+ * Two RAM surfaces for a program of the whole screen. The program composes in
+ * `backbuffer`; `uiprog_present` asks the device to show it and then swaps the
+ * two surfaces. If the device cannot flip, it copies the damaged rectangles
+ * into its framebuffer and later presents keep using that software path. A
+ * window of the desktop draws into its shared buffer already and answers 0.
+ * 0 on success.
  */
 int uiprog_enable_backbuffer(struct uiprog *program);
 
-/* Copy the rectangles of the backbuffer that changed to the device. NULL/0
- * means nothing to present. 0 on success. */
+/* Present the rectangles drawn since the last call. The first call also asks
+ * the device whether it can show a complete RAM surface. NULL/0 means nothing
+ * to present. 0 on success, including a quiet fallback to the copy. */
 int uiprog_present(struct uiprog *program, const struct ui_rect *rects, int count);
 
 #endif /* MICRO_OS_PORT_X86_64_PROGRAMS_UIPROG_H */

@@ -57,6 +57,19 @@ struct fb_rect {
 };
 
 /*
+ * A complete RGB565 surface in the memory of a program. `base` is the first
+ * pixel, `pitch` is the number of pixels from one line to the next, and the
+ * range `pitch * height` must stay mapped until FBIO_GIVE (or the last close).
+ * The shape must equal the `fb_info` of the device.
+ */
+struct fb_present_surface {
+    k_u64_t base;
+    k_u32_t width;
+    k_u32_t height;
+    k_u32_t pitch;
+};
+
+/*
  * The control commands of the picture. `FBIO_TAKE` stops the console drawing
  * into the framebuffer (the program owns the picture now); `FBIO_GIVE` hands
  * it back and the kernel repaints its grid. A program may have started
@@ -64,9 +77,15 @@ struct fb_rect {
  * resource: a give while another descriptor of the device is open changes
  * nothing, and the last close gives the picture back whatever the programs
  * asked. A panic always takes the screen, whatever a program holds.
+ *
+ * `FBIO_PRESENT` asks the device to show a complete RAM surface. The answer
+ * is 0 for a device flip, 1 for the software copy, or a negative error. After
+ * a 0 the source is the front surface and must not be modified until a later
+ * present replaces it; after a 1 the original framebuffer is live again.
  */
 #define FBIO_TAKE 0x4D01u
 #define FBIO_GIVE 0x4D02u
+#define FBIO_PRESENT 0x4D03u
 
 /*
  * The header of a `write` of `/dev/fb0` and its payload, checked against the

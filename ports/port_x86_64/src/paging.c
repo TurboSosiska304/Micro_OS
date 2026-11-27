@@ -344,17 +344,20 @@ static inline __attribute__((always_inline)) bool frame_index(k_u64_t address, k
 /* The two halves a caller that holds the critical section already needs:
  * a fork shares a program of 64 MiB with one lock and not sixteen thousand,
  * and the release of a space is the same walk in the other direction. */
-static inline __attribute__((always_inline)) void frame_ref_locked(k_u64_t address)
+static inline __attribute__((always_inline)) bool frame_ref_locked(k_u64_t address)
 {
     k_size_t index;
 
     if (!frame_index(address, &index)) {
-        return;
+        return false;
     }
 
-    if (g_frame_ref[index] != 0xFFFFu) {
-        g_frame_ref[index]++;
+    if (g_frame_ref[index] == 0xFFFFu) {
+        return false;
     }
+
+    g_frame_ref[index]++;
+    return true;
 }
 
 static inline __attribute__((always_inline)) void frame_release_locked(k_u64_t address)
@@ -415,6 +418,17 @@ void port_x86_64_frame_release(k_u64_t address)
     k_port_enter_critical();
     frame_release_locked(address);
     k_port_exit_critical();
+}
+
+bool port_x86_64_frame_hold(k_u64_t address)
+{
+    bool held;
+
+    k_port_enter_critical();
+    held = frame_ref_locked(address);
+    k_port_exit_critical();
+
+    return held;
 }
 
 /* --- the tables of one address space -------------------------------------- */

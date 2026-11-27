@@ -278,12 +278,15 @@ The right end of the panel shows the hour of the machine, once a second:
 
 The server counts what it paints: the pixels of every rectangle of every turn,
 the largest rectangle, the milliseconds of the turn and the TSC nanoseconds of
-the first full frame. Three lines say it, and `make x86-vga-smoke` reads them:
+the first full frame and its present. The lines a person and
+`make x86-vga-smoke` read are:
 
 * at the end of the desk: `wm: 42 frames, the first 1024000 px of 1024000 in 6
   ms; 280000 px after it, 4 ms at the worst; the largest 1280x24`;
 * the first full frame by TSC: `wm: the first frame took 5565531 ns by TSC
   (1024000 px)`;
+* the present inside that frame: `wm: the first present took ... ns by TSC`,
+  and at the end `wm: present: N calls, ... ns total, ... ns at the worst`;
 * on **F12**, since the last press: `wm: the meter: 3 frames, 40960 px, the
   largest 640x16, 2 ms at the worst`.
 
@@ -292,6 +295,14 @@ line; the test measures a typed line and three keys the same way, and takes two
 screenshots around a key: they differ in the row of the key and in the clock and
 in nothing else, which is what "a damaged rectangle and not a frame" means on
 the glass.
+
+The compositor owns two RAM surfaces. It paints the damage and the pointer into
+the back surface and calls `uiprog_present` once. A device flip changes the
+drawing target only after the new surface is live; a software device keeps the
+same drawing target and copies the damage. The first successful flip seeds the
+spare surface once, so the steady state pays no 2 MiB copy. `wm` does not know
+whether the answer came from Intel, AMD or the software path: that choice is
+`k_blit_present` and the registered `k_fb_ops` callback (ADR 0028).
 
 ## The programs of the interface
 
