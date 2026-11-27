@@ -75,7 +75,8 @@ static bool clip(const struct k_fb_surface *surface, const struct k_fb_rect *rec
     return true;
 }
 
-/* The software fill: one store a pixel of every line of the rectangle. */
+/* The software fill: a word of four pixels at a time, so a rectangle of
+ * one colour does not cost a store a pixel. */
 static int software_fill(const struct k_fb_surface *surface, const struct k_fb_rect *rect,
                          k_u16_t pixel)
 {
@@ -89,10 +90,29 @@ static int software_fill(const struct k_fb_surface *surface, const struct k_fb_r
     for (row = 0; row < part.h; row++) {
         k_u16_t *line =
             surface->base + (k_size_t)(part.y + row) * (k_size_t)surface->pitch + (k_size_t)part.x;
-        k_i32_t column;
+        k_i32_t column = 0;
+        k_i32_t count = part.w;
+        k_u64_t word = (k_u64_t)pixel;
 
-        for (column = 0; column < part.w; column++) {
+        word |= word << 16;
+        word |= word << 32;
+
+        while (count > 0 && (((uintptr_t)(line + column)) & 7u) != 0u) {
             line[column] = pixel;
+            column++;
+            count--;
+        }
+
+        while (count >= 4) {
+            __builtin_memcpy(line + column, &word, sizeof(word));
+            column += 4;
+            count -= 4;
+        }
+
+        while (count > 0) {
+            line[column] = pixel;
+            column++;
+            count--;
         }
     }
 
