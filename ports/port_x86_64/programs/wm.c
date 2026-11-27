@@ -998,9 +998,6 @@ static void flush_pending(void)
         }
     }
 
-    /* The damage is in the RAM backbuffer now; send it to the device before
-     * the cursor is drawn over it, then send the cursor's own rectangle. */
-    (void)uiprog_present(&g_screen, g_damage, g_damage_count);
     g_damage_count = 0;
 
     /*
@@ -1011,32 +1008,6 @@ static void flush_pending(void)
      * to see to know where a click will land.
      */
     cursor_paint();
-    {
-        struct ui_rect cursor = {
-            g_pointer_x - 1,
-            g_pointer_y - 1,
-            WM_ARROW_WIDTH + 2,
-            WM_ARROW_ROWS + 2,
-        };
-
-        if (cursor.x < 0) {
-            cursor.w += cursor.x;
-            cursor.x = 0;
-        }
-        if (cursor.y < 0) {
-            cursor.h += cursor.y;
-            cursor.y = 0;
-        }
-        if (cursor.x + cursor.w > g_width) {
-            cursor.w = g_width - cursor.x;
-        }
-        if (cursor.y + cursor.h > g_height) {
-            cursor.h = g_height - cursor.y;
-        }
-        if (cursor.w > 0 && cursor.h > 0) {
-            (void)uiprog_present(&g_screen, &cursor, 1);
-        }
-    }
 
     elapsed = now_ms() - started;
 
@@ -2206,8 +2177,6 @@ int main(int argc, char *const argv[], char *const envp[])
     g_width = (int)g_screen.info.width;
     g_height = (int)g_screen.info.height;
 
-    (void)uiprog_enable_backbuffer(&g_screen);
-
     for (int index = 0; index < WM_APPS; index++) {
         g_apps[index].events = -1;
         g_apps[index].requests = -1;
@@ -2239,13 +2208,8 @@ int main(int argc, char *const argv[], char *const envp[])
         started = now_ms();
         first = tsc_now();
 
-        {
-            struct ui_rect whole = {0, 0, g_width, g_height};
-
-            scene_paint(&whole);
-            cursor_paint();
-            (void)uiprog_present(&g_screen, &whole, 1);
-        }
+        scene_paint(&(struct ui_rect){0, 0, g_width, g_height});
+        cursor_paint();
 
         elapsed = tsc_now() - first;
         g_frames.frames = 1u;
