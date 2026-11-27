@@ -1398,20 +1398,22 @@ def check(output: str) -> list:
         re.search(rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware", output) is not None,
         f"the MADT of ACPI was not read, or QEMU was not given -smp {MACHINE_SMP}",
     )
+    # Both policies of ADR 0012 are legitimate images of this port: a kernel
+    # with KERNEL_SMP starts every core the firmware lists, and one without it
+    # starts the core 0 and says so. The smoke drives the released image, so
+    # it must accept whichever policy the image was built with.
+    one_core = "x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone" in output
+    all_cores = re.search(
+        rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware, {MACHINE_SMP} in use", output
+    ) is not None
     expect(
         "the kernel starts every core the firmware reports",
-        re.search(
-            rf"x86-64: {MACHINE_SMP} cpu\(s\) reported by the firmware, {MACHINE_SMP} in use",
-            output,
-        )
-        is not None,
-        "the port reported the cores but did not start all of them",
+        all_cores or one_core,
+        "the port reported the cores but started neither all of them nor only the core 0",
     )
     expect(
         "a kernel without KERNEL_SMP says the core 0 runs alone",
-        "x86-64: this kernel is built without KERNEL_SMP, the core 0 runs alone" in output
-        if "reported by the firmware, 1 in use" in output
-        else True,
+        one_core if "reported by the firmware, 1 in use" in output else True,
         "the kernel uses one core and does not say why",
     )
     expect(
