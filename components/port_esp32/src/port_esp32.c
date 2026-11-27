@@ -41,6 +41,7 @@
  * no-op when it was not created yet.
  */
 static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+static k_u32_t s_crit_depth;
 
 typedef struct {
     TaskHandle_t handle;
@@ -117,13 +118,22 @@ k_u64_t k_port_uptime_ms(void)
     return (k_u64_t)(esp_timer_get_time() / 1000);
 }
 
+k_u32_t k_port_critical_depth(void)
+{
+    return s_crit_depth;
+}
+
 void k_port_enter_critical(void)
 {
     portENTER_CRITICAL(&s_lock);
+    s_crit_depth++;
 }
 
 void k_port_exit_critical(void)
 {
+    if (s_crit_depth > 0u) {
+        s_crit_depth--;
+    }
     portEXIT_CRITICAL(&s_lock);
 }
 

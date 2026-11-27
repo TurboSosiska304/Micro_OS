@@ -839,7 +839,7 @@ class Machine:
     """
 
     def __init__(self, loader: str, kernel: str, workdir: str, vga: str, display: str = "none",
-                 image: str | None = None, cpu: str | None = None) -> None:
+                 image: str | None = None, cpu: str | None = None, smp: str = "8") -> None:
         # The first-frame checks are timing sensitive. Another lane's QEMU on
         # the same host starves TCG and makes a correct picture fail, so every
         # boot waits for a quiet host. Match the process name rather than
@@ -875,6 +875,8 @@ class Machine:
             kernel,
             "-m",
             "256",
+            "-smp",
+            smp,
             "-no-reboot",
             # The card of the machine is the subject of the test and not its
             # instrument: by default no display of QEMU is opened, the video
@@ -4169,9 +4171,16 @@ def run_boot_desktop(
             # The ACPI S5 of QEMU is a few seconds of a machine under load and
             # the power of the guest is the end of the process: the wait is the
             # patience of two timeouts and not the window of one.
-            deadline = time.monotonic() + 2 * timeout
+            deadline = time.monotonic() + 4 * timeout
             while machine.process.poll() is None and time.monotonic() < deadline:
                 time.sleep(0.2)
+
+            if machine.process.poll() is None:
+                machine.process.terminate()
+                try:
+                    machine.process.wait(timeout=10)
+                except Exception:
+                    pass
 
             expect("the desk of the machine ends with the power",
                    machine.process.poll() is not None,

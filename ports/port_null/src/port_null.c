@@ -180,6 +180,11 @@ void k_port_free(void *ptr)
 
 /* --- locking --- */
 
+k_u32_t k_port_critical_depth(void)
+{
+    return 0u;
+}
+
 void k_port_enter_critical(void) {}
 
 void k_port_exit_critical(void) {}

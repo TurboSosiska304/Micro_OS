@@ -16,6 +16,7 @@
 #include "port_x86_64.h"
 
 #include <stdarg.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "kernel/clock.h"
@@ -27,6 +28,7 @@
 #include "kernel/port/cpu.h"
 #include "kernel/port_task.h"
 #include "kernel/sched.h"
+#include "kernel/task.h"
 #include "port_x86_64_console.h"
 #include "port_x86_64_screen.h"
 #include "port_x86_64_task.h"
@@ -90,6 +92,9 @@ static void tls_init(void)
  */
 static bool g_com1_present;
 
+/* The calibrated TSC is shared by the clock and the bounded console waits. */
+static k_u64_t g_tsc_per_second;
+
 static void com1_probe(void)
 {
     port_outb(COM1 + 7, 0xAEu);
@@ -137,19 +142,170 @@ static k_u8_t g_com1_state;
 static char g_com1_escape[COM1_ESCAPE_MAX];
 static k_size_t g_com1_len;
 
+/*
+ * A console is not allowed to hold the machine. The host may stop reading a
+ * serial pipe and the 16550 will keep THR empty forever; waiting without a
+ * deadline then holds the BKL and stops every other core with it. One bounded
+ * wait is allowed, and an outage drops the remaining bytes until the port is
+ * ready again instead of making every byte pay the timeout.
+ */
+#define COM1_THR_TIMEOUT_US 100u
+#define COM1_THR_FALLBACK_SPINS 1000000u
+
+static k_u64_t g_com1_thr_waits;
+static k_u64_t g_com1_thr_timeouts;
+static k_u64_t g_com1_dropped;
+static k_u32_t g_com1_last_cpu;
+static k_u32_t g_com1_last_pid;
+static k_u64_t g_com1_last_rip;
+static k_u64_t g_com1_last_rsp;
+static k_u64_t g_com1_last_stack[PORT_X86_64_COM1_STACK_WORDS];
+static bool g_com1_thr_down;
+
+/* Wait for THR, and name the exact instruction and stack if the wait expires. */
+static bool com1_wait_thr(k_u64_t *rip, k_u64_t *rsp, k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS])
+{
+    k_u64_t ticks = 0;
+    k_u64_t start = 0;
+    k_u32_t spins = 0;
+
+    if (g_tsc_per_second != 0u) {
+        ticks = (g_tsc_per_second / 1000000u) * (k_u64_t)COM1_THR_TIMEOUT_US;
+        start = port_rdtsc();
+    }
+
+    for (;;) {
+        if ((port_inb(COM1_LSR) & 0x20u) != 0u) {
+            return true;
+        }
+
+        /* The local label is sampled on failure, so the report names the
+         * instruction that was spinning rather than a stale switch frame. */
+        __asm__ volatile("1:\n\tpause" ::: "memory");
+
+        if (ticks != 0u) {
+            if (port_rdtsc() - start >= ticks) {
+                break;
+            }
+        } else if (++spins >= COM1_THR_FALLBACK_SPINS) {
+            break;
+        }
+    }
+
+    __asm__ volatile("lea 1b(%%rip), %0" : "=r"(*rip));
+    __asm__ volatile("mov %%rsp, %0" : "=r"(*rsp));
+
+    {
+        const k_u64_t *words = (const k_u64_t *)(uintptr_t)*rsp;
+
+        for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+            stack[i] = words[i];
+        }
+    }
+
+    return false;
+}
+
+/* A timeout must not recurse into the wait it is reporting. These bytes are
+ * offered once, without waiting: a full FIFO loses the report, not the core. */
+static void com1_report_timeout(k_u32_t cpu, k_u32_t pid, const char *name, k_u64_t rip,
+                                k_u64_t rsp)
+{
+    char buf[160];
+    int n = snprintf(buf, sizeof(buf),
+                     "[UART] THR timeout cpu=%u pid=%u task=%s\r\n"
+                     "[UART] rip=0x%08x%08x rsp=0x%08x%08x\r\n",
+                     (unsigned)cpu, (unsigned)pid, name != NULL ? name : "?", (unsigned)(rip >> 32),
+                     (unsigned)(rip & 0xFFFFFFFFu), (unsigned)(rsp >> 32),
+                     (unsigned)(rsp & 0xFFFFFFFFu));
+
+    for (int i = 0; i < n; i++) {
+        port_outb(COM1, (k_u8_t)buf[i]);
+    }
+}
+
+static void com1_timeout(k_u64_t rip, k_u64_t rsp,
+                         const k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS])
+{
+    struct task *self = k_port_task_current();
+    k_u32_t cpu = k_port_cpu_id();
+    k_u32_t pid = self != NULL ? self->pid : 0u;
+
+    __atomic_store_n(&g_com1_thr_down, true, __ATOMIC_RELEASE);
+    __atomic_fetch_add(&g_com1_thr_timeouts, 1u, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_cpu, cpu, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_pid, pid, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_rip, rip, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_com1_last_rsp, rsp, __ATOMIC_RELAXED);
+
+    for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+        __atomic_store_n(&g_com1_last_stack[i], stack[i], __ATOMIC_RELAXED);
+    }
+
+    com1_report_timeout(cpu, pid, self != NULL ? self->name : NULL, rip, rsp);
+}
+
+static bool com1_put(char c)
+{
+    if ((port_inb(COM1_LSR) & 0x20u) != 0u) {
+        __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
+        port_outb(COM1, (k_u8_t)c);
+        return true;
+    }
+
+    if (__atomic_load_n(&g_com1_thr_down, __ATOMIC_ACQUIRE)) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
+        return false;
+    }
+
+    __atomic_fetch_add(&g_com1_thr_waits, 1u, __ATOMIC_RELAXED);
+
+    {
+        k_u64_t rip = 0;
+        k_u64_t rsp = 0;
+        k_u64_t stack[PORT_X86_64_COM1_STACK_WORDS];
+
+        if (!com1_wait_thr(&rip, &rsp, stack)) {
+            com1_timeout(rip, rsp, stack);
+            return false;
+        }
+    }
+
+    __atomic_store_n(&g_com1_thr_down, false, __ATOMIC_RELAXED);
+    port_outb(COM1, (k_u8_t)c);
+    return true;
+}
+
+void port_x86_64_com1_get_stats(struct port_x86_64_com1_stats *stats)
+{
+    if (stats == NULL) {
+        return;
+    }
+
+    stats->thr_waits = __atomic_load_n(&g_com1_thr_waits, __ATOMIC_RELAXED);
+    stats->thr_timeouts = __atomic_load_n(&g_com1_thr_timeouts, __ATOMIC_RELAXED);
+    stats->dropped = __atomic_load_n(&g_com1_dropped, __ATOMIC_RELAXED);
+    stats->last_cpu = __atomic_load_n(&g_com1_last_cpu, __ATOMIC_RELAXED);
+    stats->last_pid = __atomic_load_n(&g_com1_last_pid, __ATOMIC_RELAXED);
+    stats->last_rip = __atomic_load_n(&g_com1_last_rip, __ATOMIC_RELAXED);
+    stats->last_rsp = __atomic_load_n(&g_com1_last_rsp, __ATOMIC_RELAXED);
+
+    for (k_size_t i = 0; i < PORT_X86_64_COM1_STACK_WORDS; i++) {
+        stats->last_stack[i] = __atomic_load_n(&g_com1_last_stack[i], __ATOMIC_RELAXED);
+    }
+}
+
 /* One byte of the dialogue on the wire, with the line ending a terminal of
  * the user wants and the kernel writes as one. */
 static void com1_byte(char c)
 {
-    if (c == '\n') {
-        while ((port_inb(COM1_LSR) & 0x20) == 0) {
-        }
-        port_outb(COM1, '\r');
+    if (c == '\n' && !com1_put('\r')) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
     }
 
-    while ((port_inb(COM1_LSR) & 0x20) == 0) {
+    if (!com1_put(c)) {
+        __atomic_fetch_add(&g_com1_dropped, 1u, __ATOMIC_RELAXED);
     }
-    port_outb(COM1, (k_u8_t)c);
 }
 
 static void com1_flush(void)
@@ -385,8 +541,6 @@ void k_port_console_size(k_u16_t *rows, k_u16_t *columns)
  * ticks of the timer, see "the time" below — but it says how fast this
  * machine is, which is the first number a human asks about a port.
  */
-static k_u64_t g_tsc_per_second;
-
 static void clock_measure(void)
 {
     const k_u32_t counts = 59659; /* 50 ms of the 1193182 Hz crystal */
@@ -1815,34 +1969,78 @@ k_size_t k_port_psram_free(void)
  * publishes the writes of the section to the core that takes it next.
  */
 static k_u32_t g_critical_lock;
+static k_u32_t g_critical_owner = KERNEL_CPUS_MAX;
 
 static k_u64_t g_critical_flags[KERNEL_CPUS_MAX][CRITICAL_DEPTH_MAX];
 static k_u32_t g_critical_depth[KERNEL_CPUS_MAX];
 
+static void critical_debug_dump(k_u32_t self)
+{
+    static k_u32_t dumped;
+    k_u32_t owner = __atomic_load_n(&g_critical_owner, __ATOMIC_RELAXED);
+    k_u32_t cpu;
+    char buf[96];
+    int n;
+
+    if (__atomic_exchange_n(&dumped, 1u, __ATOMIC_ACQUIRE) != 0u) {
+        return;
+    }
+
+    n = snprintf(buf, sizeof(buf), "\r\n[BKL] spin timeout: cpu %u waiting, owner cpu %u\r\n",
+                 (unsigned)self, (unsigned)owner);
+    for (int i = 0; i < n; i++) {
+        com1_byte(buf[i]);
+    }
+
+    for (cpu = 0; cpu < KERNEL_CPUS_MAX; cpu++) {
+        struct task *t = k_cpu_by_id(cpu) ? k_cpu_by_id(cpu)->current : NULL;
+        n = snprintf(buf, sizeof(buf), "[BKL] cpu %u depth %u task %s\r\n", (unsigned)cpu,
+                     (unsigned)g_critical_depth[cpu], t != NULL ? t->name : "<none>");
+        for (int i = 0; i < n; i++) {
+            com1_byte(buf[i]);
+        }
+    }
+}
+
 static void critical_lock_acquire(void)
 {
-    /*
-     * The polite half of a test-and-set lock: an exchange on every turn would
-     * keep the cache line of the lock in the other core's cache, and the core
-     * that holds it is trying to finish a short section. The first exchange is
-     * the only one that must be atomic; after it fails the word is only read
-     * until it reads zero, and then one exchange again settles the race
-     * between two waiters.
-     */
+    k_u32_t spins = 0;
+
     for (;;) {
         if (__atomic_exchange_n(&g_critical_lock, 1u, __ATOMIC_ACQUIRE) == 0u) {
+            g_critical_owner = k_port_cpu_id();
             return;
         }
 
         while (__atomic_load_n(&g_critical_lock, __ATOMIC_RELAXED) != 0u) {
             __asm__ volatile("pause");
+            if (++spins == 0u) {
+                /* Wrapped: about many seconds; dump once. */
+                critical_debug_dump(k_port_cpu_id());
+            }
+        }
+
+        if ((spins & 0x3FFFFFFFu) == 0x3FFFFFFFu) {
+            critical_debug_dump(k_port_cpu_id());
         }
     }
 }
 
 static void critical_lock_release(void)
 {
+    g_critical_owner = KERNEL_CPUS_MAX;
     __atomic_store_n(&g_critical_lock, 0u, __ATOMIC_RELEASE);
+}
+
+k_u32_t k_port_critical_depth(void)
+{
+    k_u32_t cpu = k_port_cpu_id();
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        cpu = 0u;
+    }
+
+    return g_critical_depth[cpu];
 }
 
 void k_port_enter_critical(void)
@@ -1864,6 +2062,14 @@ void k_port_enter_critical(void)
      */
     if (g_critical_depth[cpu] == 0u) {
         critical_lock_acquire();
+    } else if (g_critical_owner != cpu) {
+        char buf[80];
+        int n =
+            snprintf(buf, sizeof(buf), "\r\n[BKL] owner mismatch cpu=%u owner=%u depth=%u\r\n",
+                     (unsigned)cpu, (unsigned)g_critical_owner, (unsigned)g_critical_depth[cpu]);
+        for (int i = 0; i < n; i++) {
+            com1_byte(buf[i]);
+        }
     }
 
     if (g_critical_depth[cpu] < CRITICAL_DEPTH_MAX) {
@@ -1913,7 +2119,8 @@ struct k_port_mutex {
      * exists, and MicroFS takes its lock for that too).
      */
     k_u64_t owner;
-    k_u32_t depth; /* the recursive takes of the owner */
+    k_u32_t depth;    /* the recursive takes of the owner */
+    k_u32_t boot_cpu; /* the idle context that owns a boot token */
 };
 
 #define PORT_MUTEX_BOOT ((k_u64_t)1)
@@ -1964,6 +2171,7 @@ k_port_mutex_t *k_port_mutex_create(void)
 
     mutex->owner = 0;
     mutex->depth = 0;
+    mutex->boot_cpu = KERNEL_CPUS_MAX;
 
     return mutex;
 }
@@ -2002,13 +2210,16 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
 
     for (;;) {
         k_u64_t owner;
+        k_u32_t boot_cpu;
 
         k_port_enter_critical();
         owner = mutex->owner;
+        boot_cpu = mutex->boot_cpu;
 
         if (owner == 0) {
             mutex->owner = self;
             mutex->depth = 1;
+            mutex->boot_cpu = self == PORT_MUTEX_BOOT ? k_port_cpu_id() : KERNEL_CPUS_MAX;
             k_port_exit_critical();
             return 0;
         }
@@ -2024,22 +2235,31 @@ int k_port_mutex_lock(k_port_mutex_t *mutex)
         k_port_exit_critical();
 
         if (owner == PORT_MUTEX_BOOT && self != PORT_MUTEX_BOOT) {
-            /* The owner is the context the core booted on: it is resumed
-             * only when no task is ready, so a task that yields and retries
-             * is a task that never gets the lock. Hand it the CPU. */
-            static k_u32_t idle_waits;
+            if (boot_cpu == k_port_cpu_id()) {
+                /* The owner is the context the core booted on: it is resumed
+                 * only when no task is ready, so a task that yields and retries
+                 * is a task that never gets the lock. Hand it the CPU. */
+                static k_u32_t idle_waits;
 
-            /*
-             * The first time is a line of the debug log: the path is rare
-             * (a section long enough for a tick to split it while the idle
-             * context of the core holds it), and a person looking at a
-             * machine that seems slow wants to know it happened.
-             */
-            if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
-                klog(K_LOG_LEVEL_DEBUG,
-                     "port: a task waited for a mutex of the boot context; the CPU was given");
+                /*
+                 * The first time is a line of the debug log: the path is rare
+                 * (a section long enough for a tick to split it while the idle
+                 * context of the core holds it), and a person looking at a
+                 * machine that seems slow wants to know it happened.
+                 */
+                if (__atomic_add_fetch(&idle_waits, 1, __ATOMIC_RELAXED) == 1u) {
+                    klog(K_LOG_LEVEL_DEBUG,
+                         "port: a task waited for a mutex of the boot context; the CPU was given");
+                }
+                port_x86_64_yield_to_idle();
+                continue;
             }
-            port_x86_64_yield_to_idle();
+
+            /* The boot context belongs to another core. Its saved stack has to
+             * be resumed there; switching this core to its own idle context
+             * would leave the owner suspended for ever. */
+            port_x86_64_resume_boot(boot_cpu);
+            mutex_wait();
             continue;
         }
 
@@ -2071,6 +2291,7 @@ int k_port_mutex_unlock(k_port_mutex_t *mutex)
 
     mutex->depth = 0;
     mutex->owner = 0;
+    mutex->boot_cpu = KERNEL_CPUS_MAX;
 
     k_port_exit_critical();
 
