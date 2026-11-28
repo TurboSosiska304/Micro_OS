@@ -17,7 +17,6 @@ set(MICRO_OS_KERNEL_SRCS
     "src/fb.c"
     "src/fb_ops.c"
     "src/blit.c"
-    "src/install.c"
     "src/input.c"
     "src/input_hid.c"
     "src/input_scancode.c"
@@ -75,6 +74,12 @@ if(ESP_PLATFORM)
     # build time and not a fault on the board.
     target_compile_options(${COMPONENT_LIB} PRIVATE -Wextra)
 else()
+    # The installer is an x86-64 tool (ADR 0041): it creates the tree and the
+    # record of an installed volume. The board does not ship it, so the code
+    # and its static data stay out of the ESP32 image. The host build keeps
+    # it because the tests of the install tree run there.
+    list(APPEND MICRO_OS_KERNEL_SRCS "src/install.c")
+
     add_library(microos_kernel STATIC ${MICRO_OS_KERNEL_SRCS})
     target_include_directories(microos_kernel PUBLIC "${CMAKE_CURRENT_LIST_DIR}/include")
     target_compile_features(microos_kernel PUBLIC c_std_11)

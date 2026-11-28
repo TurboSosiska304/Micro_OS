@@ -25,8 +25,14 @@
  */
 #define KSHELL_MAX_COMMANDS 72
 /* The install command takes a disk, a size, a filesystem and a quoted
- * confirmation line: four flags and their four words beside the command. */
+ * confirmation line: four flags and their four words beside the command.
+ * The board does not ship the installer, so it keeps the smaller argv table
+ * and saves the DRAM that four extra pointers per pipe stage would cost. */
+#if defined(ESP_PLATFORM)
+#define KSHELL_MAX_ARGS 8
+#else
 #define KSHELL_MAX_ARGS 12
+#endif
 #define KSHELL_LINE_MAX 128
 
 /* Return codes of a command handler. */
