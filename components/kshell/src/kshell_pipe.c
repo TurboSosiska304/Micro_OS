@@ -36,6 +36,7 @@
 
 #include "kernel/console.h"
 #include "kernel/errno.h"
+#include "kernel/sched.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "kernel/tty.h"
@@ -1039,13 +1040,24 @@ static int pipeline_run(struct pipeline *p, const char *text, bool background)
         cost += kshell_stage_is_program(p->stages[index].argv[0]) ? 2 : 1;
     }
 
-    free_tasks = (k_size_t)TASK_MAX_TASKS - task_count();
-    if ((k_size_t)cost > free_tasks) {
-        kshell_eprintf("the shell: %d stages need %d task slots and %u of %u are free\n", p->count,
-                       cost, (unsigned)free_tasks, (unsigned)TASK_MAX_TASKS);
-        kshell_eprintf("the shell: a stage that runs a program is two tasks (the stage and the "
-                       "program); shorten the chain\n");
-        return KSHELL_ERROR;
+    {
+        k_u32_t wait_ms;
+
+        for (wait_ms = 0; wait_ms < 100; wait_ms++) {
+            free_tasks = (k_size_t)TASK_MAX_TASKS - task_count();
+            if ((k_size_t)cost <= free_tasks) {
+                break;
+            }
+            k_sched_sleep_ms(1);
+        }
+
+        if ((k_size_t)cost > free_tasks) {
+            kshell_eprintf("the shell: %d stages need %d task slots and %u of %u are free\n",
+                           p->count, cost, (unsigned)free_tasks, (unsigned)TASK_MAX_TASKS);
+            kshell_eprintf("the shell: a stage that runs a program is two tasks (the stage and "
+                           "the program); shorten the chain\n");
+            return KSHELL_ERROR;
+        }
     }
 
     job = job_allocate(text);
