@@ -14,7 +14,7 @@
 #endif
 
 #define KERNEL_VERSION_MAJOR 2
-#define KERNEL_VERSION_MINOR 3
+#define KERNEL_VERSION_MINOR 4
 #define KERNEL_VERSION_PATCH 0
 
 /* A pre-release carries a suffix ("-rc1", "-pre") until the release drops it:
