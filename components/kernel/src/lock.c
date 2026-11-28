@@ -64,7 +64,8 @@ static void mutex_dbg_ensure(void)
         return;
     }
 
-    fresh = (struct mutex_dbg_entry *)kmm_alloc(MUTEX_DBG_MAX * sizeof(*fresh), KMM_PRIORITY_KERNEL);
+    fresh =
+        (struct mutex_dbg_entry *)kmm_alloc(MUTEX_DBG_MAX * sizeof(*fresh), KMM_PRIORITY_KERNEL);
     if (fresh == NULL) {
         k_port_enter_critical();
         g_mutex_dbg_allocating = false;
