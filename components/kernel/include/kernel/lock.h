@@ -44,6 +44,13 @@ struct k_mutex_debug_info {
 k_size_t k_mutex_debug_snapshot(struct k_mutex_debug_info *out, k_size_t max);
 
 /*
+ * Allocate the debug registry. On ESP32 the 1 KiB table lives in the heap,
+ * not in DRAM BSS; on other platforms it is a static array and this is a
+ * no-op. Called once at boot, before any mutex is taken.
+ */
+void k_mutex_debug_init(void);
+
+/*
  * Take the mutex, waiting as long as it takes; a task that already owns
  * it takes it again. Returns 0, or -1 when the lock could not be made
  * (no memory) - the caller has to treat that as an error and not as a

@@ -4,6 +4,7 @@
 
 #include "kernel/config.h"
 #include "kernel/kmm.h"
+#include "kernel/lock.h"
 #include "kernel/ksys.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
@@ -20,6 +21,7 @@ static int sched_subsys_init(void)
 {
     k_sched_init();
     kmm_init();
+    k_mutex_debug_init();
     ksys_init();
     k_tty_init();
     return 0;

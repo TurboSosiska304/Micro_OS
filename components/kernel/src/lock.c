@@ -32,44 +32,39 @@ struct mutex_dbg_entry {
     k_u16_t depth;
 };
 
+#if defined(ESP_PLATFORM)
 /*
- * Allocated on first use: 1 KiB in BSS was more than the ESP32 DRAM window
+ * Allocated once at boot: 1 KiB in BSS was more than the ESP32 DRAM window
  * could spare. A missing registry only makes the hang dump less detailed, so a
  * failed allocation is warned and the lock itself still works.
  */
 static struct mutex_dbg_entry *g_mutex_dbg;
-static k_u16_t g_mutex_dbg_count;
 static bool g_mutex_dbg_warned;
+#else
+/*
+ * The host and x86 builds have the BSS to spare and the lock path must not
+ * allocate: fifteen pipeline stages take many mutexes at once, and an
+ * allocation under that pressure can deadlock the lock it came to serve.
+ */
+static struct mutex_dbg_entry g_mutex_dbg_storage[MUTEX_DBG_MAX];
+static struct mutex_dbg_entry *g_mutex_dbg = g_mutex_dbg_storage;
+#endif
 
-static volatile bool g_mutex_dbg_allocating;
+static k_u16_t g_mutex_dbg_count;
 
-static void mutex_dbg_ensure(void)
+void k_mutex_debug_init(void)
 {
+#if defined(ESP_PLATFORM)
     struct mutex_dbg_entry *fresh;
-    bool need_alloc = false;
     k_u16_t i;
 
     if (g_mutex_dbg != NULL) {
         return;
     }
 
-    k_port_enter_critical();
-    if (g_mutex_dbg == NULL && !g_mutex_dbg_allocating) {
-        g_mutex_dbg_allocating = true;
-        need_alloc = true;
-    }
-    k_port_exit_critical();
-
-    if (!need_alloc) {
-        return;
-    }
-
     fresh =
         (struct mutex_dbg_entry *)kmm_alloc(MUTEX_DBG_MAX * sizeof(*fresh), KMM_PRIORITY_KERNEL);
     if (fresh == NULL) {
-        k_port_enter_critical();
-        g_mutex_dbg_allocating = false;
-        k_port_exit_critical();
         if (!g_mutex_dbg_warned) {
             g_mutex_dbg_warned = true;
             kwarn("lock: mutex debug registry alloc failed (KERR_NOMEM)");
@@ -84,29 +79,15 @@ static void mutex_dbg_ensure(void)
         fresh[i].depth = 0u;
     }
 
-    k_port_enter_critical();
-    if (g_mutex_dbg == NULL) {
-        g_mutex_dbg = fresh;
-        fresh = NULL;
-    }
-    g_mutex_dbg_allocating = false;
-    k_port_exit_critical();
-
-    if (fresh != NULL) {
-        kmm_free(fresh);
-    }
+    g_mutex_dbg = fresh;
+#endif
 }
 
 static void mutex_dbg_register(k_mutex_t *mutex)
 {
     k_u16_t i;
 
-    if (mutex == NULL) {
-        return;
-    }
-
-    mutex_dbg_ensure();
-    if (g_mutex_dbg == NULL) {
+    if (mutex == NULL || g_mutex_dbg == NULL) {
         return;
     }
 
