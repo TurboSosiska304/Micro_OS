@@ -44,6 +44,9 @@
 #include "port_x86_64_apic.h"
 #include "port_x86_64_smp.h"
 
+/* A write of a formatted diagnosis never leaves the array it formatted. */
+static void slpdbg_write(char *buf, k_size_t size, int len);
+
 /*
  * The image of the floating point state (FXSAVE): the x87 unit, the sixteen
  * XMM registers and MXCSR, 512 bytes, and the processor wants the area on a
@@ -591,9 +594,7 @@ static void wait_for_interrupt(void)
                        (this_cpu()->current != NULL && this_cpu()->current->task != NULL)
                            ? this_cpu()->current->task->pid
                            : 0u);
-        if (len > 0) {
-            port_x86_64_debug_write(buf, (k_size_t)len);
-        }
+        slpdbg_write(buf, sizeof(buf), len);
     }
 
     port_restore_flags(flags | PORT_X86_64_RFLAGS_IF);
@@ -1031,6 +1032,26 @@ bool k_port_task_sleep_cuttable(void)
 #define PORT_SLEEP_HARD_MS 30000u
 
 /*
+ * snprintf answers with the length the result would have had, which is
+ * larger than the buffer when it truncated. Writing that many bytes puts
+ * whatever follows the local array - including the digits of a formatted
+ * address - onto the wire. Clamp before the write.
+ */
+static void slpdbg_write(char *buf, k_size_t size, int len)
+{
+    k_size_t n;
+
+    if (len <= 0) {
+        return;
+    }
+    n = (k_size_t)len;
+    if (n > size) {
+        n = size;
+    }
+    port_x86_64_debug_write(buf, n);
+}
+
+/*
  * A clock that keeps running when the tick of the boot does not. The port's
  * uptime is counted in ticks, so a stopped tick would also stop the deadline
  * of a diagnosis that used it; the TSC is calibrated by the boot and does
@@ -1081,9 +1102,7 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
                    (unsigned)k_sched_ticks(), (unsigned long long)port_x86_64_ticks(),
                    (unsigned)((port_x86_64_read_flags() & PORT_X86_64_RFLAGS_IF) != 0u),
                    port_x86_64_critical_depth_cpu(k_cpu_id()), (unsigned)count);
-    if (len > 0) {
-        port_x86_64_debug_write(buf, (k_size_t)len);
-    }
+    slpdbg_write(buf, sizeof(buf), len);
 
     /* One line per core: the task on it, the RIP its context saved, the ticks
      * it took, and the deadlines of the sleepers that belong to its queue. */
@@ -1118,8 +1137,11 @@ static void sleep_stall_dump(k_u32_t ms, k_u64_t stall_deadline_us)
         if (len < 0) {
             len = 0;
         }
+        if ((k_size_t)len >= sizeof(buf) - 2u) {
+            len = (int)sizeof(buf) - 2;
+        }
         len += snprintf(buf + len, sizeof(buf) - (k_size_t)len, "\r\n");
-        port_x86_64_debug_write(buf, (k_size_t)len);
+        slpdbg_write(buf, sizeof(buf), len);
     }
 }
 
@@ -1178,9 +1200,7 @@ void k_port_task_sleep_ms(k_u32_t ms)
                                "[SLPDBG] pid=%u: sleep of %u ms forced past its wake\r\n",
                                (unsigned)self->pid, (unsigned)ms);
 
-            if (len > 0) {
-                port_x86_64_debug_write(buf, (k_size_t)len);
-            }
+            slpdbg_write(buf, sizeof(buf), len);
             return;
         }
 
