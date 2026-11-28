@@ -820,6 +820,13 @@ k_u64_t port_x86_64_task_space(void)
     return (current != NULL && current->is_user) ? current->cr3 : 0;
 }
 
+k_u64_t port_x86_64_task_cr3_of(const struct task *t)
+{
+    struct port_task *pt = port_task_of(t);
+
+    return (pt != NULL && pt->is_user) ? pt->cr3 : 0;
+}
+
 k_u64_t port_x86_64_task_stack_top(void)
 {
     struct port_task *current = this_cpu()->current;

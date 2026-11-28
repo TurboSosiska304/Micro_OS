@@ -38,6 +38,8 @@
 #include "kernel/log.h"
 #include "kernel/mm.h"
 #include "kernel/port/cpu.h"
+#include "kernel/sched.h"
+#include "kernel/task.h"
 #include "kernel/port/lock.h"
 #include "port_x86_64_task.h"
 
@@ -208,6 +210,18 @@ extern char __kernel_end[];
 
 static k_u8_t g_page_pool[PAGE_POOL_PAGES * PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
+
+/*
+ * Frame lifecycle diagnostics for the SMP memory-corruption hunt. Set to 0
+ * to keep the console quiet on a normal run; set to 1 for one instrumented
+ * boot. Every log is below this flag, and the reverse-map invariant runs only
+ * when it is on.
+ */
+#define PORT_FRAME_DIAG 0
+/* The per-frame journal is far too verbose for a live console: every alloc
+ * and free lands between a shell command and its answer. Keep it off in a
+ * normal run; only invariant violations print, which are rare. */
+#define PORT_FRAME_TRACE 0
 
 /*
  * One reference per page of the arena. A fork makes two spaces point at the
@@ -381,11 +395,72 @@ static inline __attribute__((always_inline)) void frame_release_locked(k_u64_t a
     }
 }
 
+static k_u64_t *table_entry(k_u64_t entry);
+static k_u64_t *space_pd(k_u64_t cr3);
+
+#if PORT_FRAME_DIAG
+/*
+ * Reverse map: find an active address space whose page tables still name a
+ * frame. Called before a zero-refcount frame is handed out; a hit means a
+ * space kept a PTE to a frame the allocator believes is free.
+ */
+static bool frame_scan_users(k_u64_t frame, k_u32_t *out_pid, k_u64_t *out_cr3)
+{
+    k_size_t i;
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = task_get_by_index(i);
+        k_u64_t cr3;
+        k_u64_t *pd;
+        k_u32_t pd_index;
+
+        if (t == NULL) {
+            continue;
+        }
+        cr3 = port_x86_64_task_cr3_of(t);
+        if (cr3 == 0 || cr3 == port_x86_64_kernel_cr3()) {
+            continue;
+        }
+        pd = space_pd(cr3);
+        if (pd == NULL) {
+            continue;
+        }
+        for (pd_index = 0; pd_index < USER_PD_COUNT; pd_index++) {
+            k_u64_t pde = pd[USER_PD_FIRST + pd_index];
+            k_u64_t *pt;
+            k_u32_t pt_index;
+
+            if ((pde & PTE_PRESENT) == 0 || (pde & PTE_PAGE_SIZE) != 0) {
+                continue;
+            }
+            pt = table_entry(pde);
+            for (pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
+                if ((pt[pt_index] & PTE_PRESENT) != 0 && (pt[pt_index] & PTE_ADDRESS) == frame) {
+                    if (out_pid != NULL) {
+                        *out_pid = t->pid;
+                    }
+                    if (out_cr3 != NULL) {
+                        *out_cr3 = cr3;
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+#endif
+
 k_u64_t port_x86_64_frame_alloc(void)
 {
     k_size_t index;
     k_size_t slot;
     k_u64_t address = 0;
+#if PORT_FRAME_DIAG
+    k_u32_t holder_pid = 0;
+    k_u64_t holder_cr3 = 0;
+    bool held_by_space = false;
+#endif
 
     k_port_enter_critical();
 
@@ -397,6 +472,10 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
 
         if (g_frame_ref[index] == 0) {
+#if PORT_FRAME_DIAG
+            address = PORT_X86_64_USER_PHYS + (k_u64_t)index * PAGE_SIZE;
+            held_by_space = frame_scan_users(address, &holder_pid, &holder_cr3);
+#endif
             g_frame_ref[index] = 1;
             g_frame_hint = (k_u32_t)((index + 1u) % USER_FRAME_COUNT);
             address = PORT_X86_64_USER_PHYS + (k_u64_t)index * PAGE_SIZE;
@@ -404,7 +483,26 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
     }
 
+#if PORT_FRAME_DIAG
+    if (held_by_space) {
+        klog(K_LOG_LEVEL_ERROR,
+             "frame-invariant: ALLOC of %08x%08x still mapped by pid %u cr3 %08x%08x (refs now 1)",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu), (unsigned)holder_pid,
+             (unsigned)(holder_cr3 >> 32), (unsigned)(holder_cr3 & 0xFFFFFFFFu));
+    }
+#endif
     k_port_exit_critical();
+
+#if PORT_FRAME_TRACE
+    if (address != 0) {
+        struct task *self = task_self();
+        klog(K_LOG_LEVEL_ERROR, "frame-alloc: %08x%08x pid=%u cpu=%u cr3=%08x%08x",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+             self != NULL ? (unsigned)self->pid : 0u, (unsigned)k_port_cpu_id(),
+             (unsigned)(port_x86_64_current_cr3() >> 32),
+             (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+    }
+#endif
 
     if (address != 0) {
         /* A new page of a program reads as zeros, not as the stack of the
@@ -417,9 +515,39 @@ k_u64_t port_x86_64_frame_alloc(void)
 
 void port_x86_64_frame_release(k_u64_t address)
 {
+#if PORT_FRAME_DIAG
+    k_size_t index;
+    k_u16_t before;
+#endif
+
     k_port_enter_critical();
+#if PORT_FRAME_DIAG
+    if (frame_index(address, &index)) {
+        before = g_frame_ref[index];
+        if (before == 0) {
+            struct task *self = task_self();
+            klog(K_LOG_LEVEL_ERROR,
+                 "frame-invariant: RELEASE of %08x%08x with refs 0 pid=%u cpu=%u cr3=%08x%08x",
+                 (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+                 self != NULL ? (unsigned)self->pid : 0u, (unsigned)k_port_cpu_id(),
+                 (unsigned)(port_x86_64_current_cr3() >> 32),
+                 (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+        }
+    }
+#endif
     frame_release_locked(address);
     k_port_exit_critical();
+
+#if PORT_FRAME_TRACE
+    if (frame_index(address, &index)) {
+        struct task *self = task_self();
+        klog(K_LOG_LEVEL_ERROR, "frame-free: %08x%08x refs=%u pid=%u cpu=%u cr3=%08x%08x",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+             (unsigned)g_frame_ref[index], self != NULL ? (unsigned)self->pid : 0u,
+             (unsigned)k_port_cpu_id(), (unsigned)(port_x86_64_current_cr3() >> 32),
+             (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+    }
+#endif
 }
 
 bool port_x86_64_frame_hold(k_u64_t address)
@@ -1274,6 +1402,7 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
 {
     k_u64_t address;
     k_u64_t entry_flags = PTE_PRESENT | PTE_USER;
+    int rc = 0;
 
     if ((flags & PORT_X86_64_PAGE_WRITE) != 0) {
         entry_flags |= PTE_WRITABLE;
@@ -1288,6 +1417,8 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         return -1;
     }
 
+    k_port_enter_critical();
+
     for (address = 0; address < len; address += PAGE_SIZE) {
         k_u64_t virtual_address = vaddr + address;
         k_u64_t physical_address = paddr + address;
@@ -1296,7 +1427,8 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         k_u64_t *pt;
 
         if (virtual_address < PORT_X86_64_USER_BASE || virtual_address >= PORT_X86_64_USER_LIMIT) {
-            return -1;
+            rc = -1;
+            break;
         }
 
         pd_index = (virtual_address >> 21) & (TABLE_ENTRIES - 1u);
@@ -1315,12 +1447,14 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
             k_u64_t *pd = space_pd(cr3);
 
             if (pd == NULL || (pd[pd_index] & PTE_PRESENT) != 0) {
-                return -1;
+                rc = -1;
+                break;
             }
 
             pt = page_pool_alloc();
             if (pt == NULL) {
-                return -1;
+                rc = -1;
+                break;
             }
 
             pd[pd_index] = page_phys(pt) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
@@ -1329,7 +1463,9 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         pt[pt_index] = (physical_address & ~(k_u64_t)(PAGE_SIZE - 1u)) | entry_flags;
     }
 
-    return 0;
+    k_port_exit_critical();
+
+    return rc;
 }
 
 /*
@@ -1353,17 +1489,20 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    int rc = 0;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return 0;
     }
+
+    k_port_enter_critical();
 
     pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
     pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
 
     if (pt == NULL) {
-        return 0;
+        goto out;
     }
 
     entry = pt[pt_index];
@@ -1372,13 +1511,13 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
      * writable is this case; a kernel page of rodata is a bug of the kernel
      * and the machine stops there, as it always did. */
     if ((entry & (PTE_PRESENT | PTE_USER | PTE_WRITABLE)) != (PTE_PRESENT | PTE_USER)) {
-        return 0;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
     if (new_frame == 0) {
-        return 0;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1386,9 +1525,12 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_NX;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
+    frame_release_locked(old_frame);
+    rc = 1;
 
-    return 1;
+out:
+    k_port_exit_critical();
+    return rc;
 }
 
 /*
@@ -1415,7 +1557,7 @@ void *port_x86_64_paging_map_page(k_u64_t cr3, k_u64_t vaddr, k_u32_t flags)
     page = port_x86_64_paging_phys(cr3, vaddr);
 
     if (page == NULL) {
-        port_x86_64_frame_release(frame);
+        port_x86_64_paging_unmap_page(cr3, vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
         return NULL;
     }
 
@@ -1460,32 +1602,36 @@ bool port_x86_64_paging_page_writable(k_u64_t cr3, k_u64_t vaddr)
  * that the kernel is about to write. */
 bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr)
 {
-    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
-    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t pd_index;
+    k_u64_t pt_index;
     k_u64_t *pt;
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    bool rc = false;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return false;
     }
 
+    k_port_enter_critical();
+
+    pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
     if (pt == NULL) {
-        return false;
+        goto out;
     }
 
     entry = pt[pt_index];
     if ((entry & (PTE_PRESENT | PTE_USER)) != (PTE_PRESENT | PTE_USER)) {
-        return false;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
-
     if (new_frame == 0) {
-        return false;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1493,16 +1639,19 @@ bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
+    frame_release_locked(old_frame);
+    rc = true;
 
-    return true;
+out:
+    k_port_exit_critical();
+    return rc;
 }
 
 /* Unmap one page and give its frame back. */
 void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
 {
-    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
-    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t pd_index;
+    k_u64_t pt_index;
     k_u64_t *pt;
     k_u64_t entry;
 
@@ -1510,20 +1659,27 @@ void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
         return;
     }
 
+    k_port_enter_critical();
+
+    pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
     if (pt == NULL) {
+        k_port_exit_critical();
         return;
     }
 
     entry = pt[pt_index];
     if ((entry & PTE_PRESENT) == 0) {
+        k_port_exit_critical();
         return;
     }
 
     pt[pt_index] = 0;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(entry & PTE_ADDRESS);
+    frame_release_locked(entry & PTE_ADDRESS);
+    k_port_exit_critical();
 }
 
 /*
@@ -1621,28 +1777,31 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    int rc = 0;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return 0;
     }
+
+    k_port_enter_critical();
 
     pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
     pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
 
     if (pt == NULL) {
-        return 0;
+        goto out;
     }
 
     entry = pt[pt_index];
     if ((entry & PTE_PRESENT) == 0 || (entry & PTE_COW) == 0) {
-        return 0;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
     if (new_frame == 0) {
-        return 0;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1656,19 +1815,17 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
-
-    /*
-     * The copy is counted in the context that made it, and the count goes to
-     * the log when that task ends - not one line per page, which would land
-     * inside the output of a program that prints (ADR 0057). The debug line
-     * names the page for a person with the log level of the debug.
-     */
+    frame_release_locked(old_frame);
     port_x86_64_task_cow_copy();
-    klog(K_LOG_LEVEL_DEBUG, "x86-64: copy on write of the page at 0x%08x%08x",
-         (unsigned)(vaddr >> 32), (unsigned)(vaddr & 0xFFFFFFFFu));
+    rc = 1;
 
-    return 1;
+out:
+    k_port_exit_critical();
+    if (rc != 0) {
+        klog(K_LOG_LEVEL_DEBUG, "x86-64: copy on write of the page at 0x%08x%08x",
+             (unsigned)(vaddr >> 32), (unsigned)(vaddr & 0xFFFFFFFFu));
+    }
+    return rc;
 }
 
 /*
@@ -1884,4 +2041,49 @@ k_u32_t port_x86_64_paging_audit(k_u64_t cr3)
 void port_x86_64_paging_switch(k_u64_t cr3)
 {
     write_cr3(cr3);
+}
+void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u64_t rip,
+                                    k_u32_t vector, k_u32_t pid)
+{
+    k_u64_t pd_index;
+    k_u64_t pt_index;
+    k_u64_t *pd;
+    k_u64_t *pt;
+    k_u64_t pde = 0;
+    k_u64_t pte = 0;
+    k_u16_t ref = 0;
+    k_u32_t cpu = k_port_cpu_id();
+    k_u32_t ticks = k_sched_ticks();
+
+    pd_index = (va >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (va >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+
+    k_port_enter_critical();
+    pd = space_pd(cr3);
+    if (pd != NULL) {
+        pde = pd[pd_index];
+        if ((pde & PTE_PRESENT) != 0 && (pde & PTE_PAGE_SIZE) == 0) {
+            pt = table_entry(pde);
+            pte = pt[pt_index];
+            if ((pte & PTE_PRESENT) != 0) {
+                k_size_t index;
+                if (frame_index(pte & PTE_ADDRESS, &index)) {
+                    ref = g_frame_ref[index];
+                }
+            }
+        }
+    }
+    k_port_exit_critical();
+
+    klog(K_LOG_LEVEL_ERROR, "pgf1: cpu=%u pid=%u tk=%u cr3=%08x%08x va=%08x%08x err=%08x%08x",
+         (unsigned)cpu, (unsigned)pid, (unsigned)ticks, (unsigned)(cr3 >> 32),
+         (unsigned)(cr3 & 0xFFFFFFFFu), (unsigned)(va >> 32), (unsigned)(va & 0xFFFFFFFFu),
+         (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu));
+    klog(K_LOG_LEVEL_ERROR,
+         "pgf2: rip=%08x%08x vec=%u pde=%08x%08x pte=%08x%08x P%uU%uW%uC%uX%u ref=%u",
+         (unsigned)(rip >> 32), (unsigned)(rip & 0xFFFFFFFFu), (unsigned)vector,
+         (unsigned)(pde >> 32), (unsigned)(pde & 0xFFFFFFFFu), (unsigned)(pte >> 32),
+         (unsigned)(pte & 0xFFFFFFFFu), (unsigned)((pte & PTE_PRESENT) != 0),
+         (unsigned)((pte & PTE_USER) != 0), (unsigned)((pte & PTE_WRITABLE) != 0),
+         (unsigned)((pte & PTE_COW) != 0), (unsigned)((pte & PTE_NX) != 0), (unsigned)ref);
 }

@@ -298,7 +298,7 @@ void port_x86_64_signal_tick(k_u64_t *frame);
  * read-only: the page is copied and 1 is returned, which sends the stub back
  * to the instruction that faulted with the registers it had.
  */
-int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs);
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs, k_u64_t *frame);
 
 /*
  * A fault of the program that is running: print the line of the failure and
@@ -308,7 +308,8 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
  * told from a read or a write. `address` is CR2 for a page fault and the RIP
  * for the other vectors; `rip` is always the instruction that was running.
  */
-void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip);
+void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip,
+                               k_u64_t *frame);
 
 /*
  * The stack of the program that runs grew (ADR 0052): `address` is the page
@@ -529,6 +530,10 @@ void port_x86_64_paging_space_sync_kernel(k_u64_t cr3, k_u64_t vaddr);
  * with the write bit back. Returns 1 when the instruction may be retried.
  */
 int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr);
+
+/* Debug dump for a user fault: PTE, frame refcount, cpu, ticks. */
+void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u64_t rip,
+                                    k_u32_t vector, k_u32_t pid);
 
 /* The CR3 in the register of the processor right now. */
 k_u64_t port_x86_64_current_cr3(void);

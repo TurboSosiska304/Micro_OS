@@ -1535,9 +1535,35 @@ void port_x86_64_signal_tick(k_u64_t *frame)
     task_signal_check(self, 0, false);
 }
 
-void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip)
+void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k_u64_t rip,
+                               k_u64_t *frame)
 {
     struct task *self = task_self();
+
+    port_x86_64_paging_debug_fault(port_x86_64_current_cr3(), address, error, rip, (k_u32_t)vector,
+                                   self != NULL ? self->pid : 0u);
+
+    if (frame != NULL) {
+        klog(K_LOG_LEVEL_ERROR, "pfregs: rax=%08x%08x rbx=%08x%08x rcx=%08x%08x rdx=%08x%08x",
+             (unsigned)(frame[9] >> 32), (unsigned)(frame[9] & 0xFFFFFFFFu),
+             (unsigned)(frame[10] >> 32), (unsigned)(frame[10] & 0xFFFFFFFFu),
+             (unsigned)(frame[8] >> 32), (unsigned)(frame[8] & 0xFFFFFFFFu),
+             (unsigned)(frame[7] >> 32), (unsigned)(frame[7] & 0xFFFFFFFFu));
+        klog(K_LOG_LEVEL_ERROR, "pfregs: rsi=%08x%08x rdi=%08x%08x r8=%08x%08x r9=%08x%08x",
+             (unsigned)(frame[6] >> 32), (unsigned)(frame[6] & 0xFFFFFFFFu),
+             (unsigned)(frame[5] >> 32), (unsigned)(frame[5] & 0xFFFFFFFFu),
+             (unsigned)(frame[4] >> 32), (unsigned)(frame[4] & 0xFFFFFFFFu),
+             (unsigned)(frame[3] >> 32), (unsigned)(frame[3] & 0xFFFFFFFFu));
+        klog(K_LOG_LEVEL_ERROR, "pfregs: r10=%08x%08x r11=%08x%08x r12=%08x%08x r13=%08x%08x",
+             (unsigned)(frame[2] >> 32), (unsigned)(frame[2] & 0xFFFFFFFFu),
+             (unsigned)(frame[1] >> 32), (unsigned)(frame[1] & 0xFFFFFFFFu),
+             (unsigned)(frame[11] >> 32), (unsigned)(frame[11] & 0xFFFFFFFFu),
+             (unsigned)(frame[12] >> 32), (unsigned)(frame[12] & 0xFFFFFFFFu));
+        klog(K_LOG_LEVEL_ERROR, "pfregs: r14=%08x%08x r15=%08x%08x user_rsp=%08x%08x",
+             (unsigned)(frame[13] >> 32), (unsigned)(frame[13] & 0xFFFFFFFFu),
+             (unsigned)(frame[14] >> 32), (unsigned)(frame[14] & 0xFFFFFFFFu),
+             (unsigned)(frame[19] >> 32), (unsigned)(frame[19] & 0xFFFFFFFFu));
+    }
 
     /*
      * The error code is part of the line because it names the access: the
