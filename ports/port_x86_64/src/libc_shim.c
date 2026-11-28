@@ -209,11 +209,29 @@ static int format(struct sink *s, const char *fmt, va_list ap)
             }
         }
 
-        if (*fmt == 'l') {
+        /*
+         * The length changes the width of the vararg, not just the text of
+         * the conversion. The old code stepped over `l` and `ll` and then
+         * read `unsigned int` anyway, so a 64-bit value lost its upper half
+         * and an address printed as a number came out as its low word. Keep
+         * the width here and use it below.
+         */
+        enum { LEN_PLAIN, LEN_HH, LEN_H, LEN_L, LEN_LL } length = LEN_PLAIN;
+
+        if (*fmt == 'h') {
+            length = (*(fmt + 1) == 'h') ? LEN_HH : LEN_H;
+            fmt += (length == LEN_HH) ? 2u : 1u;
+        } else if (*fmt == 'l') {
+            length = (*(fmt + 1) == 'l') ? LEN_LL : LEN_L;
+            fmt += (length == LEN_LL) ? 2u : 1u;
+        } else if (*fmt == 'j') {
+            /* intmax_t and uintmax_t are the widest integers of the ABI. */
+            length = LEN_LL;
             fmt++;
-            if (*fmt == 'l') {
-                fmt++;
-            }
+        } else if (*fmt == 'z' || *fmt == 't') {
+            /* size_t and ptrdiff_t are the word of the machine. */
+            length = LEN_L;
+            fmt++;
         }
 
         switch (*fmt) {
@@ -267,6 +285,7 @@ static int format(struct sink *s, const char *fmt, va_list ap)
             break;
         }
         case 'd':
+        case 'i':
         case 'u':
         case 'o':
         case 'x':
@@ -277,20 +296,43 @@ static int format(struct sink *s, const char *fmt, va_list ap)
             int len;
             int pad;
 
-            if (*fmt == 'd') {
-                int value = va_arg(ap, int);
+            if (*fmt == 'd' || *fmt == 'i') {
+                long long value;
+
+                if (length == LEN_LL) {
+                    value = va_arg(ap, long long);
+                } else if (length == LEN_L) {
+                    value = va_arg(ap, long);
+                } else if (length == LEN_H) {
+                    value = (short)va_arg(ap, int);
+                } else if (length == LEN_HH) {
+                    value = (signed char)va_arg(ap, int);
+                } else {
+                    value = va_arg(ap, int);
+                }
 
                 if (value < 0) {
                     negative = true;
-                    value = (int)(-(long long)value);
+                    value = -(value + 1) + 1; /* LLONG_MIN must not overflow. */
                 }
                 sink_unsigned(&scratch, (unsigned long long)value, 10, false);
-            } else if (*fmt == 'u') {
-                sink_unsigned(&scratch, va_arg(ap, unsigned int), 10, false);
-            } else if (*fmt == 'o') {
-                sink_unsigned(&scratch, va_arg(ap, unsigned int), 8, false);
             } else {
-                sink_unsigned(&scratch, va_arg(ap, unsigned int), 16, *fmt == 'X');
+                unsigned long long value;
+
+                if (length == LEN_LL) {
+                    value = va_arg(ap, unsigned long long);
+                } else if (length == LEN_L) {
+                    value = va_arg(ap, unsigned long);
+                } else if (length == LEN_H) {
+                    value = (unsigned short)va_arg(ap, unsigned int);
+                } else if (length == LEN_HH) {
+                    value = (unsigned char)va_arg(ap, unsigned int);
+                } else {
+                    value = va_arg(ap, unsigned int);
+                }
+
+                sink_unsigned(&scratch, value, (*fmt == 'u') ? 10u : ((*fmt == 'o') ? 8u : 16u),
+                              *fmt == 'X');
             }
 
             len = (int)scratch.written;
