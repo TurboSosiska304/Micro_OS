@@ -24,10 +24,42 @@ A lane is done when its gate is green; "works on my NVMe" is not evidence.
 | Lane | Work | Gate |
 |---|---|---|
 | **I1** Format | `mkfs.ext2` and `mfs_format` on the partition the installer appended; `/etc/volumes`, `/etc/install`, the empty mount points | the volume mounts, `fsck`/`mfs_check` clean, the tree is there |
-| **I2 Copy** | copy the system with a manifest: kernel, loader, `/bin`, `/etc`; SHA-256 of every file; sync; mount read-only and verify | a corrupted copy fails the check; QEMU install passes |
+| **I2 Copy** | done: copy the kernel of boot module 0 to `/boot/kernel`, `/bin` and the defaults of `/etc` with their modes, and hash every file in `/etc/install.manifest`; sync, unmount, remount read-only and verify; `install --verify` repeats the check. Open: a signature of the manifest and a signed source manifest before the copy; the loader/ESP files belong to I3. | 95/95 checks of `tools/x86_install_smoke.py`, ext2 and mfs; a corrupted copy fails with the name of the file |
 | **I3 Boot** | `\EFI\MICROOS\BOOTX64.EFI` in the ESP, the NVRAM question asked with no default answer, never touching a foreign boot file | OVMF boots the installed disk; the foreign ESP is byte-identical |
 | **I4 Root** | boot the installed disk as a normal writable root, no regression of the live ISO/USB path | a file written after the first boot survives a reset |
 | **I5 Gate** | `tools/x86_install_smoke.py`: 8 GiB image, a foreign partition with known bytes, install, boot, a smoke subset, hash of the untouched partition | green, and rerun by hand before the tag |
+
+#### I2: what the install copies and how it proves the copy
+
+The input is the running machine, not a second definition of the tree: the
+bytes of boot module 0 (the kernel), everything below `/bin` and `/etc` that
+the live root has, and the two files L3 already wrote on the new volume
+(`/etc/install` and `/etc/volumes`). The four files the install owns are not
+overwritten with defaults, and the empty mount points of L3 stay as they are.
+The copy keeps the mode of each file, so the programs of `/bin` remain
+executable on the installed volume.
+
+One line of `/etc/install.manifest` names a logical path, its byte count and
+its SHA-256, for example `/bin/awk 184096 ad6b14...`. The hash of the manifest
+itself is written to `/etc/install.manifest.sha256` and printed on the console;
+without it a changed manifest could verify itself. After the copy the installer
+syncs the manifest, unmounts the volume, closes the write door of the disk, and
+mounts the volume through `vfs_mount_type()` with no writes allowed. Only a
+file that matches the size and the digest of its manifest line passes. A
+mismatch names the file and the two hashes and the command ends with a failure
+that leaves every byte of the volume as it is; "installed, verified" is printed
+only after the last file passed.
+
+The gate now also writes one file of known bytes into the live root, changes a
+single byte of its copy on the raw image and starts a second machine. That
+boot must print `MISMATCH /etc/corrupt-me: sha256:...` and refuse, both for
+ext2 and for MicroFS. A clean `--verify` before the corruption must pass and
+must not change the image.
+
+What is left of I2: the signature of the manifest (a digest a person can trust
+only if it is signed) and the check of a signed source manifest before the
+copy, which section 4.5 of `docs/plan-install.md` asks for. The boot files of
+the ESP are I3, and this lane does not touch them or the NVRAM.
 
 ### The debts that make the install real
 
