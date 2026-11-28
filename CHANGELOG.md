@@ -10,6 +10,13 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [2.4.1] - 2026-11-28
+
+The eight cores are back. `g_spaces` in `mm.c` had no lock, so two `exec`s on
+two cores could take the same free cell and a page fault loaded the bytes of one
+program into another. The table is under the kernel lock now; six runs of
+`x86-smoke` on eight cores pass 431/431 and a three-minute soak is clean.
+
 ## [2.4.0] - 2026-11-28
 
 ### The release
