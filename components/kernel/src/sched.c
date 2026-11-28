@@ -8,6 +8,7 @@
 #include "kernel/port_task.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "kernel/watchdog.h"
 
 typedef struct {
     struct task *slots[SCHED_READY_CAPACITY];
@@ -332,6 +333,7 @@ void k_sched_init(void)
     g_next_cpu = 0;
     g_initialised = true;
     sched_unlock();
+    k_watchdog_init();
 }
 
 void k_sched_tick(void)
@@ -467,6 +469,7 @@ void k_sched_tick(void)
     /* A sleeping task of another core came back above: that core starts it
      * now instead of at its own next tick. */
     k_sched_wake_flush();
+    k_watchdog_check();
 }
 
 void k_sched_set_quantum(k_u32_t ticks)
@@ -510,6 +513,11 @@ k_u32_t k_sched_ticks(void)
     sched_unlock();
 
     return ticks;
+}
+
+k_u32_t k_sched_ticks_raw(void)
+{
+    return __atomic_load_n(&g_ticks, __ATOMIC_RELAXED);
 }
 
 k_u32_t k_sched_cpu_ticks(k_u32_t cpu)
@@ -1003,6 +1011,7 @@ struct task *k_sched_claim_next(void)
         next->runtime_ticks++;
     }
 
+    next->last_run_tick = g_ticks;
     self->current = next;
     __atomic_store_n(&next->cpu, cpu, __ATOMIC_RELAXED);
 
@@ -1076,6 +1085,32 @@ k_size_t k_sched_sleepers(struct k_sched_sleeper *out, k_size_t max)
         out[i].state = (t != NULL) ? (k_u8_t)t->state : 0u;
     }
     sched_unlock();
+
+    return count;
+}
+
+k_size_t k_sched_sleepers_raw(struct k_sched_sleeper *out, k_size_t max)
+{
+    k_size_t count;
+    k_size_t i;
+
+    if (out == NULL || max == 0u) {
+        return 0u;
+    }
+
+    count = __atomic_load_n(&g_sleeping_count, __ATOMIC_RELAXED);
+    if (count > TASK_MAX_TASKS) {
+        count = TASK_MAX_TASKS;
+    }
+    count = K_MIN(max, count);
+    for (i = 0u; i < count; i++) {
+        const struct task *t = g_sleeping[i];
+
+        out[i].pid = (t != NULL) ? t->pid : 0u;
+        out[i].wake_tick = (t != NULL) ? t->wake_tick : 0u;
+        out[i].cpu = (t != NULL) ? task_cpu(t) : 0u;
+        out[i].state = (t != NULL) ? (k_u8_t)t->state : 0u;
+    }
 
     return count;
 }
@@ -1235,6 +1270,7 @@ void k_sched_task_running(struct task *t)
     self->current = t;
     t->state = TASK_STATE_RUNNING;
     t->runtime_ticks++;
+    t->last_run_tick = g_ticks;
     sched_unlock();
 }
 

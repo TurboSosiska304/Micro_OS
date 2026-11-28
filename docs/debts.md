@@ -703,3 +703,18 @@ Five consecutive `make soak-smp SOAK_MINUTES=3` runs are green after the fix,
 with every core's tick moving in every session. The default of
 `KERNEL_SMP` in `ports/port_x86_64/CMakeLists.txt` is now on; the smoke of the
 eight-core image passes 76 checks, and the smoke of the machine passes 431.
+
+## Hang watchdog
+
+Hangs found by ad-hoc dumps (K27, wm frame wait, x86-cut-smoke) were invisible
+without a bug-specific trace. The kernel now has a permanent watchdog
+(`kernel/watchdog.h`, `kernel/watchdog.c`) that latches and prints one dump per
+incident when a ready task is starved or a sleeper is overdue by
+`K_WATCHDOG_THRESHOLD_MS` (5 s). The dump is lock-free, prints through
+`k_port_write()`, and reports per-core current task/state/saved RIP/critical
+depth, scheduler ticks/TSC, sleepers with overdue time, and held mutexes.
+
+On x86 the dump can be triggered manually by QEMU NMI or COM1 debug byte
+`0x14`; `tools/qemu_session.py` requests it on MachineTimeout so smoke logs
+contain a diagnosis instead of only a timeout. The wait-loop audit is in
+`docs/hangs.md`.

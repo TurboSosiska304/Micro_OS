@@ -46,4 +46,13 @@ k_u32_t k_port_cpu_id(void);
  */
 void k_port_cpu_wake(k_u32_t cpu);
 
+/*
+ * Debug hooks for the hang watchdog. The defaults return 0/false: a port that
+ * has no such information is still diagnosable, only with fewer fields. The
+ * calls must be lock-free and safe to use from a diagnostic path.
+ */
+k_u32_t k_port_cpu_critical_depth(k_u32_t cpu);
+k_u64_t k_port_cpu_saved_rip(k_u32_t cpu);
+k_u64_t k_port_debug_tsc(void);
+
 #endif /* MICRO_OS_KERNEL_PORT_CPU_H */

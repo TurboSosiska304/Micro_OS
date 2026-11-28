@@ -126,6 +126,9 @@ static void kmm_lock(void)
             return;
         }
 
+        /* Unbounded by design: the heap lock protects short sections and has no
+         * owner timeout. A deadlocked owner is a hang; the watchdog dump names
+         * the holder through the mutex/CPU state. */
         k_sched_sleep_ms(1);
     }
 }

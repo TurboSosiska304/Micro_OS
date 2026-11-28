@@ -45,6 +45,7 @@ set(MICRO_OS_KERNEL_SRCS
     "src/version.c"
     "src/volume.c"
     "src/wait.c"
+    "src/watchdog.c"
 )
 
 if(ESP_PLATFORM)

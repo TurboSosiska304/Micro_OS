@@ -1672,3 +1672,22 @@ void port_x86_64_ap_timer_ready(k_u32_t cpu, bool ready)
 
     g_timer_missing[cpu] = !ready;
 }
+
+k_u64_t k_port_cpu_saved_rip(k_u32_t cpu)
+{
+    const struct port_cpu *port;
+    const struct port_task *current;
+
+    if (cpu >= KERNEL_CPUS_MAX) {
+        return 0u;
+    }
+
+    port = &g_ports[cpu];
+    current = port->current;
+    if (current == NULL || current->rsp == 0u) {
+        return 0u;
+    }
+
+    /* The switch frame returns at the seventh word (port_x86_64_switch.S). */
+    return *(const k_u64_t *)(uintptr_t)(current->rsp + 6u * sizeof(k_u64_t));
+}
