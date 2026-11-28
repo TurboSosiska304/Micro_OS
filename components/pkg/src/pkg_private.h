@@ -44,10 +44,10 @@ int pkg_size_at(const char *real, k_u64_t *size);
 
 /* The messages: the `::` line of a step, a warning, an error and the plain
  * answer of a query. A quiet command keeps the errors and the answers. */
-void pkg_say(const char *fmt, ...);
-void pkg_warn(const char *fmt, ...);
-void pkg_error(const char *fmt, ...);
-void pkg_plain(const char *fmt, ...);
+void pkg_say(const char *fmt, ...) __attribute__((format(__printf__, 1, 2)));
+void pkg_warn(const char *fmt, ...) __attribute__((format(__printf__, 1, 2)));
+void pkg_error(const char *fmt, ...) __attribute__((format(__printf__, 1, 2)));
+void pkg_plain(const char *fmt, ...) __attribute__((format(__printf__, 1, 2)));
 
 /* The database: /var/pkg/local/<name>, one line per field. */
 int pkg_db_read(const char *name, struct pkg_record *out);

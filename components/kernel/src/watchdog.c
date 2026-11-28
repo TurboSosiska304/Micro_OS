@@ -40,6 +40,8 @@ static void wdg_write(const char *text)
     k_port_write(text, len);
 }
 
+static void wdg_printf(const char *fmt, ...) K_FORMAT(__printf__, 1, 2);
+
 static void wdg_printf(const char *fmt, ...)
 {
     char buf[WDG_LINE];

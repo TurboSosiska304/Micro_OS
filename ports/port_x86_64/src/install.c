@@ -218,12 +218,12 @@ static int install_main(int argc, char **argv)
 
     rc = partition_inventory(disk, &inv);
     if (rc == KERR_IO) {
-        kshell_printf("install: GPT is broken, has no backup, or MBR is hybrid: %s\n", disk_name,
-                      rc);
+        kshell_printf("install: GPT is broken, has no backup, or MBR is hybrid: %s (error %d)\n",
+                      disk_name, rc);
         return KSHELL_ERROR;
     }
     if (rc != 0) {
-        kshell_printf("install: cannot read partition table of %s\n", disk_name, rc);
+        kshell_printf("install: cannot read partition table of %s (error %d)\n", disk_name, rc);
         return KSHELL_ERROR;
     }
 

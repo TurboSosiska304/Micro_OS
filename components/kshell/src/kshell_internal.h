@@ -81,7 +81,7 @@ void kshell_write(const char *data, k_size_t len);
 
 /* The diagnostics of a stage: descriptor 2, which is the console unless the
  * line redirected it. */
-void kshell_eprintf(const char *fmt, ...);
+void kshell_eprintf(const char *fmt, ...) K_FORMAT(__printf__, 1, 2);
 
 /*
  * Parse and run a line: the words, the lists, the pipes and the redirections.

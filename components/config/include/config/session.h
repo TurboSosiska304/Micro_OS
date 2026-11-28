@@ -61,7 +61,7 @@ struct session_info {
 
 /* The bytes of the server on the terminal of the calling task. */
 void session_write(const char *text);
-void session_write_fmt(const char *fmt, ...);
+void session_write_fmt(const char *fmt, ...) __attribute__((format(__printf__, 1, 2)));
 
 /*
  * One line of the terminal of the calling task. The prompt is written first

@@ -133,7 +133,7 @@ int kshell_execute(const char *line);
 void kshell_run(void);
 
 /* Print a formatted message to the console. */
-void kshell_printf(const char *fmt, ...);
+void kshell_printf(const char *fmt, ...) K_FORMAT(__printf__, 1, 2);
 
 /*
  * The sink of the output: the shell writes to it as well as to the console.
