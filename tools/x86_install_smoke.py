@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Micro OS — the gate of an install on a separate disk (L3).
+"""Micro OS — the gate of an install on a separate disk (L3 and L4).
 
 The other smokes boot the disk they check. An install must not touch the disk
 the machine booted from, so this tool boots a live image on the IDE bus and
 attaches a *different*, 32 MiB raw image as nvme0. On that image it runs
 
-    install --disk nvme0 --size 8M --fs ext2 --confirm "INSTALL nvme0 8M"
+    install --disk nvme0 --size 24M --fs ext2 --confirm "INSTALL nvme0 24M"
 
-and the same with --fs mfs, reads /proc/blockdev, mounts the new partition,
-shows its /etc/install and /etc/volumes, and checks that the ESP entry of the
-GPT stayed byte for byte the same. Nothing here is wired into CI yet: it is a
-gate a person runs before touching a real disk.
+and the same with --fs mfs. Besides the L3 checks it reads the manifest of
+the copy, repeats the check with --verify, corrupts one byte of a file on the
+medium and requires the next --verify to name that file and refuse. Nothing
+here is wired into CI yet: it is a gate a person runs before a real disk.
 
 MicroFS holds one volume in one static slot. The live root is therefore an
 ext2 image for the mfs case and the ordinary mfs image for the ext2 case, so
@@ -47,8 +47,8 @@ DEFAULT_MKFS = os.path.join(ROOT, "build-host", "tools", "microos_mkfs")
 DISK_MB = 32
 DISK_BYTES = DISK_MB * 1024 * 1024
 SECTOR = 512
-SIZE_TEXT = "8M"
-SIZE_SECTORS = 8 * 1024 * 1024 // SECTOR
+SIZE_TEXT = "24M"
+SIZE_SECTORS = 24 * 1024 * 1024 // SECTOR
 ESP_START = 2048
 ESP_SIZE = 2048
 GPT_ARRAY_LBA = 2
@@ -143,17 +143,41 @@ def extract_partition(image: str, out: str) -> None:
         volume.write(source.read(SIZE_SECTORS * SECTOR))
 
 
-def ensure_live(build: str, mkfs: str, fs: str, directory: str) -> str:
-    """The live root of a case: ext2 leaves the MicroFS slot for the target."""
-    path = os.path.join(directory, f"install-live-{fs}.img")
+def ensure_live(build: str, mkfs: str, fs: str, directory: str, marker: bytes) -> str:
+    """The live root of a case: ext2 leaves the MicroFS slot for the target.
+
+    One extra file of known bytes is part of the tree, so the corruption of
+    the copy can be made on the host at a byte the host can find without
+    knowing the layout of the filesystem the installer wrote.
+    """
+    path = os.path.join(directory, f"install-live-{fs}-{marker[:8].decode()}.img")
     if os.path.isfile(path):
         return path
 
-    build_image(path, build_dir=build, mkfs=mkfs, fs=fs)
+    extra = ["--text", f"/etc/corrupt-me={marker.decode()}"]
+    build_image(path, build_dir=build, mkfs=mkfs, fs=fs, extra=extra)
     return path
 
 
-def run_case(build: str, live: str, target: str, fs: str, timeout: float,
+def corrupt_marker(image: str, marker: bytes) -> int:
+    """Change one byte of the copied file, in place, on the target image."""
+    with open(image, "rb") as handle:
+        data = handle.read()
+
+    at = data.find(marker)
+    if at < 0 or data.count(marker) != 1:
+        raise RuntimeError(f"the marker is not once on {image}")
+
+    with open(image, "r+b") as handle:
+        handle.seek(at)
+        old = handle.read(1)
+        handle.seek(at)
+        handle.write(b"X" if old != b"X" else b"Y")
+
+    return at
+
+
+def run_case(build: str, live: str, target: str, fs: str, marker: bytes, timeout: float,
              verbose: bool) -> None:
     make_target(target)
     esp_before = gpt_entry(target, 0)
@@ -175,10 +199,15 @@ def run_case(build: str, live: str, target: str, fs: str, timeout: float,
         ("blockdev", "cat /proc/blockdev"),
         ("mount", f"mount nvme0p2 /mnt/target {fs}"),
         ("ls", "ls /mnt/target"),
+        ("bin", "ls /mnt/target/bin"),
+        ("boot", "ls /mnt/target/boot"),
         ("etc", "ls /mnt/target/etc"),
         ("record", "cat /mnt/target/etc/install"),
         ("volumes", "cat /mnt/target/etc/volumes"),
+        ("manifest", "cat /mnt/target/etc/install.manifest"),
+        ("manifesthash", "cat /mnt/target/etc/install.manifest.sha256"),
         ("umount", "umount /mnt/target"),
+        ("verify", f"install --disk nvme0 --fs {fs} --verify"),
     ]
 
     with Machine(build, live, disk="ide", extra_args=extra) as machine:
@@ -195,29 +224,42 @@ def run_case(build: str, live: str, target: str, fs: str, timeout: float,
         if verbose:
             print(machine.transcript.decode("utf-8", "replace"))
 
+    # The image after the install, before any read-only check of it.
+    installed_hash = disk_hash(target)
+
     check(f"{fs}: a dry run writes nothing", after_dry == before,
           "the image changed before the confirmation")
     check(f"{fs}: the plan is a dry run", "dry-run, nothing written" in answers["dry"],
           answers["dry"])
-    check(f"{fs}: the confirmed install completes",
-          "the install of the volume is complete" in answers["install"], answers["install"])
+    check(f"{fs}: the confirmed install completes and verifies",
+          "installed, verified" in answers["install"], answers["install"])
     check(f"{fs}: the GPT entry was appended",
           'GPT entry "MICROOS_ROOT" appended' in answers["install"], answers["install"])
     check(f"{fs}: no error after the table write",
           "is still on nvme0" not in answers["install"], answers["install"])
     check(f"{fs}: the new partition is in /proc/blockdev",
-          re.search(r"nvme0p2\s+\d+\s+8192\b", answers["blockdev"]) is not None,
+          # /proc/blockdev counts the 1024-byte sectors of this NVMe, while
+          # the GPT counts 512-byte ones: 24 MiB is 49152 LBA or 24576 blocks.
+          re.search(rf"nvme0p2\s+\d+\s+{SIZE_SECTORS // 2}\b", answers["blockdev"]) is not None,
           answers["blockdev"])
     check(f"{fs}: the volume mounts",
           "is mounted at /mnt/target" in answers["mount"], answers["mount"])
 
     listing = answers["ls"]
-    for name in ("dev", "etc", "mnt", "proc", "tmp"):
+    for name in ("dev", "etc", "mnt", "proc", "tmp", "boot", "bin"):
         check(f"{fs}: /{name} is on the volume", re.search(rf"\b{name}\b", listing) is not None,
               listing)
 
+    bin_list = answers["bin"]
+    for name in ("hello", "cat", "sqlite3"):
+        check(f"{fs}: /bin/{name} was copied", re.search(rf"\b{name}\b", bin_list) is not None,
+              bin_list)
+    check(f"{fs}: the kernel module was copied",
+          re.search(r"\bkernel\b", answers["boot"]) is not None, answers["boot"])
+
     etc = answers["etc"]
-    for name in ("install", "volumes"):
+    for name in ("install", "volumes", "install.manifest", "install.manifest.sha256",
+                 "corrupt-me"):
         check(f"{fs}: /etc/{name} is on the volume", name in etc, etc)
 
     record = answers["record"]
@@ -227,6 +269,34 @@ def run_case(build: str, live: str, target: str, fs: str, timeout: float,
 
     check(f"{fs}: /etc/volumes names the partition",
           re.search(r"\bnvme0p2\b", answers["volumes"]) is not None, answers["volumes"])
+
+    manifest = answers["manifest"]
+    for path in ("/boot/kernel", "/bin/hello", "/etc/install", "/etc/volumes",
+                 "/etc/corrupt-me"):
+        # The console of the port ends a line with CR CR LF, so the digest is
+        # matched on its own rather than against an anchored end of line.
+        pattern = rf"{re.escape(path)} \d+ [0-9a-f]{{64}}"
+        check(f"{fs}: the manifest hashes {path}", re.search(pattern, manifest) is not None,
+              manifest)
+    check(f"{fs}: the manifest has a version line",
+          "# Micro OS install manifest v1" in manifest, manifest)
+
+    printed = re.search(r"manifest sha256:([0-9a-f]{64})", answers["install"])
+    stored = re.search(r"([0-9a-f]{64})", answers["manifesthash"])
+    check(f"{fs}: the console prints the manifest hash", printed is not None, answers["install"])
+    check(f"{fs}: the hash on the volume is the one printed",
+          printed is not None and stored is not None and printed.group(1) == stored.group(1),
+          answers["manifesthash"])
+    check(f"{fs}: every copied file verified",
+          re.search(r"verified \d+ file\(s\), manifest sha256:", answers["install"]) is not None,
+          answers["install"])
+    check(f"{fs}: a clean --verify passes",
+          "installed, verified" in answers["verify"], answers["verify"])
+
+    checked = disk_hash(target)
+    check(f"{fs}: verification writes nothing", checked == installed_hash,
+          "the target image changed in a read-only pass")
+
     check(f"{fs}: the ESP entry is byte-identical", gpt_entry(target, 0) == esp_before)
     check(f"{fs}: the volume was unmounted", "is unmounted" in answers["umount"],
           answers["umount"])
@@ -241,6 +311,29 @@ def run_case(build: str, live: str, target: str, fs: str, timeout: float,
             text = (result.stdout + result.stderr).decode("utf-8", "replace")
             check("ext2: e2fsck of the host finds no error",
                   "Filesystem still has errors" not in text and "Fix?" not in text, text)
+
+    # One byte of a copied file is changed on the medium behind the kernel.
+    # A second, read-only boot has to name that file and refuse the install.
+    at = corrupt_marker(target, marker)
+    damaged = disk_hash(target)
+    check(f"{fs}: a byte of the copied file was changed", damaged != checked,
+          f"byte {at} of {target}")
+
+    corrupted = ""
+    with Machine(build, live, disk="ide", extra_args=extra) as machine:
+        try:
+            machine.open(timeout=timeout)
+            corrupted = machine.run(f"install --disk nvme0 --fs {fs} --verify", timeout=timeout)
+        except (MachineError, MachineTimeout) as error:
+            check(f"{fs}: the machine answers after corruption", False, str(error))
+        if verbose:
+            print(machine.transcript.decode("utf-8", "replace"))
+
+    check(f"{fs}: a damaged copy fails the check",
+          "MISMATCH /etc/corrupt-me" in corrupted and "installed, verified" not in corrupted,
+          corrupted)
+    check(f"{fs}: the failed check writes nothing", disk_hash(target) == damaged,
+          "the target image changed in a failed read-only check")
 
 
 def main(argv: list | None = None) -> int:
@@ -271,9 +364,15 @@ def main(argv: list | None = None) -> int:
         # The ext2 case boots the ordinary mfs image; the mfs case boots ext2
         # so the one MicroFS slot of the kernel is free for the target.
         for fs, live_fs in (("ext2", "mfs"), ("mfs", "ext2")):
-            live = ensure_live(args.build, args.mkfs, live_fs, work)
+            # A unique sentence in one file of /etc: the host finds those
+            # bytes in the raw image and knows which byte is the file's.
+            marker = (
+                b"MICROOS-CORRUPT-ME-"
+                + hashlib.sha256(os.urandom(32)).hexdigest()[:32].encode()
+            )
+            live = ensure_live(args.build, args.mkfs, live_fs, work, marker)
             target = os.path.join(work, f"install-{fs}.img")
-            run_case(args.build, live, target, fs, args.timeout, args.verbose)
+            run_case(args.build, live, target, fs, marker, args.timeout, args.verbose)
     except (RuntimeError, OSError) as error:
         print(f"cannot prepare the images: {error}", file=sys.stderr)
         return 2
