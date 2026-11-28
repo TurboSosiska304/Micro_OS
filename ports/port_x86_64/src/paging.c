@@ -217,7 +217,7 @@ static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
  * boot. Every log is below this flag, and the reverse-map invariant runs only
  * when it is on.
  */
-#define PORT_FRAME_DIAG 1
+#define PORT_FRAME_DIAG 0
 /* The per-frame journal is far too verbose for a live console: every alloc
  * and free lands between a shell command and its answer. Keep it off in a
  * normal run; only invariant violations print, which are rare. */
