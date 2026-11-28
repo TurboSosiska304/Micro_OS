@@ -18,6 +18,7 @@
 #ifndef MICRO_OS_FS_EXT2_EXT2_H
 #define MICRO_OS_FS_EXT2_EXT2_H
 
+#include "kernel/blockdev.h"
 #include "kernel/types.h"
 
 /* The longest name an ext2 directory entry can keep. */
@@ -35,6 +36,19 @@
  * extent tree, a 64-bit volume) that this filesystem does not speak.
  */
 int ext2_vfs_mount(const char *point, const char *device);
+
+/*
+ * Format `dev` as an ext2 volume of 1024-byte blocks: a superblock, one group
+ * descriptor per 8192 blocks, the two bitmaps, the table of inodes and the
+ * root and lost+found directories. The installer calls this on the partition
+ * it just appended, before it mounts the volume and copies the tree into it.
+ *
+ * The device has to answer with sectors no wider than the block of the
+ * format. Returns 0, or a KERR_* code: KERR_INVAL for a device that cannot
+ * hold the minimum volume, KERR_NOTSUP for a grain the layout cannot use and
+ * KERR_IO for a medium that did not answer.
+ */
+int ext2_format(const struct k_blockdev *dev);
 
 /*
  * Put the type in the registry of the VFS, so that vfs_mount_type(point,

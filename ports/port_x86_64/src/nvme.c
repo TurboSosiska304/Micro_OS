@@ -46,6 +46,7 @@
 
 #include "mfs/mfs.h"
 
+#include "port_x86_64_install.h"
 #include "port_x86_64_nvme.h"
 #include "port_x86_64_pci.h"
 
@@ -224,6 +225,7 @@ static k_u32_t g_page;          /* the page size the controller works in */
 static k_u32_t g_nsid = 1u;     /* the namespace the boot mounts */
 static k_u32_t g_lba_size;      /* the formatted LBA size of the namespace */
 static k_u32_t g_sectors;       /* the namespace size, in g_lba_size units */
+static bool g_install;          /* a confirmed install owns the writes for a moment */
 static const char *g_root;
 static const struct k_blockdev *g_volume; /* the partition the rule is about */
 static bool g_read_only = true;
@@ -585,7 +587,7 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    if (!g_write_open) {
+    if (!g_install && !g_write_open) {
         if (!g_refused) {
             g_refused = true;
             kwarn("nvme0: the write of %u sector(s) at %u is refused: %s", (unsigned)count,
@@ -599,7 +601,7 @@ static int nvme_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    if (!k_volume_write_above_table(&g_disk_id, sector, count)) {
+    if (!g_install && !k_volume_write_above_table(&g_disk_id, sector, count)) {
         if (!g_refused) {
             g_refused = true;
             kwarn("nvme0: the write at %u is refused: the table of the partitions lives there",
@@ -708,6 +710,15 @@ static int nvme_writes(void *ctx, bool open)
           g_volume->name != NULL ? g_volume->name : "the disk");
 
     return 0;
+}
+
+void nvme_install_writes(bool open)
+{
+    g_install = open;
+    if (!open) {
+        g_write_open = false;
+        g_read_only = true;
+    }
 }
 
 static const struct k_blockdev_ops g_nvme_ops = {

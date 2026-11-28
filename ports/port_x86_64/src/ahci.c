@@ -65,6 +65,7 @@
 #include "mfs/mfs.h"
 
 #include "port_x86_64_ahci.h"
+#include "port_x86_64_install.h"
 #include "port_x86_64_pci.h"
 
 /* --- the function on the PCI bus ------------------------------------------ */
@@ -288,6 +289,7 @@ static const char *g_root;                /* the partition the boot mounts, if a
 static const struct k_blockdev *g_volume; /* the partition the rule is about */
 static bool g_read_only = true;           /* the rule of ADR 0041, decided once */
 static bool g_write_open;                 /* a mount asked and the rule allowed it */
+static bool g_install;                    /* a confirmed install owns the writes for a moment */
 static const char *g_refusal;             /* the sentence of the rule, for the log */
 static bool g_refused;                    /* a write was refused and is in the log */
 static struct k_volume_id g_id;           /* what the rule saw on the volume */
@@ -683,7 +685,7 @@ static int ahci_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    if (!g_write_open) {
+    if (!g_install && !g_write_open) {
         if (!g_refused) {
             g_refused = true;
             kwarn("ahci0: the write of %u sector(s) at %u is refused: %s", (unsigned)count,
@@ -697,7 +699,7 @@ static int ahci_write(void *ctx, k_u32_t sector, const void *buf, k_size_t count
         return -1;
     }
 
-    if (!k_volume_write_above_table(&g_disk_id, sector, count)) {
+    if (!g_install && !k_volume_write_above_table(&g_disk_id, sector, count)) {
         if (!g_refused) {
             g_refused = true;
             kwarn("ahci0: the write at %u is refused: the table of the partitions lives there",
@@ -829,6 +831,15 @@ static int ahci_writes(void *ctx, bool open)
           g_volume->name != NULL ? g_volume->name : "the disk");
 
     return 0;
+}
+
+void ahci_install_writes(bool open)
+{
+    g_install = open;
+    if (!open) {
+        g_write_open = false;
+        g_read_only = true;
+    }
 }
 
 static const struct k_blockdev_ops g_ahci_ops = {
