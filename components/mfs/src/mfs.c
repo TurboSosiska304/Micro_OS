@@ -570,7 +570,8 @@ static int journal_flush(void)
     if (rc != MFS_OK || committed.state != MFS_JOURNAL_STATE_COMMITTED ||
         committed.sequence != g.journal_sequence || committed.slots != g.txn_slots ||
         committed.map_crc != crc32_finish(g.txn_map_crc)) {
-        kerror("mfs: the commit of the journal did not reach the medium (rc=%d st=%u seq=%u/%u slots=%u/%u crc=%08x/%08x)",
+        kerror("mfs: the commit of the journal did not reach the medium (rc=%d st=%u seq=%u/%u "
+               "slots=%u/%u crc=%08x/%08x)",
                rc, (unsigned)committed.state, (unsigned)committed.sequence,
                (unsigned)g.journal_sequence, (unsigned)committed.slots, (unsigned)g.txn_slots,
                (unsigned)committed.map_crc, (unsigned)crc32_finish(g.txn_map_crc));

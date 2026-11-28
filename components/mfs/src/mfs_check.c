@@ -208,7 +208,7 @@ static void add_error(struct mfs_check_report *report, enum check_subject subjec
     }
 
     kerror("mfs: fsck problem %u: %s #%u: %s", (unsigned)(report->errors + 1),
-           subject == CHECK_SUBJECT_HEADER  ? "header"
+           subject == CHECK_SUBJECT_HEADER   ? "header"
            : subject == CHECK_SUBJECT_VOLUME ? "volume"
            : subject == CHECK_SUBJECT_INODE  ? "inode"
                                              : "block",
