@@ -14,6 +14,7 @@
  */
 #include "kernel/lock.h"
 
+#include "kernel/kmm.h"
 #include "kernel/log.h"
 #include "kernel/panic.h"
 #include "kernel/port.h"
@@ -31,14 +32,80 @@ struct mutex_dbg_entry {
     k_u16_t depth;
 };
 
-static struct mutex_dbg_entry g_mutex_dbg[MUTEX_DBG_MAX];
+/*
+ * Allocated on first use: 1 KiB in BSS was more than the ESP32 DRAM window
+ * could spare. A missing registry only makes the hang dump less detailed, so a
+ * failed allocation is warned and the lock itself still works.
+ */
+static struct mutex_dbg_entry *g_mutex_dbg;
 static k_u16_t g_mutex_dbg_count;
+static bool g_mutex_dbg_warned;
+
+static volatile bool g_mutex_dbg_allocating;
+
+static void mutex_dbg_ensure(void)
+{
+    struct mutex_dbg_entry *fresh;
+    bool need_alloc = false;
+    k_u16_t i;
+
+    if (g_mutex_dbg != NULL) {
+        return;
+    }
+
+    k_port_enter_critical();
+    if (g_mutex_dbg == NULL && !g_mutex_dbg_allocating) {
+        g_mutex_dbg_allocating = true;
+        need_alloc = true;
+    }
+    k_port_exit_critical();
+
+    if (!need_alloc) {
+        return;
+    }
+
+    fresh = (struct mutex_dbg_entry *)kmm_alloc(MUTEX_DBG_MAX * sizeof(*fresh), KMM_PRIORITY_KERNEL);
+    if (fresh == NULL) {
+        k_port_enter_critical();
+        g_mutex_dbg_allocating = false;
+        k_port_exit_critical();
+        if (!g_mutex_dbg_warned) {
+            g_mutex_dbg_warned = true;
+            kwarn("lock: mutex debug registry alloc failed (KERR_NOMEM)");
+        }
+        return;
+    }
+
+    for (i = 0; i < MUTEX_DBG_MAX; i++) {
+        fresh[i].key = NULL;
+        fresh[i].name = NULL;
+        fresh[i].owner_pid = 0u;
+        fresh[i].depth = 0u;
+    }
+
+    k_port_enter_critical();
+    if (g_mutex_dbg == NULL) {
+        g_mutex_dbg = fresh;
+        fresh = NULL;
+    }
+    g_mutex_dbg_allocating = false;
+    k_port_exit_critical();
+
+    if (fresh != NULL) {
+        kmm_free(fresh);
+    }
+}
 
 static void mutex_dbg_register(k_mutex_t *mutex)
 {
     k_u16_t i;
 
     if (mutex == NULL) {
+        return;
+    }
+
+    mutex_dbg_ensure();
+    if (g_mutex_dbg == NULL) {
         return;
     }
 
@@ -66,7 +133,7 @@ static void mutex_dbg_update(k_mutex_t *mutex, k_u32_t owner_pid, k_u16_t depth)
     k_u16_t count = __atomic_load_n(&g_mutex_dbg_count, __ATOMIC_RELAXED);
     k_u16_t i;
 
-    if (mutex == NULL) {
+    if (mutex == NULL || g_mutex_dbg == NULL) {
         return;
     }
 
@@ -90,7 +157,7 @@ k_size_t k_mutex_debug_snapshot(struct k_mutex_debug_info *out, k_size_t max)
     k_u16_t count = __atomic_load_n(&g_mutex_dbg_count, __ATOMIC_RELAXED);
     k_u16_t i;
 
-    if (out == NULL || max == 0u) {
+    if (out == NULL || max == 0u || g_mutex_dbg == NULL) {
         return 0u;
     }
 
@@ -211,16 +278,18 @@ int k_mutex_destroy(k_mutex_t *mutex)
     }
 
     k_port_enter_critical();
-    for (i = 0; i < g_mutex_dbg_count; i++) {
-        if (g_mutex_dbg[i].key == mutex) {
-            g_mutex_dbg[i] = g_mutex_dbg[g_mutex_dbg_count - 1u];
-            g_mutex_dbg[g_mutex_dbg_count - 1u].key = NULL;
-            g_mutex_dbg[g_mutex_dbg_count - 1u].name = NULL;
-            g_mutex_dbg[g_mutex_dbg_count - 1u].owner_pid = 0u;
-            g_mutex_dbg[g_mutex_dbg_count - 1u].depth = 0u;
-            __atomic_store_n(&g_mutex_dbg_count, (k_u16_t)(g_mutex_dbg_count - 1u),
-                             __ATOMIC_RELEASE);
-            break;
+    if (g_mutex_dbg != NULL) {
+        for (i = 0; i < g_mutex_dbg_count; i++) {
+            if (g_mutex_dbg[i].key == mutex) {
+                g_mutex_dbg[i] = g_mutex_dbg[g_mutex_dbg_count - 1u];
+                g_mutex_dbg[g_mutex_dbg_count - 1u].key = NULL;
+                g_mutex_dbg[g_mutex_dbg_count - 1u].name = NULL;
+                g_mutex_dbg[g_mutex_dbg_count - 1u].owner_pid = 0u;
+                g_mutex_dbg[g_mutex_dbg_count - 1u].depth = 0u;
+                __atomic_store_n(&g_mutex_dbg_count, (k_u16_t)(g_mutex_dbg_count - 1u),
+                                 __ATOMIC_RELEASE);
+                break;
+            }
         }
     }
     k_port_exit_critical();
