@@ -477,7 +477,14 @@ static int journal_flush(void)
         return MFS_OK;
     }
 
-    if (g.txn_failed || g.txn_slots == 0u) {
+    if (g.txn_failed) {
+        g.txn_open = false;
+        g.txn_slots = 0u;
+        g.txn_failed = false;
+        return MFS_EIO;
+    }
+
+    if (g.txn_slots == 0u) {
         g.txn_open = false;
         g.txn_slots = 0u;
         g.txn_failed = false;
@@ -563,7 +570,10 @@ static int journal_flush(void)
     if (rc != MFS_OK || committed.state != MFS_JOURNAL_STATE_COMMITTED ||
         committed.sequence != g.journal_sequence || committed.slots != g.txn_slots ||
         committed.map_crc != crc32_finish(g.txn_map_crc)) {
-        kerror("mfs: the commit of the journal did not reach the medium");
+        kerror("mfs: the commit of the journal did not reach the medium (rc=%d st=%u seq=%u/%u slots=%u/%u crc=%08x/%08x)",
+               rc, (unsigned)committed.state, (unsigned)committed.sequence,
+               (unsigned)g.journal_sequence, (unsigned)committed.slots, (unsigned)g.txn_slots,
+               (unsigned)committed.map_crc, (unsigned)crc32_finish(g.txn_map_crc));
         g.txn_failed = true;
         return MFS_EIO;
     }
@@ -3279,6 +3289,7 @@ static int mfs_get_info_locked(struct mfs_info *out)
     out->meta_blocks = g.sb.meta_blocks;
     out->inodes_total = g.inode_capacity;
     out->block_size = MFS_BLOCK_SIZE;
+    out->open_files = g.open_files;
 
     for (i = 1; i <= g.inode_capacity; i++) {
         struct mfs_inode inode;
@@ -3557,6 +3568,7 @@ static int mfs_create_internal(const char *path, bool pending)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -4901,6 +4913,9 @@ int mfs_fsync(struct mfs_file *file)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            kerror("mfs: fsync inode %u: commit failed (%s)",
+                   (unsigned)(file != NULL ? file->inode : 0u), mfs_strerror(commit));
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5124,6 +5139,7 @@ int mfs_mkdir(const char *path)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5196,6 +5212,7 @@ int mfs_truncate(struct mfs_file *file, k_u64_t size)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5219,9 +5236,13 @@ int mfs_close(struct mfs_file *file)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            kerror("mfs: close inode %u: commit failed (%s)", (unsigned)file->inode,
+                   mfs_strerror(commit));
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
+        kerror("mfs: close inode %u: close failed (%s)", (unsigned)file->inode, mfs_strerror(rc));
         mfs_txn_abort();
     }
 
@@ -5246,6 +5267,7 @@ int mfs_unlink(const char *path)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5269,6 +5291,7 @@ int mfs_rmdir(const char *path)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5292,6 +5315,7 @@ int mfs_rename(const char *from, const char *to)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5326,6 +5350,7 @@ int mfs_chmod(const char *path, k_u32_t mode)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5349,6 +5374,7 @@ int mfs_chown(const char *path, k_u32_t owner)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {
@@ -5372,6 +5398,7 @@ int mfs_chgrp(const char *path, k_u32_t group)
         int commit = mfs_txn_commit();
 
         if (commit != MFS_OK) {
+            mfs_txn_abort();
             rc = commit;
         }
     } else {

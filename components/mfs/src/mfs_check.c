@@ -27,6 +27,7 @@
 
 #include <string.h>
 
+#include "kernel/log.h"
 #include "kernel/kmm.h"
 #include "mfs_private.h"
 
@@ -205,6 +206,13 @@ static void add_error(struct mfs_check_report *report, enum check_subject subjec
         }
         msg_text(report, text);
     }
+
+    kerror("mfs: fsck problem %u: %s #%u: %s", (unsigned)(report->errors + 1),
+           subject == CHECK_SUBJECT_HEADER  ? "header"
+           : subject == CHECK_SUBJECT_VOLUME ? "volume"
+           : subject == CHECK_SUBJECT_INODE  ? "inode"
+                                             : "block",
+           (unsigned)number, text);
 
     report->errors++;
 }
@@ -567,6 +575,9 @@ static int check_inode(const struct mfs_private *view, struct mfs_check_report *
      * by this system (ADR 0047).
      */
     if ((flags & MFS_INODE_PENDING) != 0u) {
+        kerror("mfs: fsck inode %u pending: flags 0x%x size %u first %u entries %u",
+               (unsigned)index, (unsigned)flags, (unsigned)inode->size,
+               (unsigned)inode->first_block, (unsigned)inode->entries);
         add_error(report, CHECK_SUBJECT_INODE, index, "is a write that a close did not publish");
     }
 

@@ -421,6 +421,7 @@ struct mfs_info {
     k_u32_t inodes_used;
     k_u32_t inodes_free;
     k_u32_t block_size;
+    k_u32_t open_files;
 };
 
 /* The room for the first problem that mfs_check() finds. */

@@ -3986,8 +3986,7 @@ def main(argv: list) -> int:
         print("qemu-system-x86_64 is not installed", file=sys.stderr)
         return 2
     finally:
-        if os.path.exists(RUN_IMAGE):
-            os.remove(RUN_IMAGE)
+        pass
 
     if args.verbose:
         print(output)
@@ -4012,6 +4011,13 @@ def main(argv: list) -> int:
 
     print("=" * 60)
     if failed:
+        fail_img = RUN_IMAGE + ".failed"
+        try:
+            if os.path.exists(RUN_IMAGE):
+                shutil.copyfile(RUN_IMAGE, fail_img)
+                print(f"kept image: {fail_img}")
+        except OSError:
+            pass
         print(f"FAILED: {len(failed)} of {len(checks)} check(s) did not pass")
         print("--- the console of the machine ---")
         print(output)

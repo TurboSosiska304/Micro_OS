@@ -2304,9 +2304,20 @@ static int fsck_mfs(bool write)
         return KSHELL_ERROR;
     }
 
-    kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
-                  (unsigned)report.files, (unsigned)report.directories,
-                  (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+    {
+        struct mfs_info info;
+
+        if (mfs_get_info(&info) == MFS_OK) {
+            kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free, %u open\n",
+                          (unsigned)report.files, (unsigned)report.directories,
+                          (unsigned)report.free_blocks, (unsigned)report.data_blocks,
+                          (unsigned)info.open_files);
+        } else {
+            kshell_printf("fsck: %u file(s), %u directory(ies), %u of %u block(s) free\n",
+                          (unsigned)report.files, (unsigned)report.directories,
+                          (unsigned)report.free_blocks, (unsigned)report.data_blocks);
+        }
+    }
 
     if (write && report.fixed != 0) {
         kshell_printf("fsck: %u repair(s) applied\n", (unsigned)report.fixed);
