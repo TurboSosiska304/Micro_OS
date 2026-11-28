@@ -9,6 +9,16 @@
  */
 #include "gpu_intel_ggtt.h"
 
+/* A run may come from a firmware scratch page or from a never-mapped range.
+ * A non-present PTE can still carry cache bits; it is restored byte-for-byte. */
+static bool gpu_intel_gtt_original_ok(k_u64_t original)
+{
+    if ((original & GPU_INTEL_GTT_PRESENT) == 0u) {
+        return true;
+    }
+    return (original & GPU_INTEL_GTT_ADDRESS_MASK) != 0u;
+}
+
 static bool gpu_intel_format_bpp(k_u8_t format, k_u8_t *bpp)
 {
     switch (format) {
@@ -212,6 +222,107 @@ static bool gpu_intel_range_overlaps(k_u32_t start, k_u32_t count,
     return false;
 }
 
+void gpu_intel_ggtt_stats(const volatile k_u64_t *entries, k_size_t entry_count,
+                          struct gpu_intel_ggtt_stats *out)
+{
+    k_size_t at = 0u;
+
+    if (out == NULL) {
+        return;
+    }
+    out->entries = entry_count;
+    out->present = 0u;
+    out->unmapped = 0u;
+    out->identity = 0u;
+    out->scratch_ranges = 0u;
+    out->longest_scratch = 0u;
+    out->longest_unmapped = 0u;
+    out->common = 0u;
+    out->common_count = 0u;
+    if (entries == NULL) {
+        return;
+    }
+
+    while (at < entry_count) {
+        k_u64_t value = entries[at];
+        k_size_t end = at + 1u;
+        k_size_t length;
+        k_size_t i;
+
+        while (end < entry_count && entries[end] == value) {
+            end++;
+        }
+        length = end - at;
+        if ((value & GPU_INTEL_GTT_PRESENT) != 0u && (value & GPU_INTEL_GTT_ADDRESS_MASK) != 0u) {
+            out->present += length;
+            out->scratch_ranges++;
+            if (length > out->longest_scratch) {
+                out->longest_scratch = length;
+                out->common = value;
+                out->common_count = length;
+            }
+            for (i = at; i < end; i++) {
+                k_u64_t expected = (k_u64_t)i * GPU_INTEL_GTT_PAGE_SIZE;
+
+                if ((entries[i] & GPU_INTEL_GTT_ADDRESS_MASK) == expected) {
+                    out->identity++;
+                }
+            }
+        } else {
+            out->unmapped += length;
+            if (length > out->longest_unmapped) {
+                out->longest_unmapped = length;
+            }
+        }
+        at = end;
+    }
+}
+
+/* The first choice is a range the firmware never mapped. Installing a PTE in
+ * such a slot and restoring its original value cannot disturb a live one. */
+static enum gpu_intel_ggtt_result
+gpu_intel_ggtt_find_unmapped(const volatile k_u64_t *entries, k_size_t entry_count, k_u32_t needed,
+                             const struct gpu_intel_gtt_range *excluded, k_size_t excluded_count,
+                             struct gpu_intel_gtt_run *out)
+{
+    k_size_t at = 0u;
+
+    while (at < entry_count) {
+        k_u64_t value = entries[at];
+        k_size_t end;
+
+        if ((value & GPU_INTEL_GTT_PRESENT) != 0u) {
+            at++;
+            continue;
+        }
+        end = at + 1u;
+        while (end < entry_count && entries[end] == value) {
+            end++;
+        }
+        if ((k_u64_t)(end - at) >= (k_u64_t)needed + 2u) {
+            k_size_t candidate = at + 1u;
+            k_size_t last = end - needed - 1u;
+
+            while (candidate <= last) {
+                if (!gpu_intel_range_overlaps((k_u32_t)candidate, needed, excluded,
+                                              excluded_count) &&
+                    !gpu_intel_range_overlaps((k_u32_t)(candidate - 1u), 1u, excluded,
+                                              excluded_count) &&
+                    !gpu_intel_range_overlaps((k_u32_t)(candidate + needed), 1u, excluded,
+                                              excluded_count)) {
+                    out->start = (k_u32_t)candidate;
+                    out->count = needed;
+                    out->original = value;
+                    return GPU_INTEL_GGTT_OK;
+                }
+                candidate++;
+            }
+        }
+        at = end;
+    }
+    return GPU_INTEL_GGTT_NO_FREE;
+}
+
 enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entries,
                                                     k_size_t entry_count, k_u32_t needed,
                                                     const struct gpu_intel_gtt_range *excluded,
@@ -219,10 +330,16 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entr
                                                     struct gpu_intel_gtt_run *out)
 {
     k_size_t at;
+    enum gpu_intel_ggtt_result rc;
 
     if (entries == NULL || out == NULL || needed == 0u ||
         (k_u64_t)entry_count < (k_u64_t)needed + 2u || (excluded_count != 0u && excluded == NULL)) {
         return GPU_INTEL_GGTT_INVALID;
+    }
+
+    rc = gpu_intel_ggtt_find_unmapped(entries, entry_count, needed, excluded, excluded_count, out);
+    if (rc == GPU_INTEL_GGTT_OK) {
+        return rc;
     }
 
     at = 0u;
@@ -260,6 +377,41 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_find_free(const volatile k_u64_t *entr
     return GPU_INTEL_GGTT_NO_FREE;
 }
 
+enum gpu_intel_ggtt_result gpu_intel_ggtt_find_identity(const volatile k_u64_t *entries,
+                                                        k_size_t entry_count,
+                                                        const k_u64_t *physical, k_u32_t count,
+                                                        const struct gpu_intel_gtt_range *excluded,
+                                                        k_size_t excluded_count,
+                                                        struct gpu_intel_gtt_run *out)
+{
+    k_size_t at;
+
+    if (entries == NULL || physical == NULL || out == NULL || count == 0u ||
+        (k_u64_t)entry_count < (k_u64_t)count || (excluded_count != 0u && excluded == NULL)) {
+        return GPU_INTEL_GGTT_INVALID;
+    }
+
+    for (at = 0u; at + count <= entry_count; at++) {
+        k_u32_t i;
+
+        for (i = 0u; i < count; i++) {
+            k_u64_t entry = entries[at + i];
+
+            if ((entry & GPU_INTEL_GTT_PRESENT) == 0u ||
+                (entry & GPU_INTEL_GTT_ADDRESS_MASK) != physical[i]) {
+                break;
+            }
+        }
+        if (i == count && !gpu_intel_range_overlaps((k_u32_t)at, count, excluded, excluded_count)) {
+            out->start = (k_u32_t)at;
+            out->count = count;
+            out->original = entries[at];
+            return GPU_INTEL_GGTT_OK;
+        }
+    }
+    return GPU_INTEL_GGTT_NO_FREE;
+}
+
 enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_size_t entry_count,
                                                  const struct gpu_intel_gtt_run *run,
                                                  k_u64_t physical, k_u64_t *saved)
@@ -271,7 +423,7 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_borrow(volatile k_u64_t *entries, k_si
         (physical & (GPU_INTEL_GTT_PAGE_SIZE - 1u)) != 0u || physical == 0u ||
         (physical & ~GPU_INTEL_GTT_ADDRESS_MASK) != 0u ||
         (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count ||
-        (run->original & GPU_INTEL_GTT_PRESENT) == 0u) {
+        !gpu_intel_gtt_original_ok(run->original)) {
         return GPU_INTEL_GGTT_INVALID;
     }
 
@@ -310,7 +462,7 @@ enum gpu_intel_ggtt_result gpu_intel_ggtt_install(volatile k_u64_t *entries, k_s
 
     if (entries == NULL || run == NULL || physical == NULL || saved == NULL || run->count == 0u ||
         (k_u64_t)run->start + (k_u64_t)run->count > (k_u64_t)entry_count ||
-        (run->original & GPU_INTEL_GTT_PRESENT) == 0u) {
+        !gpu_intel_gtt_original_ok(run->original)) {
         return GPU_INTEL_GGTT_INVALID;
     }
 

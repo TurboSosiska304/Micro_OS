@@ -611,3 +611,110 @@ failure of the tool.
   cache of the host is under both.
 * **The board.** The ESP32 has no QEMU and no such table; its numbers are the
   ones of a session on the board.
+## 2.2 page cache, before and after
+
+The first slice of "Eternal Peace" routes regular VFS reads and writes through
+a shared 4 KiB page cache. The table below compares the base
+`d278ffd9` (k27 debugcon, 2026-11-27) with `feature/page-cache` after the
+pagecache read/write, fsync API, and the truncate/read regressions were fixed.
+Both runs are three boots of `make bench` on the same host, QEMU 11.1.3 TCG,
+256 MB, one processor, default `pc`, IDE `cache=writeback`, MFS root image.
+
+The host was busy during parts of the base run and several rows exceed the 10 %
+spread gate; compare medians with that in mind. The first page-cache pass had a
+catastrophic `file_read`/`file_write` regression (1.00/0.22 MiB/s) caused by an
+O(n^2) MFS block-chain walk per 4 KiB page and per-page writeback transactions.
+After caching the MFS at-cursor and batching contiguous dirty writebacks, the
+1-run check is back in range (`file_read` 175.82 MiB/s, `file_write` 6.09
+MiB/s). A 3-run median should replace the 1-run after table when QEMU is free.
+
+Before (`d278ffd9`):
+
+| Row | Median | Unit | Spread |
+|---|---|---:|---:|
+| `syscall_getpid` | 1923076.92 | calls/s | 22.9% |
+| `fork_exec` | 162.60 | runs/s | 20.0% |
+| `pipe` | 333.33 | MiB/s | 18.8% |
+| `file_write` | 5.21 | MiB/s | 9.2% |
+| `file_read` | 216.21 | MiB/s | 14.3% |
+| `console` | 1081.08 | lines/s | 0.0% |
+| `screen_text` | 27958914.00 | ns | 25.5% |
+| `lat_syscall_p50` | 488.00 | ns | 78.7% |
+| `lat_syscall_p99` | 520.00 | ns | 95.4% |
+| `lat_pipe_p50` | 23040.00 | ns | 22.2% |
+| `lat_pipe_p99` | 76288.00 | ns | 47.0% |
+| `shell_pipe` | 2.58 | MiB/s | 18.2% |
+
+After (`feature/page-cache`, with cursor/batch fix, 1 run; 3-run median blocked by external QEMU):
+
+| Row | Value | Unit | Spread |
+|---|---:|---|---:|
+| `syscall_getpid` | 1515151.51 | calls/s | 0.0% (1 run) |
+| `fork_exec` | 147.05 | runs/s | 0.0% (1 run) |
+| `pipe` | 307.69 | MiB/s | 0.0% (1 run) |
+| `file_write` | 6.09 | MiB/s | 0.0% (1 run) |
+| `file_read` | 175.82 | MiB/s | 0.0% (1 run) |
+| `console` | 1041.66 | lines/s | 0.0% (1 run) |
+| `screen_text` | 28248744.00 | ns | 0.0% (1 run) |
+| `lat_syscall_p50` | 856.00 | ns | 0.0% (1 run) |
+| `lat_syscall_p99` | 1000.00 | ns | 0.0% (1 run) |
+| `lat_pipe_p50` | 24064.00 | ns | 0.0% (1 run) |
+| `lat_pipe_p99` | 74240.00 | ns | 0.0% (1 run) |
+| `shell_pipe` | 2.48 | MiB/s | 0.0% (1 run) |
+
+Notes: the initial page-cache integration regressed `file_read` to 1.00 MiB/s
+and `file_write` to 0.22 MiB/s because `mfs_read_at`/`mfs_write_at` walked the
+MFS block chain from the start on every 4 KiB page and dirty evictions wrote
+back one 4 KiB page per MFS transaction. Fix: cache a per-inode MFS at-cursor
+(invalidated on txns/mount/format), and batch contiguous dirty evictions up to
+64 pages (256 KiB) per writeback. After the fix, a 1-run bench shows
+`file_read` 175.82 MiB/s and `file_write` 6.09 MiB/s, back in the base range;
+a 3-run median should replace this row once QEMU is free. QEMU smokes were not
+run in this session because unrelated QEMU jobs were active on the host.
+
+## Intel display enable and present verification (2.1, Intel lane)
+
+The measurement was made on **27 November 2026** on a ThinkPad X1 Carbon Gen 6
+(UHD 620, `8086:5917`, subsystem `17aa:225c`, eDP panel 1920x1080). The
+firmware left the primary plane **linear XRGB8888**: the `gpu plane-linear`
+dry-run prints `ctl 0x04000000 -> 0x04000000` and `stride 0x780 -> 0x780`, and
+the command answers `plane is already linear; no register write needed`.
+`gpu display enable` is almost a no-op on this machine: its dry-run prints the
+decoded pitch, the guarded-slot estimate and the plan; `--yes` verifies one
+device present and then releases the mapping and RAM used for the check.
+
+What is measured on metal, after the wmhang changes: `/bin/wm` produced frames
+with `rc=0` at about **570 us per 1920x1080 frame** (TSC). This is a complete
+measured frame cost, but it is *not* yet a page-flip number. `uiprog_present`
+converts both a device answer (0) and a kernel software copy (1) into a
+program-level `rc=0`; with `ggtt-test` reporting `rc=-4`, the copy path is the
+likely explanation. The split between the copy and the rest of the compositor
+needs an owner run that records the `wm: present: ...` TSC lines together with
+a successful `gpu display enable --yes` device verification.
+
+| Work | QEMU (no Intel backend) | ThinkPad, measured 27 Nov |
+|---|---|---|
+| `wm` frame | QEMU TCG numbers above | ~570 us per 1920x1080 frame |
+| `k_blit_present` path | kernel copy (rc=1) | copy observed; device path not proven |
+| primary plane | no Intel card | already linear XRGB8888, no write |
+| guarded GGTT slot | none | no run found (`ggtt-test` rc=-4) |
+
+The GGTT arithmetic explains the refusal. The aperture has 65,536 entries of
+4,096 bytes (256 MiB). The decoded stride `0x780 * 64 = 122,880` bytes over
+1,080 lines needs 32,400 pages per surface; two flip surfaces need 64,800 of
+the 65,536 entries *plus* guard pages. Even a completely empty aperture could
+barely hold them, so `rc=-4` is not proof that some other owner consumed the
+slots. `gpu ggtt-map` is a read-only census of mapped, unmapped and
+identity-mapped pages and the excluded live ranges; it must be run on the
+laptop before anyone claims how many slots are really free.
+
+Still open, in order: obtain the `ggtt-map` numbers; check whether the stride
+decode names the plane the firmware really scans and whether any identity run
+exists (only an identity mapping lets a RAM surface flip with no PTE write — a
+linear plane alone still reads through `PLANE_SURF`, an aperture offset);
+prove the device path with `gpu display enable --yes`; then decide between a
+smaller-pitch surface, one surface with a copy, and a real two-surface flip. Mode setting and backlight
+are research only in this lane: no PLL or DDI register is written.
+
+The QEMU row stays as a baseline: there is no Intel card in QEMU, so no
+device-present speedup is claimed for it.

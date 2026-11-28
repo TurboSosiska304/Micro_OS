@@ -216,6 +216,90 @@ static void test_install_fragmented_pages(void)
     }
 }
 
+static void test_unmapped_run_is_free(void)
+{
+    struct gpu_intel_gtt_run run;
+    k_u64_t saved = 77u;
+    k_u32_t i;
+
+    ktest_begin("gpu-intel: unmapped GGTT pages can be borrowed with unmapped guards");
+
+    /* A firmware PTE with cache bits but no present bit is still unmapped. */
+    for (i = 0u; i < 32u; i++) {
+        g_entries[i] = 0x2u;
+    }
+    KT_CHECK_INT_EQ(gpu_intel_ggtt_find_free(g_entries, 32u, 2u, NULL, 0u, &run),
+                    GPU_INTEL_GGTT_OK);
+    KT_CHECK_INT_EQ(run.start, 1);
+    KT_CHECK_INT_EQ(run.count, 2);
+    KT_CHECK(run.original == 0x2u);
+
+    KT_CHECK_INT_EQ(gpu_intel_ggtt_borrow(g_entries, 32u, &run, 0x000000100000ULL, &saved),
+                    GPU_INTEL_GGTT_OK);
+    KT_CHECK(saved == 0x2u);
+    KT_CHECK(g_entries[0] == 0x2u);
+    KT_CHECK(g_entries[1] == (0x000000100000ULL | GPU_INTEL_GTT_PRESENT));
+    KT_CHECK(g_entries[2] == (0x000000101000ULL | GPU_INTEL_GTT_PRESENT));
+    KT_CHECK(g_entries[3] == 0x2u);
+    KT_CHECK_INT_EQ(gpu_intel_ggtt_restore(g_entries, 32u, &run, saved), GPU_INTEL_GGTT_OK);
+    for (i = 0u; i < 32u; i++) {
+        KT_CHECK(g_entries[i] == 0x2u);
+    }
+}
+
+static void test_identity_run_needs_no_write(void)
+{
+    struct gpu_intel_gtt_run run;
+    struct gpu_intel_gtt_range excluded[1];
+    k_u64_t physical[3];
+    k_u32_t i;
+
+    ktest_begin("gpu-intel: an identity GGTT run maps RAM without a PTE write");
+
+    for (i = 0u; i < 32u; i++) {
+        g_entries[i] = 0u;
+    }
+    for (i = 0u; i < 3u; i++) {
+        physical[i] = (k_u64_t)(20u + i) * GPU_INTEL_GTT_PAGE_SIZE;
+        g_entries[20u + i] = physical[i] | GPU_INTEL_GTT_PRESENT;
+    }
+    KT_CHECK_INT_EQ(gpu_intel_ggtt_find_identity(g_entries, 32u, physical, 3u, NULL, 0u, &run),
+                    GPU_INTEL_GGTT_OK);
+    KT_CHECK_INT_EQ(run.start, 20);
+    KT_CHECK_INT_EQ(run.count, 3);
+
+    excluded[0] = (struct gpu_intel_gtt_range){21u, 1u};
+    KT_CHECK_INT_EQ(gpu_intel_ggtt_find_identity(g_entries, 32u, physical, 3u, excluded, 1u, &run),
+                    GPU_INTEL_GGTT_NO_FREE);
+}
+
+static void test_stats_census(void)
+{
+    struct gpu_intel_ggtt_stats stats;
+    k_u32_t i;
+
+    ktest_begin("gpu-intel: the GGTT census reports present, unmapped and identity pages");
+
+    for (i = 0u; i < 32u; i++) {
+        g_entries[i] = 0u;
+    }
+    for (i = 1u; i < 5u; i++) {
+        g_entries[i] = (k_u64_t)i * GPU_INTEL_GTT_PAGE_SIZE | GPU_INTEL_GTT_PRESENT;
+    }
+    for (i = 9u; i < 12u; i++) {
+        g_entries[i] = 0x000000008000ULL | GPU_INTEL_GTT_PRESENT;
+    }
+    gpu_intel_ggtt_stats(g_entries, 32u, &stats);
+    KT_CHECK_INT_EQ(stats.entries, 32);
+    KT_CHECK_INT_EQ(stats.present, 7);
+    KT_CHECK_INT_EQ(stats.unmapped, 25);
+    KT_CHECK_INT_EQ(stats.identity, 4);
+    KT_CHECK_INT_EQ(stats.scratch_ranges, 5);
+    KT_CHECK_INT_EQ(stats.longest_scratch, 3);
+    KT_CHECK_INT_EQ(stats.longest_unmapped, 20);
+    KT_CHECK_INT_EQ(stats.common_count, 3);
+}
+
 static void test_plane_ctl_decode(void)
 {
     k_u32_t xrgb_x_tiled =
@@ -291,6 +375,9 @@ void test_gpu_intel_ggtt(void)
     test_free_run_requires_guards();
     test_borrow_and_restore();
     test_install_fragmented_pages();
+    test_unmapped_run_is_free();
+    test_identity_run_needs_no_write();
+    test_stats_census();
     test_plane_ctl_decode();
     test_plane_ctl_present_ok();
     test_rejections();
