@@ -195,6 +195,7 @@ endif()
 set(EXT2_SOURCES)
 if(MICRO_OS_FS_EXT2)
     set(EXT2_SOURCES
+        "${EXT2_DIR}/src/ext2_format.c"
         "${EXT2_DIR}/src/ext2_core.c"
         "${EXT2_DIR}/src/ext2_dir.c"
         "${EXT2_DIR}/src/ext2_write.c"
