@@ -1633,6 +1633,7 @@ add_executable(microos64
     src/port_x86_64_task.c
     src/stack.c
     src/install.c
+    src/install_copy.c
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c
