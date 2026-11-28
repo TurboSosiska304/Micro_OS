@@ -39,6 +39,7 @@
 #include "kernel/mm.h"
 #include "kernel/port/cpu.h"
 #include "kernel/sched.h"
+#include "kernel/task.h"
 #include "kernel/port/lock.h"
 #include "port_x86_64_task.h"
 
@@ -209,6 +210,14 @@ extern char __kernel_end[];
 
 static k_u8_t g_page_pool[PAGE_POOL_PAGES * PAGE_SIZE] __attribute__((aligned(PAGE_SIZE)));
 static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
+
+/*
+ * Frame lifecycle diagnostics for the SMP memory-corruption hunt. Set to 0
+ * to keep the console quiet on a normal run; set to 1 for one instrumented
+ * boot. Every log is below this flag, and the reverse-map invariant runs only
+ * when it is on.
+ */
+#define PORT_FRAME_DIAG 1
 
 /*
  * One reference per page of the arena. A fork makes two spaces point at the
@@ -382,11 +391,72 @@ static inline __attribute__((always_inline)) void frame_release_locked(k_u64_t a
     }
 }
 
+static k_u64_t *table_entry(k_u64_t entry);
+static k_u64_t *space_pd(k_u64_t cr3);
+
+#if PORT_FRAME_DIAG
+/*
+ * Reverse map: find an active address space whose page tables still name a
+ * frame. Called before a zero-refcount frame is handed out; a hit means a
+ * space kept a PTE to a frame the allocator believes is free.
+ */
+static bool frame_scan_users(k_u64_t frame, k_u32_t *out_pid, k_u64_t *out_cr3)
+{
+    k_size_t i;
+
+    for (i = 0; i < TASK_MAX_TASKS; i++) {
+        struct task *t = task_get_by_index(i);
+        k_u64_t cr3;
+        k_u64_t *pd;
+        k_u32_t pd_index;
+
+        if (t == NULL) {
+            continue;
+        }
+        cr3 = port_x86_64_task_cr3_of(t);
+        if (cr3 == 0 || cr3 == port_x86_64_kernel_cr3()) {
+            continue;
+        }
+        pd = space_pd(cr3);
+        if (pd == NULL) {
+            continue;
+        }
+        for (pd_index = 0; pd_index < USER_PD_COUNT; pd_index++) {
+            k_u64_t pde = pd[USER_PD_FIRST + pd_index];
+            k_u64_t *pt;
+            k_u32_t pt_index;
+
+            if ((pde & PTE_PRESENT) == 0 || (pde & PTE_PAGE_SIZE) != 0) {
+                continue;
+            }
+            pt = table_entry(pde);
+            for (pt_index = 0; pt_index < TABLE_ENTRIES; pt_index++) {
+                if ((pt[pt_index] & PTE_PRESENT) != 0 && (pt[pt_index] & PTE_ADDRESS) == frame) {
+                    if (out_pid != NULL) {
+                        *out_pid = t->pid;
+                    }
+                    if (out_cr3 != NULL) {
+                        *out_cr3 = cr3;
+                    }
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+#endif
+
 k_u64_t port_x86_64_frame_alloc(void)
 {
     k_size_t index;
     k_size_t slot;
     k_u64_t address = 0;
+#if PORT_FRAME_DIAG
+    k_u32_t holder_pid = 0;
+    k_u64_t holder_cr3 = 0;
+    bool held_by_space = false;
+#endif
 
     k_port_enter_critical();
 
@@ -398,6 +468,10 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
 
         if (g_frame_ref[index] == 0) {
+#if PORT_FRAME_DIAG
+            address = PORT_X86_64_USER_PHYS + (k_u64_t)index * PAGE_SIZE;
+            held_by_space = frame_scan_users(address, &holder_pid, &holder_cr3);
+#endif
             g_frame_ref[index] = 1;
             g_frame_hint = (k_u32_t)((index + 1u) % USER_FRAME_COUNT);
             address = PORT_X86_64_USER_PHYS + (k_u64_t)index * PAGE_SIZE;
@@ -405,7 +479,26 @@ k_u64_t port_x86_64_frame_alloc(void)
         }
     }
 
+#if PORT_FRAME_DIAG
+    if (held_by_space) {
+        klog(K_LOG_LEVEL_ERROR,
+             "frame-invariant: ALLOC of %08x%08x still mapped by pid %u cr3 %08x%08x (refs now 1)",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu), (unsigned)holder_pid,
+             (unsigned)(holder_cr3 >> 32), (unsigned)(holder_cr3 & 0xFFFFFFFFu));
+    }
+#endif
     k_port_exit_critical();
+
+#if PORT_FRAME_DIAG
+    if (address != 0) {
+        struct task *self = task_self();
+        klog(K_LOG_LEVEL_ERROR, "frame-alloc: %08x%08x pid=%u cpu=%u cr3=%08x%08x",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+             self != NULL ? (unsigned)self->pid : 0u, (unsigned)k_port_cpu_id(),
+             (unsigned)(port_x86_64_current_cr3() >> 32),
+             (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+    }
+#endif
 
     if (address != 0) {
         /* A new page of a program reads as zeros, not as the stack of the
@@ -418,9 +511,39 @@ k_u64_t port_x86_64_frame_alloc(void)
 
 void port_x86_64_frame_release(k_u64_t address)
 {
+#if PORT_FRAME_DIAG
+    k_size_t index;
+    k_u16_t before;
+#endif
+
     k_port_enter_critical();
+#if PORT_FRAME_DIAG
+    if (frame_index(address, &index)) {
+        before = g_frame_ref[index];
+        if (before == 0) {
+            struct task *self = task_self();
+            klog(K_LOG_LEVEL_ERROR,
+                 "frame-invariant: RELEASE of %08x%08x with refs 0 pid=%u cpu=%u cr3=%08x%08x",
+                 (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+                 self != NULL ? (unsigned)self->pid : 0u, (unsigned)k_port_cpu_id(),
+                 (unsigned)(port_x86_64_current_cr3() >> 32),
+                 (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+        }
+    }
+#endif
     frame_release_locked(address);
     k_port_exit_critical();
+
+#if PORT_FRAME_DIAG
+    if (frame_index(address, &index)) {
+        struct task *self = task_self();
+        klog(K_LOG_LEVEL_ERROR, "frame-free: %08x%08x refs=%u pid=%u cpu=%u cr3=%08x%08x",
+             (unsigned)(address >> 32), (unsigned)(address & 0xFFFFFFFFu),
+             (unsigned)g_frame_ref[index], self != NULL ? (unsigned)self->pid : 0u,
+             (unsigned)k_port_cpu_id(), (unsigned)(port_x86_64_current_cr3() >> 32),
+             (unsigned)(port_x86_64_current_cr3() & 0xFFFFFFFFu));
+    }
+#endif
 }
 
 bool port_x86_64_frame_hold(k_u64_t address)

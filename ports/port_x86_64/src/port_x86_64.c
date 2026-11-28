@@ -995,7 +995,7 @@ static const char *exception_name(k_u64_t vector)
     return "unknown";
 }
 
-int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs)
+int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs, k_u64_t *frame)
 {
     if (vector == 2u) {
         k_watchdog_trigger("NMI");
@@ -1099,7 +1099,7 @@ int port_x86_64_exception(k_u64_t vector, k_u64_t error, k_u64_t rip, k_u64_t cs
             __asm__ volatile("movq %%cr2, %0" : "=r"(address));
         }
 
-        port_x86_64_program_fault(vector, error, address, rip);
+        port_x86_64_program_fault(vector, error, address, rip, frame);
     }
 
     com1_puts("\nx86-64: exception ");

@@ -40,6 +40,9 @@ int port_x86_64_task_fork_create(struct task *child, k_u64_t cr3, const void *fr
  * that makes the current context a program with a space of its own.
  */
 k_u64_t port_x86_64_task_space(void);
+
+/* The address space of an arbitrary task; zero when it has none. */
+k_u64_t port_x86_64_task_cr3_of(const struct task *t);
 k_u64_t port_x86_64_task_stack_top(void);
 void port_x86_64_task_set_space(k_u64_t cr3);
 
