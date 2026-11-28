@@ -1928,10 +1928,6 @@ void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u6
     k_u32_t cpu = k_port_cpu_id();
     k_u32_t ticks = k_sched_ticks();
 
-    (void)error;
-    (void)rip;
-    (void)vector;
-
     pd_index = (va >> 21) & (TABLE_ENTRIES - 1u);
     pt_index = (va >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
 
@@ -1944,8 +1940,7 @@ void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u6
             pte = pt[pt_index];
             if ((pte & PTE_PRESENT) != 0) {
                 k_size_t index;
-                k_u64_t frame = pte & PTE_ADDRESS;
-                if (frame_index(frame, &index)) {
+                if (frame_index(pte & PTE_ADDRESS, &index)) {
                     ref = g_frame_ref[index];
                 }
             }
@@ -1953,17 +1948,15 @@ void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u6
     }
     k_port_exit_critical();
 
-    klog(K_LOG_LEVEL_ERROR,
-         "pgfault-dbg: cpu %u pid %u ticks %u cr3 0x%08x%08x va 0x%08x%08x err 0x%08x%08x "
-         "rip 0x%08x%08x vec %u pde 0x%08x%08x pte 0x%08x%08x P %u U %u W %u COW %u NX %u "
-         "frame 0x%08x%08x ref %u",
+    klog(K_LOG_LEVEL_ERROR, "pgf1: cpu=%u pid=%u tk=%u cr3=%08x%08x va=%08x%08x err=%08x%08x",
          (unsigned)cpu, (unsigned)pid, (unsigned)ticks, (unsigned)(cr3 >> 32),
          (unsigned)(cr3 & 0xFFFFFFFFu), (unsigned)(va >> 32), (unsigned)(va & 0xFFFFFFFFu),
-         (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu), (unsigned)(rip >> 32),
-         (unsigned)(rip & 0xFFFFFFFFu), (unsigned)vector, (unsigned)(pde >> 32),
-         (unsigned)(pde & 0xFFFFFFFFu), (unsigned)(pte >> 32), (unsigned)(pte & 0xFFFFFFFFu),
-         (unsigned)((pte & PTE_PRESENT) != 0), (unsigned)((pte & PTE_USER) != 0),
-         (unsigned)((pte & PTE_WRITABLE) != 0), (unsigned)((pte & PTE_COW) != 0),
-         (unsigned)((pte & PTE_NX) != 0), (unsigned)((pte & PTE_ADDRESS) >> 32),
-         (unsigned)((pte & PTE_ADDRESS) & 0xFFFFFFFFu), (unsigned)ref);
+         (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu));
+    klog(K_LOG_LEVEL_ERROR,
+         "pgf2: rip=%08x%08x vec=%u pde=%08x%08x pte=%08x%08x P%uU%uW%uC%uX%u ref=%u",
+         (unsigned)(rip >> 32), (unsigned)(rip & 0xFFFFFFFFu), (unsigned)vector,
+         (unsigned)(pde >> 32), (unsigned)(pde & 0xFFFFFFFFu), (unsigned)(pte >> 32),
+         (unsigned)(pte & 0xFFFFFFFFu), (unsigned)((pte & PTE_PRESENT) != 0),
+         (unsigned)((pte & PTE_USER) != 0), (unsigned)((pte & PTE_WRITABLE) != 0),
+         (unsigned)((pte & PTE_COW) != 0), (unsigned)((pte & PTE_NX) != 0), (unsigned)ref);
 }
