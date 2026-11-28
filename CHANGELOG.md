@@ -10,6 +10,70 @@ the MicroFS volume change by adding only.
 A release is the commit a tag names (`vX.Y.Z`); a tag with a dash
 (`vX.Y.Z-pre`) is a pre-release and must match `kernel_version()`.
 
+## [2.4.0] - 2026-11-28
+
+### The release
+
+- 2.4.0 "Peaches": the installer writes a disk, copies the running system and
+  verifies it with a SHA-256 manifest, the formatter and diagnostic helpers
+  stop lying about 64-bit values, the hang watchdog names a stuck machine, and
+  the release ships with `KERNEL_SMP=OFF` by default because user memory is
+  corrupted under load on 8 cores.
+
+### Added
+
+- The x86-64 installer L3: after an exact confirmation it appends one Linux
+  data partition in a verified GPT gap, formats it as ext2 or MicroFS, mounts
+  it, writes the boot tree, and records the install in `/etc/install` and
+  `/etc/volumes`. Dry-run is the default; a busy or live disk is refused.
+- The x86-64 installer L4: copy the running system onto the new volume (boot
+  module 0 to `/boot/kernel`, live `/bin` and `/etc` with modes), record every
+  copied file in `/etc/install.manifest` with byte count and SHA-256, write
+  `/etc/install.manifest.sha256`, sync, unmount, mount read-only and verify
+  every file before printing "installed, verified". `install --verify`
+  repeats the read-only check. A corrupted copy fails with the file name and
+  both hashes; `tools/x86_install_smoke.py` gates the ext2 and MicroFS cases,
+  including the corruption case (95/95).
+- The hang watchdog: NMI and vector `0x14` paths dump state into the gates, and
+  the watchdog records where the CPU was, which lock it held and the stop
+  provenance. Gate tooling can turn a silent timeout into a dump that names the
+  place.
+- Signal provenance: signal delivery carries `si_code` and the sender can be
+  named; `SIGSTOP` is no longer lost when a task arms its first sleep.
+- AMD VRAM buffer objects and `bufmap`: allocate, fill, read back, free, list
+  and flip buffer objects through the BAR0 aperture; the AMD probe reports the
+  memory it found and the write test stays guarded.
+- Intel GGTT mapping and display-enable groundwork: `ggtt-map` and the GGTT test
+  expose entry ownership, and the plane path can be enabled through the
+  documented sequence.
+
+### Fixed
+
+- The x86-64 libc formatter honours length modifiers in its vararg path:
+  `%lu` and `%llu` no longer print only the low 32 bits of a 64-bit value.
+- `klog`, `kshell_printf`, `wdg_printf` and the `pkg_say*` helpers carry format
+  attributes; warnings exposed by the check were fixed.
+- `ports/port_x86_64/src/port_x86_64_task.c` clamps truncated diagnostic output
+  before writing it. The USB gate is 66/66 after these formatter and diagnostic
+  fixes.
+
+### Changed
+
+- `KERNEL_SMP` is off by default in the x86-64 release build. Eight cores work
+  in QEMU and on the owner's laptop, but under load user program memory is
+  corrupted (PTEs valid, operand register holds garbage, 3 of 6 runs of the
+  15-stage pipeline). The single-core default is the release until the
+  corruption is found and fixed; see `docs/debts.md` and `feature/pipe15`.
+
+### Deferred
+
+- Booting from the installed volume is not done: the installer copies and
+  verifies, but the loader/ESP files, the NVRAM question and booting the
+  installed disk as a normal writable root (L5/L6) are not implemented.
+- Mode setting and backlight remain a plan; the registers are not touched.
+- WiFi is not `ALIVE` on the live card; the 8265 path reaches stage 2 but not
+  real hardware association.
+
 ## [2.3.0] - 2026-11-27
 
 ### The release
