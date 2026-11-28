@@ -971,11 +971,11 @@ static bool pipeline_wait_one(k_u32_t pid, k_u32_t pgrp, int *status)
         {
             int key = k_console_poll();
 
-            if (key == 3) {
-                (void)task_signal_pgrp(pgrp, K_SIGINT);
-            } else if (key == K_TTY_DEF_SUSP) {
+            if (key == 3 && k_tty_console_isig()) {
+                (void)task_signal_pgrp_ex(pgrp, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
+            } else if (key == K_TTY_DEF_SUSP && k_tty_console_isig()) {
                 kshell_printf("^Z\n");
-                (void)task_signal_pgrp(pgrp, K_SIGTSTP);
+                (void)task_signal_pgrp_ex(pgrp, K_SIGTSTP, K_SIG_SRC_TTY, K_SI_TTY);
                 return true;
             }
         }

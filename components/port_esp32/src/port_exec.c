@@ -47,6 +47,7 @@
 #include "kernel/port/exec.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
+#include "kernel/tty.h"
 
 #include "port_esp32.h"
 
@@ -493,8 +494,8 @@ int k_port_exec_enter(const struct k_exec_image *image, char *const argv[])
             if (own_console) {
                 int key = k_console_poll();
 
-                if (key == 3) {
-                    (void)task_signal_send(program->pid, K_SIGINT);
+                if (key == 3 && k_tty_console_isig()) {
+                    (void)task_signal_send_ex(program->pid, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
                 }
             }
 

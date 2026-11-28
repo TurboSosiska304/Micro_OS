@@ -189,6 +189,9 @@ void k_tty_init(void);
 /* True when the mode of the console is raw: /proc and the tests read it. */
 bool k_tty_console_raw(void);
 
+/* True when the console has ISIG set: a 0x03 byte is a Ctrl+C. */
+bool k_tty_console_isig(void);
+
 /* Ensure the calling task's tty is in canonical mode for line reading. */
 void k_tty_set_canonical(void);
 

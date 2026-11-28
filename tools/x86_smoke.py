@@ -1750,7 +1750,7 @@ def check(output: str) -> list:
     # an empty answer and not an exception: a check that dies with a ValueError
     # tells the reader nothing about the machine (it happened once under load).
     order = [line.strip() for line in ordered.splitlines()[1:] if line.strip()]
-    order = [line for line in order if not line.startswith(("task:", "x86-64:"))]
+    order = [line for line in order if not line.startswith(("task:", "x86-64:", "sig:"))]
     expect(
         "sort orders the lines",
         order == ["console=vga", "hello", "hostname=x86_64"],

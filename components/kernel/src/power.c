@@ -149,7 +149,7 @@ int k_power_shutdown(enum k_power_action action, bool force)
     /* No new session from here: the getty of the port reads the flag. */
     kinfo("power: no new session starts, the tasks are asked to end");
 
-    sent = task_signal_all(self, K_SIGTERM);
+    sent = task_signal_all_ex(self, K_SIGTERM, K_SIG_SRC_KERNEL, K_SI_KERNEL);
     if (sent < 0) {
         sent = 0;
     }

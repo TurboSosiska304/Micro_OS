@@ -333,7 +333,7 @@ static void tty_interrupt(struct k_tty *tty)
     k_u32_t job;
 
     if (tty != NULL && tty->fg_pgrp != 0) {
-        (void)task_signal_pgrp(tty->fg_pgrp, K_SIGINT);
+        (void)task_signal_pgrp_ex(tty->fg_pgrp, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
         return;
     }
 
@@ -344,11 +344,11 @@ static void tty_interrupt(struct k_tty *tty)
     job = task_get_job(self);
 
     if (job != TASK_JOB_NONE) {
-        (void)task_signal_job(job, K_SIGINT);
+        (void)task_signal_job_ex(job, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
         return;
     }
 
-    (void)task_signal_send(self->pid, K_SIGINT);
+    (void)task_signal_send_ex(self->pid, K_SIGINT, K_SIG_SRC_TTY, K_SI_TTY);
 }
 
 /* Ctrl+Z belongs to the foreground job, not to the line reader. At the shell
@@ -365,7 +365,7 @@ static void tty_suspend(struct k_tty *tty)
             return;
         }
 
-        (void)task_signal_pgrp(tty->fg_pgrp, K_SIGTSTP);
+        (void)task_signal_pgrp_ex(tty->fg_pgrp, K_SIGTSTP, K_SIG_SRC_TTY, K_SI_TTY);
         return;
     }
 
@@ -375,7 +375,7 @@ static void tty_suspend(struct k_tty *tty)
 
     job = task_get_job(self);
     if (job != TASK_JOB_NONE) {
-        (void)task_signal_job(job, K_SIGTSTP);
+        (void)task_signal_job_ex(job, K_SIGTSTP, K_SIG_SRC_TTY, K_SI_TTY);
     }
 }
 
@@ -410,6 +410,27 @@ static int canon_one(struct k_tty *tty, int c)
     }
 
     if (c == (int)tty->mode.c_cc[K_TTY_VINTR] && isig) {
+        /*
+         * A real Ctrl+C is a single key event. If another byte is already
+         * waiting on the console, 0x03 is likely noise or part of a burst
+         * (a misrouted AUX packet, serial noise) and must not kill the
+         * foreground group.
+         */
+        {
+            struct task *self = task_self();
+            bool from_console = (self == NULL || self->terminal == NULL) && tty == &g_console;
+
+            if (from_console) {
+                int next = k_port_console_poll();
+
+                if (next >= 0) {
+                    tty->pushback = next;
+                    /* Fall through: treat 0x03 as a normal byte. */
+                    goto not_vintr;
+                }
+            }
+        }
+
         if (echo) {
             tty_echo("^C\r\n", 4);
         }
@@ -419,6 +440,7 @@ static int canon_one(struct k_tty *tty, int c)
         tty_interrupt(tty);
         return KERR_INTR;
     }
+not_vintr:
 
     if (c == (int)tty->mode.c_cc[K_TTY_VSUSP] && isig) {
         if (echo) {
@@ -898,6 +920,11 @@ bool k_tty_input_ready(void)
 bool k_tty_console_raw(void)
 {
     return tty_is_raw(&g_console);
+}
+
+bool k_tty_console_isig(void)
+{
+    return (g_console.mode.c_lflag & K_TTY_ISIG) != 0;
 }
 
 void k_tty_set_canonical(void)
