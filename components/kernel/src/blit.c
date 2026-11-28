@@ -22,6 +22,7 @@
 static const struct k_fb_ops *s_present_ops;
 static void *s_present_context;
 static k_u32_t s_present_generation;
+static const k_u16_t *s_present_source;
 static bool s_present_failed;
 
 static bool clip_rect(const k_blit_surface *surface, const k_blit_rect *rect, k_blit_rect *out)
@@ -310,10 +311,11 @@ int k_blit_present(k_blit_surface *dst, const k_blit_surface *src)
     }
 
     if (ops != s_present_ops || context != s_present_context ||
-        generation != s_present_generation) {
+        generation != s_present_generation || src->base != s_present_source) {
         s_present_ops = ops;
         s_present_context = context;
         s_present_generation = generation;
+        s_present_source = src->base;
         s_present_failed = false;
     }
 
@@ -322,9 +324,17 @@ int k_blit_present(k_blit_surface *dst, const k_blit_surface *src)
         if (rc == 0) {
             return 0;
         }
+        if (rc != KERR_NOTSUP) {
+            /* A driver error is not a capability answer. In particular, a
+             * failed rollback must not be hidden by a copy to an unseen
+             * destination. */
+            return rc;
+        }
 
         /* A refusal is a capability answer, not a frame error. The copy below
-         * is the same software path a machine without a GPU has always used. */
+         * is the same software path a machine without a GPU has always used.
+         * The latch is per source: a RAM refusal must not disable a later
+         * VRAM-surface flip (or the other way around). */
         s_present_failed = true;
         kwarn("blit: present refused (rc=%d), using software copy fallback", rc);
     } else if (ops == NULL || ops->present == NULL) {

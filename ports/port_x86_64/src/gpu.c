@@ -256,19 +256,21 @@ static const struct kmod g_gpu_mod = {
     .detail = gpu_mod_detail,
 };
 
-int port_x86_64_gpu_amd_vramtest(bool do_write);
+int port_x86_64_gpu_amd_vramtest(bool do_write, bool confirmed);
 int port_x86_64_gpu_amd_vrammap(void);
 int port_x86_64_gpu_amd_vramalloc(k_u64_t size_kib);
-int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern);
+int port_x86_64_gpu_amd_vramfill(k_u32_t id, k_u32_t pattern, bool confirmed);
 int port_x86_64_gpu_amd_vramread(k_u32_t id);
 int port_x86_64_gpu_amd_vramfree(k_u32_t id);
 int port_x86_64_gpu_amd_vramdump(void);
 int port_x86_64_gpu_amd_amdflip(bool confirmed, bool keep);
 int port_x86_64_gpu_amd_bufalloc(k_u64_t size_kib, const char *name);
-int port_x86_64_gpu_amd_buffill(k_u32_t id);
+int port_x86_64_gpu_amd_buffill(k_u32_t id, bool confirmed);
 int port_x86_64_gpu_amd_bufread(k_u32_t id);
 int port_x86_64_gpu_amd_buffree(k_u32_t id);
 int port_x86_64_gpu_amd_buflist(void);
+int port_x86_64_gpu_amd_bufmap(k_u32_t id, bool allow_present, bool own);
+int port_x86_64_gpu_amd_bufunmap(k_u32_t id, bool confirmed);
 int port_x86_64_gpu_amd_bufflip(k_u32_t id, bool confirmed, bool keep);
 
 static bool gpu_parse_u64(const char *s, k_u64_t *out)
@@ -322,13 +324,24 @@ static int cmd_gpu(int argc, char **argv)
 
     if (argc >= 2 && strcmp(argv[1], "vramtest") == 0) {
         bool do_write = false;
-        if (argc >= 3 && strcmp(argv[2], "--write") == 0) {
-            do_write = true;
-        } else if (argc >= 3) {
-            kshell_printf("usage: gpu vramtest [--write]\n");
+        bool confirmed = false;
+        int j;
+
+        for (j = 2; j < argc; j++) {
+            if (strcmp(argv[j], "--write") == 0) {
+                do_write = true;
+            } else if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu vramtest [--write] [--yes]\n");
+                return 1;
+            }
+        }
+        if (confirmed && !do_write) {
+            kshell_printf("gpu vramtest: --yes requires --write\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_vramtest(do_write);
+        return port_x86_64_gpu_amd_vramtest(do_write, confirmed);
     }
 
     if (argc == 2 && strcmp(argv[1], "vrammap") == 0) {
@@ -344,15 +357,26 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_vramalloc(kib);
     }
 
-    if (argc == 4 && strcmp(argv[1], "vramfill") == 0) {
+    if (argc >= 4 && strcmp(argv[1], "vramfill") == 0) {
         k_u64_t id = 0u;
         k_u64_t pat = 0u;
+        bool confirmed = false;
+        int j;
+
         if (!gpu_parse_u64(argv[2], &id) || !gpu_parse_u64(argv[3], &pat) || id > 0xFFFFFFFFu ||
             pat > 0xFFFFFFFFu) {
-            kshell_printf("usage: gpu vramfill <id> <pattern>\n");
+            kshell_printf("usage: gpu vramfill <id> <pattern> [--yes]\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_vramfill((k_u32_t)id, (k_u32_t)pat);
+        for (j = 4; j < argc; j++) {
+            if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu vramfill <id> <pattern> [--yes]\n");
+                return 1;
+            }
+        }
+        return port_x86_64_gpu_amd_vramfill((k_u32_t)id, (k_u32_t)pat, confirmed);
     }
 
     if (argc == 3 && strcmp(argv[1], "vramread") == 0) {
@@ -397,13 +421,24 @@ static int cmd_gpu(int argc, char **argv)
         return port_x86_64_gpu_amd_bufalloc(kib, name);
     }
 
-    if (argc == 3 && strcmp(argv[1], "buffill") == 0) {
+    if (argc >= 3 && strcmp(argv[1], "buffill") == 0) {
         k_u64_t id = 0u;
+        bool confirmed = false;
+        int j;
+
         if (!gpu_parse_u64(argv[2], &id) || id > 0xFFFFFFFFu) {
-            kshell_printf("usage: gpu buffill <id>\n");
+            kshell_printf("usage: gpu buffill <id> [--yes]\n");
             return 1;
         }
-        return port_x86_64_gpu_amd_buffill((k_u32_t)id);
+        for (j = 3; j < argc; j++) {
+            if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else {
+                kshell_printf("usage: gpu buffill <id> [--yes]\n");
+                return 1;
+            }
+        }
+        return port_x86_64_gpu_amd_buffill((k_u32_t)id, confirmed);
     }
 
     if (argc == 3 && strcmp(argv[1], "bufread") == 0) {
@@ -426,6 +461,37 @@ static int cmd_gpu(int argc, char **argv)
 
     if (argc == 2 && strcmp(argv[1], "buflist") == 0) {
         return port_x86_64_gpu_amd_buflist();
+    }
+
+    if (argc >= 3 && (strcmp(argv[1], "bufmap") == 0 || strcmp(argv[1], "bufunmap") == 0)) {
+        k_u64_t id = 0u;
+        bool confirmed = false;
+        bool own = false;
+        bool is_map = strcmp(argv[1], "bufmap") == 0;
+        int j;
+
+        if (!gpu_parse_u64(argv[2], &id) || id > 0xFFFFFFFFu) {
+            kshell_printf("usage: gpu %s <id> [--yes]%s\n", argv[1], is_map ? " [--own]" : "");
+            return 1;
+        }
+        for (j = 3; j < argc; j++) {
+            if (strcmp(argv[j], "--yes") == 0) {
+                confirmed = true;
+            } else if (is_map && strcmp(argv[j], "--own") == 0) {
+                own = true;
+            } else {
+                kshell_printf("usage: gpu %s <id> [--yes]%s\n", argv[1], is_map ? " [--own]" : "");
+                return 1;
+            }
+        }
+        if (own && !confirmed) {
+            kshell_printf("gpu bufmap: --own requires --yes\n");
+            return 1;
+        }
+        if (is_map) {
+            return port_x86_64_gpu_amd_bufmap((k_u32_t)id, confirmed, own);
+        }
+        return port_x86_64_gpu_amd_bufunmap((k_u32_t)id, confirmed);
     }
 
     if (argc >= 3 && strcmp(argv[1], "bufflip") == 0) {
@@ -487,10 +553,11 @@ static int cmd_gpu(int argc, char **argv)
     }
 
     kshell_printf(
-        "usage: gpu [info|vramtest [--write]|vrammap|vramalloc <kib>|vramfill <id> <pat>|"
-        "vramread <id>|vramfree <id>|vramdump|bufalloc <kib> [--name X]|buffill <id>|"
-        "bufread <id>|buffree <id>|buflist|bufflip <id> [--yes] [--keep]|amdflip [--yes] [--keep]|"
-        "ggtt-test|flip [--yes]|plane-linear [--yes]\n");
+        "usage: gpu [info|vramtest [--write] [--yes]|vrammap|vramalloc <kib>|"
+        "vramfill <id> <pat> [--yes]|vramread <id>|vramfree <id>|vramdump|"
+        "bufalloc <kib> [--name X]|buffill <id> [--yes]|bufread <id>|buffree <id>|buflist|"
+        "bufmap <id> [--yes] [--own]|bufunmap <id> [--yes]|bufflip <id> [--yes] [--keep]|"
+        "amdflip [--yes] [--keep]|ggtt-test|flip [--yes]|plane-linear [--yes]\n");
     return KSHELL_USAGE;
 }
 
@@ -500,12 +567,18 @@ int port_x86_64_gpu_register(void)
         .summary = "display controller probe",
         .usage = "gpu "
                  "[info|vramtest|vrammap|vramalloc|vramfill|vramread|vramfree|vramdump|bufalloc|"
-                 "buffill|bufread|buffree|buflist|bufflip|amdflip|ggtt-test|flip|plane-linear]",
+                 "buffill|bufread|buffree|buflist|bufmap|bufunmap|bufflip|amdflip|ggtt-test|flip|"
+                 "plane-linear]",
         .detail = "Without a subcommand, prints the shared display-controller report.\n"
                   "AMD: vrammap shows VRAM layout; vramalloc <kib> reserves a raw block;\n"
-                  "vramfill <id> <pat> fills it; vramread <id> verifies; vramfree <id>\n"
-                  "releases it; vramdump lists blocks. bufalloc <kib> [--name X] creates a\n"
-                  "named VRAM buffer object; buffill/bufread/buffree/buflist manage it;\n"
+                  "vramfill <id> <pat> [--yes] fills it; vramread <id> verifies; vramfree <id>\n"
+                  "releases it; vramdump lists blocks. vramtest [--write] [--yes] verifies a\n"
+                  "write/read outside scanout. bufalloc <kib> [--name X] creates a\n"
+                  "named VRAM buffer object; buffill [--yes]/bufread/buffree/buflist manage it;\n"
+                  "bufmap <id> [--yes] [--own] maps the primary plane (RGB565/XRGB8888)\n"
+                  "at a fixed kernel VA; --yes arms VRAM present, --own frees the block on\n"
+                  "the last close of /dev/fb0, otherwise present keeps RAM.\n"
+                  "bufunmap <id> [--yes] restores scanout before unmapping an active surface.\n"
                   "bufflip <id> [--yes] [--keep] flips scanout to a buffer. amdflip [--yes]\n"
                   "[--keep] copies the current frame to VRAM and flips. Intel: ggtt-test, flip\n"
                   "[--yes], plane-linear [--yes].\n",

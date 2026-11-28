@@ -28,6 +28,11 @@
 #define PORT_X86_64_GPU_VIRT (PORT_X86_64_KERNEL_BASE + 0x3A000000ull)
 /* One 4 KiB page window into BAR0 for a read-only VRAM probe. */
 #define PORT_X86_64_GPU_VRAM_VIRT (PORT_X86_64_KERNEL_BASE + 0x3C000000ull)
+/* One fixed, write-combining window for an AMD RGB565/XRGB8888 VRAM surface.
+ * It starts after Intel's 256 MiB aperture and ends at the top of the shared
+ * high map. */
+#define PORT_X86_64_GPU_VRAM_SURFACE_VIRT (PORT_X86_64_KERNEL_BASE + 0x3D000000ull)
+#define PORT_X86_64_GPU_VRAM_SURFACE_BYTES (0x40000000ull - 0x3D000000ull)
 
 enum gpu_probe_result {
     GPU_PROBE_NONE = 0,        /* not this vendor's responsibility */

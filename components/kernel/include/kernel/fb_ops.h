@@ -66,11 +66,14 @@ struct k_fb_surface {
  * to the display that is not the memory (the software picture of this system
  * needs nothing, and its flush is the empty answer).
  *
- * `present` shows a complete RAM surface instead of copying it into `dst`.
- * The surfaces have the same shape and pixel format; a driver which cannot
- * keep the source pages alive and mapped answers KERR_NOTSUP (or any error),
- * and `k_blit_present` falls back to the software copy. `present_release`
- * restores the original surface before the owner gives the device back.
+ * `present` shows a complete surface instead of copying it into `dst`.
+ * The surfaces have the same shape and pixel format. KERR_NOTSUP is a
+ * capability answer and `k_blit_present` falls back to the software copy;
+ * another negative error is propagated after the driver has attempted its
+ * rollback, because copying into an unseen destination would hide the fault.
+ * `present_release` restores the original surface before the owner gives the
+ * device back. A refusal is remembered per source, so a RAM surface does not
+ * disable a later device surface.
  */
 struct k_fb_ops {
     int (*fill)(void *context, const struct k_fb_rect *rect, k_u32_t pixel);

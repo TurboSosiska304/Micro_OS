@@ -571,11 +571,33 @@ k_u32_t port_x86_64_paging_map_mmio(k_u64_t vaddr, k_u64_t paddr, k_size_t len)
 
         g_kernel_pd_high[index] = (chunk & PTE_ADDRESS) | PTE_PRESENT | PTE_WRITABLE |
                                   PTE_PAGE_SIZE | PTE_NX | PTE_PCD | PTE_PWT;
+        invlpg(PORT_X86_64_KERNEL_BASE + ((k_u64_t)index << 21));
         index++;
         pages++;
     }
 
     return pages;
+}
+
+/* Drop only the large-page entries of a named device window. No RAM frame is
+ * released: the physical pages are BAR/aperture memory owned by the device. */
+void port_x86_64_paging_unmap_device(k_u64_t vaddr, k_size_t len)
+{
+    const k_u64_t high_end = PORT_X86_64_KERNEL_BASE + 0x40000000ull;
+    k_u64_t at;
+    k_u64_t end;
+
+    if (len == 0u || (vaddr & (k_u64_t)(LARGE_PAGE_SIZE - 1u)) != 0u ||
+        vaddr < PORT_X86_64_KERNEL_BASE || vaddr >= high_end || len > high_end - vaddr) {
+        return;
+    }
+    end = vaddr + (k_u64_t)len;
+    for (at = vaddr; at < end; at += LARGE_PAGE_SIZE) {
+        k_u32_t index = (k_u32_t)((at >> 21) & (TABLE_ENTRIES - 1u));
+
+        g_kernel_pd_high[index] = 0u;
+        invlpg(at);
+    }
 }
 
 /*
@@ -628,6 +650,7 @@ k_u32_t port_x86_64_paging_map_framebuffer(k_u64_t vaddr, k_u64_t paddr, k_size_
             return 0;
         }
 
+        invlpg(PORT_X86_64_KERNEL_BASE + ((k_u64_t)index << 21));
         index++;
         pages++;
     }
