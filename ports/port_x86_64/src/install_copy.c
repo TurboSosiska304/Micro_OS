@@ -921,7 +921,7 @@ int port_x86_64_install_verify(const char *point, k_u32_t *out_files)
         digest_hex(digest, actual_hash);
         if (size != (k_u64_t)expected) {
             kshell_printf("install-verify: MISMATCH %s: %llu byte(s), expected %llu\n", path,
-                          (unsigned long long)size, expected);
+                          (unsigned long long)size, (unsigned long long)expected);
             rc = KERR_IO;
             break;
         }
