@@ -94,8 +94,8 @@ static int format_zero(const struct k_blockdev *dev, k_u64_t offset, k_u64_t siz
 /* One bitmap: the bits of `used` objects at the front are set, the rest are
  * free. Both bitmaps of a fresh group have this shape; only the inode bitmap
  * of group zero keeps the reserved inodes. */
-static int format_bitmap(const struct k_blockdev *dev, k_u32_t block, k_u32_t prefix,
-                         k_u32_t from, k_u32_t to, k_u32_t total)
+static int format_bitmap(const struct k_blockdev *dev, k_u32_t block, k_u32_t prefix, k_u32_t from,
+                         k_u32_t to, k_u32_t total)
 {
     k_u8_t bits[FORMAT_BLOCK_SIZE];
     k_u32_t i;
@@ -178,9 +178,9 @@ static int format_inode(const struct k_blockdev *dev, k_u32_t table, k_u32_t num
     ext2_put32(raw + 32u, 0u); /* flags */
     ext2_put32(raw + 40u, data_block);
 
-    return format_write(dev, (k_u64_t)table * FORMAT_BLOCK_SIZE +
-                                  (k_u64_t)(number - 1u) * FORMAT_INODE_SIZE,
-                        raw, sizeof(raw));
+    return format_write(
+        dev, (k_u64_t)table * FORMAT_BLOCK_SIZE + (k_u64_t)(number - 1u) * FORMAT_INODE_SIZE, raw,
+        sizeof(raw));
 }
 
 /* The first block of the metadata of group `group`. Group zero carries the
@@ -194,8 +194,8 @@ static k_u32_t format_group_meta(k_u32_t group, k_u32_t desc_blocks)
 
 static k_u32_t format_group_end(k_u32_t group, k_u32_t blocks)
 {
-    k_u64_t end = (k_u64_t)FORMAT_FIRST_DATA_BLOCK + (k_u64_t)(group + 1u) *
-                                                        FORMAT_BLOCKS_PER_GROUP;
+    k_u64_t end =
+        (k_u64_t)FORMAT_FIRST_DATA_BLOCK + (k_u64_t)(group + 1u) * FORMAT_BLOCKS_PER_GROUP;
 
     return end > blocks ? blocks : (k_u32_t)end;
 }
@@ -216,8 +216,7 @@ int ext2_format(const struct k_blockdev *dev)
     k_u32_t root_block;
     int rc;
 
-    if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL ||
-        dev->ops->write == NULL) {
+    if (dev == NULL || dev->ops == NULL || dev->ops->read == NULL || dev->ops->write == NULL) {
         return KERR_INVAL;
     }
 
@@ -237,8 +236,8 @@ int ext2_format(const struct k_blockdev *dev)
         return KERR_INVAL; /* a volume too small to hold its own metadata */
     }
 
-    groups = (blocks - FORMAT_FIRST_DATA_BLOCK + FORMAT_BLOCKS_PER_GROUP - 1u) /
-             FORMAT_BLOCKS_PER_GROUP;
+    groups =
+        (blocks - FORMAT_FIRST_DATA_BLOCK + FORMAT_BLOCKS_PER_GROUP - 1u) / FORMAT_BLOCKS_PER_GROUP;
     if (groups == 0u || groups > 0x10000u) {
         return KERR_NOTSUP;
     }
@@ -314,17 +313,19 @@ int ext2_format(const struct k_blockdev *dev)
         ext2_put32(group + 4u, meta + 1u);
         ext2_put32(group + 8u, meta + 2u);
         ext2_put16(group + 12u, (k_u16_t)(end - first - group_used));
-        ext2_put16(group + 14u, (k_u16_t)(inodes_per_group - (g == 0u ? FORMAT_RESERVED_INODES : 0u)));
+        ext2_put16(group + 14u,
+                   (k_u16_t)(inodes_per_group - (g == 0u ? FORMAT_RESERVED_INODES : 0u)));
         ext2_put16(group + 16u, (k_u16_t)(g == 0u ? 2u : 0u));
-        rc = format_write(dev, (k_u64_t)(FORMAT_FIRST_DATA_BLOCK + 1u) * FORMAT_BLOCK_SIZE +
-                                   (k_u64_t)g * 32u,
-                          group, sizeof(group));
+        rc = format_write(
+            dev, (k_u64_t)(FORMAT_FIRST_DATA_BLOCK + 1u) * FORMAT_BLOCK_SIZE + (k_u64_t)g * 32u,
+            group, sizeof(group));
         if (rc != 0u) {
             return rc;
         }
     }
 
-    rc = format_inode(dev, format_group_meta(0u, desc_blocks) + 2u, EXT2_ROOT_INODE, root_block, 3u);
+    rc =
+        format_inode(dev, format_group_meta(0u, desc_blocks) + 2u, EXT2_ROOT_INODE, root_block, 3u);
     if (rc != 0u) {
         return rc;
     }
@@ -355,7 +356,7 @@ int ext2_format(const struct k_blockdev *dev)
     ext2_put32(super + 40u, inodes_per_group);
     ext2_put32(super + 44u, ext2_now());
     ext2_put32(super + 48u, ext2_now());
-    ext2_put16(super + 52u, 0u); /* mount count */
+    ext2_put16(super + 52u, 0u);  /* mount count */
     ext2_put16(super + 54u, 20u); /* check interval */
     ext2_put16(super + 56u, EXT2_SUPER_MAGIC);
     ext2_put16(super + 58u, 1u); /* clean */
@@ -369,11 +370,11 @@ int ext2_format(const struct k_blockdev *dev)
     ext2_put16(super + 82u, 0u);
     ext2_put32(super + 84u, FORMAT_RESERVED_INODES);
     ext2_put16(super + 88u, FORMAT_INODE_SIZE);
-    ext2_put32(super + 92u, 0u);                       /* compat */
+    ext2_put32(super + 92u, 0u);                             /* compat */
     ext2_put32(super + 96u, EXT2_FEATURE_INCOMPAT_FILETYPE); /* incompat */
-    ext2_put32(super + 100u, 0u);                      /* read-only compat */
-    memset(super + 104u, 0, 16u);                      /* UUID */
-    memcpy(super + 120u, "MICROOS", 7u);              /* volume name */
+    ext2_put32(super + 100u, 0u);                            /* read-only compat */
+    memset(super + 104u, 0, 16u);                            /* UUID */
+    memcpy(super + 120u, "MICROOS", 7u);                     /* volume name */
 
     rc = format_write(dev, EXT2_SUPERBLOCK_OFFSET, super, sizeof(super));
     if (rc != 0u) {

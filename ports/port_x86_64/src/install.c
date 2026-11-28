@@ -130,7 +130,7 @@ static const struct partition_entry_info *find_esp(const struct partition_invent
 }
 
 static const struct partition_gap *find_gap(const struct partition_inventory *inv,
-                                             k_u64_t need_sectors)
+                                            k_u64_t need_sectors)
 {
     k_u32_t i;
     const struct partition_gap *best = NULL;
