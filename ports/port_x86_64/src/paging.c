@@ -1274,6 +1274,7 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
 {
     k_u64_t address;
     k_u64_t entry_flags = PTE_PRESENT | PTE_USER;
+    int rc = 0;
 
     if ((flags & PORT_X86_64_PAGE_WRITE) != 0) {
         entry_flags |= PTE_WRITABLE;
@@ -1288,6 +1289,8 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         return -1;
     }
 
+    k_port_enter_critical();
+
     for (address = 0; address < len; address += PAGE_SIZE) {
         k_u64_t virtual_address = vaddr + address;
         k_u64_t physical_address = paddr + address;
@@ -1296,7 +1299,8 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         k_u64_t *pt;
 
         if (virtual_address < PORT_X86_64_USER_BASE || virtual_address >= PORT_X86_64_USER_LIMIT) {
-            return -1;
+            rc = -1;
+            break;
         }
 
         pd_index = (virtual_address >> 21) & (TABLE_ENTRIES - 1u);
@@ -1315,12 +1319,14 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
             k_u64_t *pd = space_pd(cr3);
 
             if (pd == NULL || (pd[pd_index] & PTE_PRESENT) != 0) {
-                return -1;
+                rc = -1;
+                break;
             }
 
             pt = page_pool_alloc();
             if (pt == NULL) {
-                return -1;
+                rc = -1;
+                break;
             }
 
             pd[pd_index] = page_phys(pt) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
@@ -1329,7 +1335,9 @@ int port_x86_64_paging_map_user(k_u64_t cr3, k_u64_t vaddr, k_u64_t paddr, k_siz
         pt[pt_index] = (physical_address & ~(k_u64_t)(PAGE_SIZE - 1u)) | entry_flags;
     }
 
-    return 0;
+    k_port_exit_critical();
+
+    return rc;
 }
 
 /*
@@ -1621,28 +1629,31 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    int rc = 0;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return 0;
     }
+
+    k_port_enter_critical();
 
     pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
     pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
 
     if (pt == NULL) {
-        return 0;
+        goto out;
     }
 
     entry = pt[pt_index];
     if ((entry & PTE_PRESENT) == 0 || (entry & PTE_COW) == 0) {
-        return 0;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
     if (new_frame == 0) {
-        return 0;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1656,19 +1667,17 @@ int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
-
-    /*
-     * The copy is counted in the context that made it, and the count goes to
-     * the log when that task ends - not one line per page, which would land
-     * inside the output of a program that prints (ADR 0057). The debug line
-     * names the page for a person with the log level of the debug.
-     */
+    frame_release_locked(old_frame);
     port_x86_64_task_cow_copy();
-    klog(K_LOG_LEVEL_DEBUG, "x86-64: copy on write of the page at 0x%08x%08x",
-         (unsigned)(vaddr >> 32), (unsigned)(vaddr & 0xFFFFFFFFu));
+    rc = 1;
 
-    return 1;
+out:
+    k_port_exit_critical();
+    if (rc != 0) {
+        klog(K_LOG_LEVEL_DEBUG, "x86-64: copy on write of the page at 0x%08x%08x",
+             (unsigned)(vaddr >> 32), (unsigned)(vaddr & 0xFFFFFFFFu));
+    }
+    return rc;
 }
 
 /*
