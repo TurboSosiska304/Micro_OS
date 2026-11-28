@@ -218,6 +218,10 @@ static k_u64_t g_page_bitmap[PAGE_POOL_WORDS];
  * when it is on.
  */
 #define PORT_FRAME_DIAG 1
+/* The per-frame journal is far too verbose for a live console: every alloc
+ * and free lands between a shell command and its answer. Keep it off in a
+ * normal run; only invariant violations print, which are rare. */
+#define PORT_FRAME_TRACE 0
 
 /*
  * One reference per page of the arena. A fork makes two spaces point at the
@@ -489,7 +493,7 @@ k_u64_t port_x86_64_frame_alloc(void)
 #endif
     k_port_exit_critical();
 
-#if PORT_FRAME_DIAG
+#if PORT_FRAME_TRACE
     if (address != 0) {
         struct task *self = task_self();
         klog(K_LOG_LEVEL_ERROR, "frame-alloc: %08x%08x pid=%u cpu=%u cr3=%08x%08x",
@@ -534,7 +538,7 @@ void port_x86_64_frame_release(k_u64_t address)
     frame_release_locked(address);
     k_port_exit_critical();
 
-#if PORT_FRAME_DIAG
+#if PORT_FRAME_TRACE
     if (frame_index(address, &index)) {
         struct task *self = task_self();
         klog(K_LOG_LEVEL_ERROR, "frame-free: %08x%08x refs=%u pid=%u cpu=%u cr3=%08x%08x",
