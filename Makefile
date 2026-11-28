@@ -318,7 +318,7 @@ X86_DISPLAY ?= gtk
 # refuse the many cores before the kernel has a way to say why: `make SMP=OFF`
 # builds the same image that brings up only the processor it booted on, and a
 # stick of it is the first thing to try on a machine that resets at the boot.
-SMP ?= ON
+SMP ?= OFF
 
 x86-build:
 	cmake -B $(X86_BUILD) -S ports/port_x86_64 -G Ninja -DCMAKE_BUILD_TYPE=Release \
