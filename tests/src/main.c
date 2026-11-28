@@ -44,6 +44,7 @@ static void run_tests(void *arg)
     test_root();
     test_volume();
     test_install();
+    test_install_fs();
     test_power();
     test_render();
     test_task();
