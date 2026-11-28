@@ -38,6 +38,7 @@
 #include "kernel/log.h"
 #include "kernel/mm.h"
 #include "kernel/port/cpu.h"
+#include "kernel/sched.h"
 #include "kernel/port/lock.h"
 #include "port_x86_64_task.h"
 
@@ -1361,17 +1362,20 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    int rc = 0;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return 0;
     }
+
+    k_port_enter_critical();
 
     pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
     pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
 
     if (pt == NULL) {
-        return 0;
+        goto out;
     }
 
     entry = pt[pt_index];
@@ -1380,13 +1384,13 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
      * writable is this case; a kernel page of rodata is a bug of the kernel
      * and the machine stops there, as it always did. */
     if ((entry & (PTE_PRESENT | PTE_USER | PTE_WRITABLE)) != (PTE_PRESENT | PTE_USER)) {
-        return 0;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
     if (new_frame == 0) {
-        return 0;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1394,9 +1398,12 @@ int port_x86_64_paging_allow_kernel_write(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | PTE_PRESENT | PTE_WRITABLE | PTE_USER | PTE_NX;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
+    frame_release_locked(old_frame);
+    rc = 1;
 
-    return 1;
+out:
+    k_port_exit_critical();
+    return rc;
 }
 
 /*
@@ -1423,7 +1430,7 @@ void *port_x86_64_paging_map_page(k_u64_t cr3, k_u64_t vaddr, k_u32_t flags)
     page = port_x86_64_paging_phys(cr3, vaddr);
 
     if (page == NULL) {
-        port_x86_64_frame_release(frame);
+        port_x86_64_paging_unmap_page(cr3, vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
         return NULL;
     }
 
@@ -1468,32 +1475,36 @@ bool port_x86_64_paging_page_writable(k_u64_t cr3, k_u64_t vaddr)
  * that the kernel is about to write. */
 bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr)
 {
-    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
-    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t pd_index;
+    k_u64_t pt_index;
     k_u64_t *pt;
     k_u64_t entry;
     k_u64_t old_frame;
     k_u64_t new_frame;
+    bool rc = false;
 
     if (vaddr < PORT_X86_64_USER_BASE || vaddr >= PORT_X86_64_USER_LIMIT) {
         return false;
     }
 
+    k_port_enter_critical();
+
+    pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
     if (pt == NULL) {
-        return false;
+        goto out;
     }
 
     entry = pt[pt_index];
     if ((entry & (PTE_PRESENT | PTE_USER)) != (PTE_PRESENT | PTE_USER)) {
-        return false;
+        goto out;
     }
 
     old_frame = entry & PTE_ADDRESS;
     new_frame = port_x86_64_frame_alloc();
-
     if (new_frame == 0) {
-        return false;
+        goto out;
     }
 
     memcpy((void *)(uintptr_t)new_frame, (const void *)(uintptr_t)old_frame, PAGE_SIZE);
@@ -1501,16 +1512,19 @@ bool port_x86_64_paging_page_private(k_u64_t cr3, k_u64_t vaddr)
     pt[pt_index] = new_frame | (entry & PTE_NX) | PTE_PRESENT | PTE_WRITABLE | PTE_USER;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(old_frame);
+    frame_release_locked(old_frame);
+    rc = true;
 
-    return true;
+out:
+    k_port_exit_critical();
+    return rc;
 }
 
 /* Unmap one page and give its frame back. */
 void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
 {
-    k_u64_t pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
-    k_u64_t pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+    k_u64_t pd_index;
+    k_u64_t pt_index;
     k_u64_t *pt;
     k_u64_t entry;
 
@@ -1518,20 +1532,27 @@ void port_x86_64_paging_unmap_page(k_u64_t cr3, k_u64_t vaddr)
         return;
     }
 
+    k_port_enter_critical();
+
+    pd_index = (vaddr >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (vaddr >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
     pt = space_pt(cr3, pd_index);
     if (pt == NULL) {
+        k_port_exit_critical();
         return;
     }
 
     entry = pt[pt_index];
     if ((entry & PTE_PRESENT) == 0) {
+        k_port_exit_critical();
         return;
     }
 
     pt[pt_index] = 0;
     invlpg(vaddr & ~(k_u64_t)(PAGE_SIZE - 1u));
 
-    port_x86_64_frame_release(entry & PTE_ADDRESS);
+    frame_release_locked(entry & PTE_ADDRESS);
+    k_port_exit_critical();
 }
 
 /*
@@ -1893,4 +1914,56 @@ k_u32_t port_x86_64_paging_audit(k_u64_t cr3)
 void port_x86_64_paging_switch(k_u64_t cr3)
 {
     write_cr3(cr3);
+}
+void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u64_t rip,
+                                    k_u32_t vector, k_u32_t pid)
+{
+    k_u64_t pd_index;
+    k_u64_t pt_index;
+    k_u64_t *pd;
+    k_u64_t *pt;
+    k_u64_t pde = 0;
+    k_u64_t pte = 0;
+    k_u16_t ref = 0;
+    k_u32_t cpu = k_port_cpu_id();
+    k_u32_t ticks = k_sched_ticks();
+
+    (void)error;
+    (void)rip;
+    (void)vector;
+
+    pd_index = (va >> 21) & (TABLE_ENTRIES - 1u);
+    pt_index = (va >> PAGE_SHIFT) & (TABLE_ENTRIES - 1u);
+
+    k_port_enter_critical();
+    pd = space_pd(cr3);
+    if (pd != NULL) {
+        pde = pd[pd_index];
+        if ((pde & PTE_PRESENT) != 0 && (pde & PTE_PAGE_SIZE) == 0) {
+            pt = table_entry(pde);
+            pte = pt[pt_index];
+            if ((pte & PTE_PRESENT) != 0) {
+                k_size_t index;
+                k_u64_t frame = pte & PTE_ADDRESS;
+                if (frame_index(frame, &index)) {
+                    ref = g_frame_ref[index];
+                }
+            }
+        }
+    }
+    k_port_exit_critical();
+
+    klog(K_LOG_LEVEL_ERROR,
+         "pgfault-dbg: cpu %u pid %u ticks %u cr3 0x%08x%08x va 0x%08x%08x err 0x%08x%08x "
+         "rip 0x%08x%08x vec %u pde 0x%08x%08x pte 0x%08x%08x P %u U %u W %u COW %u NX %u "
+         "frame 0x%08x%08x ref %u",
+         (unsigned)cpu, (unsigned)pid, (unsigned)ticks, (unsigned)(cr3 >> 32),
+         (unsigned)(cr3 & 0xFFFFFFFFu), (unsigned)(va >> 32), (unsigned)(va & 0xFFFFFFFFu),
+         (unsigned)(error >> 32), (unsigned)(error & 0xFFFFFFFFu), (unsigned)(rip >> 32),
+         (unsigned)(rip & 0xFFFFFFFFu), (unsigned)vector, (unsigned)(pde >> 32),
+         (unsigned)(pde & 0xFFFFFFFFu), (unsigned)(pte >> 32), (unsigned)(pte & 0xFFFFFFFFu),
+         (unsigned)((pte & PTE_PRESENT) != 0), (unsigned)((pte & PTE_USER) != 0),
+         (unsigned)((pte & PTE_WRITABLE) != 0), (unsigned)((pte & PTE_COW) != 0),
+         (unsigned)((pte & PTE_NX) != 0), (unsigned)((pte & PTE_ADDRESS) >> 32),
+         (unsigned)((pte & PTE_ADDRESS) & 0xFFFFFFFFu), (unsigned)ref);
 }

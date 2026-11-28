@@ -530,6 +530,10 @@ void port_x86_64_paging_space_sync_kernel(k_u64_t cr3, k_u64_t vaddr);
  */
 int port_x86_64_paging_handle_cow(k_u64_t cr3, k_u64_t vaddr);
 
+/* Debug dump for a user fault: PTE, frame refcount, cpu, ticks. */
+void port_x86_64_paging_debug_fault(k_u64_t cr3, k_u64_t va, k_u64_t error, k_u64_t rip,
+                                    k_u32_t vector, k_u32_t pid);
+
 /* The CR3 in the register of the processor right now. */
 k_u64_t port_x86_64_current_cr3(void);
 /* Make `cr3` the page table of the processor. */

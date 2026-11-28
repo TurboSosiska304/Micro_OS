@@ -1539,6 +1539,9 @@ void port_x86_64_program_fault(k_u64_t vector, k_u64_t error, k_u64_t address, k
 {
     struct task *self = task_self();
 
+    port_x86_64_paging_debug_fault(port_x86_64_current_cr3(), address, error, rip, (k_u32_t)vector,
+                                   self != NULL ? self->pid : 0u);
+
     /*
      * The error code is part of the line because it names the access: the
      * program that fetched an NX page and the one that wrote its own text
