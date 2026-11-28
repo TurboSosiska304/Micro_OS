@@ -73,19 +73,29 @@ bool k_mm_prot_allowed(k_u32_t prot)
 
 static struct k_mm_space *space_find(k_mm_space_t handle)
 {
+    struct k_mm_space *found = NULL;
     k_size_t i;
 
     if (handle == 0) {
         return NULL;
     }
 
+    /*
+     * The table of spaces is one piece of the machine's state: two cores
+     * that exec at the same time both look for a slot, and a plain scan
+     * lets two programs claim the same one. The section is short and never
+     * sleeps, so the critical section of the port is enough (ADR 0012).
+     */
+    k_port_enter_critical();
     for (i = 0; i < K_ARRAY_SIZE(g_spaces); i++) {
         if (g_spaces[i].used && g_spaces[i].handle == handle) {
-            return &g_spaces[i];
+            found = &g_spaces[i];
+            break;
         }
     }
+    k_port_exit_critical();
 
-    return NULL;
+    return found;
 }
 
 static struct k_mm_space *space_get(k_mm_space_t handle)
@@ -97,18 +107,30 @@ static struct k_mm_space *space_get(k_mm_space_t handle)
         return space;
     }
 
+    k_port_enter_critical();
+    /* A second core may have claimed a slot between the two sections. */
     for (i = 0; i < K_ARRAY_SIZE(g_spaces); i++) {
-        if (!g_spaces[i].used) {
-            g_spaces[i].used = true;
-            g_spaces[i].handle = handle;
-            g_spaces[i].regions = NULL;
-            g_spaces[i].brk = 0;
-            g_spaces[i].brk_base = 0;
-            return &g_spaces[i];
+        if (g_spaces[i].used && g_spaces[i].handle == handle) {
+            space = &g_spaces[i];
+            break;
         }
     }
+    if (space == NULL) {
+        for (i = 0; i < K_ARRAY_SIZE(g_spaces); i++) {
+            if (!g_spaces[i].used) {
+                g_spaces[i].used = true;
+                g_spaces[i].handle = handle;
+                g_spaces[i].regions = NULL;
+                g_spaces[i].brk = 0;
+                g_spaces[i].brk_base = 0;
+                space = &g_spaces[i];
+                break;
+            }
+        }
+    }
+    k_port_exit_critical();
 
-    return NULL;
+    return space;
 }
 
 static k_u64_t page_down(k_u64_t address)
@@ -982,20 +1004,31 @@ int k_mm_fork(k_mm_space_t parent, k_mm_space_t child)
 void k_mm_release(k_mm_space_t handle)
 {
     struct k_mm_space *space = space_find(handle);
+    struct k_mm_region *regions = NULL;
+    struct k_mm_region *region;
 
     if (space == NULL) {
         return;
     }
 
-    while (space->regions != NULL) {
-        struct k_mm_region *region = space->regions;
-
-        space->regions = region->next;
-        region_free(region);
-    }
-
+    /*
+     * The slot goes back to the table under the same section that claims it;
+     * the regions are freed after it, because kmm_free() may sleep and a
+     * critical section may not. A core that claims the slot next sees the
+     * empty region list and cannot reach the ones being freed.
+     */
+    k_port_enter_critical();
+    regions = space->regions;
+    space->regions = NULL;
     space->used = false;
     space->handle = 0;
     space->brk = 0;
     space->brk_base = 0;
+    k_port_exit_critical();
+
+    while (regions != NULL) {
+        region = regions;
+        regions = region->next;
+        region_free(region);
+    }
 }
