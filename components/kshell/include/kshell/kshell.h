@@ -24,7 +24,9 @@
  * P3 arrived, which is why the table has room now.
  */
 #define KSHELL_MAX_COMMANDS 72
-#define KSHELL_MAX_ARGS 8
+/* The install command takes a disk, a size, a filesystem and a quoted
+ * confirmation line: four flags and their four words beside the command. */
+#define KSHELL_MAX_ARGS 12
 #define KSHELL_LINE_MAX 128
 
 /* Return codes of a command handler. */
