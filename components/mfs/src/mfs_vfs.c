@@ -32,6 +32,33 @@ static const struct mfs_code_pair g_codes[] = {
     {MFS_E2BIG, KERR_TOOBIG},   {MFS_ENOTSUP, KERR_NOTSUP}, {MFS_ENOMEM, KERR_NOMEM},
 };
 
+/*
+ * The mount point of the volume the adapter currently answers for. The
+ * filesystem speaks paths inside itself; the VFS hands the adapter the whole
+ * path of the tree. The root is mounted at "/", where the two are the same,
+ * and a second MicroFS volume - the target of an install - is mounted below
+ * its own point, whose prefix has to be taken away before the call.
+ */
+static char g_vfs_point[VFS_PATH_MAX];
+static k_size_t g_vfs_point_len;
+
+static const char *vfs_path(const char *path)
+{
+    if (path == NULL || g_vfs_point_len <= 1u) {
+        return path;
+    }
+
+    if (strncmp(path, g_vfs_point, g_vfs_point_len) != 0) {
+        return path;
+    }
+
+    if (path[g_vfs_point_len] == '\0') {
+        return "/";
+    }
+
+    return path[g_vfs_point_len] == '/' ? path + g_vfs_point_len : path;
+}
+
 /* The number of the kernel for a result of the filesystem. */
 static int mfs_to_kerr(int rc)
 {
@@ -100,7 +127,7 @@ static int vfs_open_file(void *ctx, const char *path, int flags, struct vfs_file
         return mfs_to_kerr(MFS_EINVAL);
     }
 
-    rc = mfs_open(path, flags, &file->file);
+    rc = mfs_open(vfs_path(path), flags, &file->file);
     if (rc != MFS_OK) {
         return mfs_to_kerr(rc);
     }
@@ -222,7 +249,7 @@ static int vfs_list_dir(void *ctx, const char *path, struct vfs_dirent *out, k_s
     /* The entries of the previous call must not be counted again. */
     memset(g_entries, 0, sizeof(g_entries));
 
-    rc = mfs_list(path, g_entries, MFS_MAX_ENTRIES);
+    rc = mfs_list(vfs_path(path), g_entries, MFS_MAX_ENTRIES);
     if (rc != MFS_OK) {
         return mfs_to_kerr(rc);
     }
@@ -306,7 +333,7 @@ static int vfs_stat_file(void *ctx, const char *path, struct vfs_stat *out)
 
     memset(&dirent, 0, sizeof(dirent));
 
-    rc = mfs_stat(path, &inode, &dirent);
+    rc = mfs_stat(vfs_path(path), &inode, &dirent);
     if (rc != MFS_OK) {
         return mfs_to_kerr(rc);
     }
@@ -340,7 +367,7 @@ static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
 
     memset(&dirent, 0, sizeof(dirent));
 
-    rc = mfs_stat(path, &inode, &dirent);
+    rc = mfs_stat(vfs_path(path), &inode, &dirent);
     if (rc != MFS_OK) {
         return mfs_to_kerr(rc);
     }
@@ -372,19 +399,19 @@ static int vfs_statx_file(void *ctx, const char *path, struct vfs_statx *out)
 static int vfs_make_dir(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
-    return mfs_to_kerr(mfs_mkdir(path));
+    return mfs_to_kerr(mfs_mkdir(vfs_path(path)));
 }
 
 static int vfs_remove(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
-    return mfs_to_kerr(mfs_unlink(path));
+    return mfs_to_kerr(mfs_unlink(vfs_path(path)));
 }
 
 static int vfs_remove_dir(void *ctx, const char *path)
 {
     K_UNUSED(ctx);
-    return mfs_to_kerr(mfs_rmdir(path));
+    return mfs_to_kerr(mfs_rmdir(vfs_path(path)));
 }
 
 static int vfs_rename_object(void *ctx, const char *from, const char *to)
@@ -396,13 +423,13 @@ static int vfs_rename_object(void *ctx, const char *from, const char *to)
 static int vfs_set_mode(void *ctx, const char *path, k_u32_t mode)
 {
     K_UNUSED(ctx);
-    return mfs_to_kerr(mfs_chmod(path, mode));
+    return mfs_to_kerr(mfs_chmod(vfs_path(path), mode));
 }
 
 static int vfs_set_owner(void *ctx, const char *path, k_u32_t owner)
 {
     K_UNUSED(ctx);
-    return mfs_to_kerr(mfs_chown(path, owner));
+    return mfs_to_kerr(mfs_chown(vfs_path(path), owner));
 }
 
 static int vfs_set_group(void *ctx, const char *path, k_u32_t group)
@@ -414,7 +441,7 @@ static int vfs_set_group(void *ctx, const char *path, k_u32_t group)
      * MFS_ENOTSUP, which mfs_to_kerr turns into KERR_NOTSUP: the attribute is
      * not there, the call is not forbidden. A version 3 volume keeps it.
      */
-    return mfs_to_kerr(mfs_chgrp(path, group));
+    return mfs_to_kerr(mfs_chgrp(vfs_path(path), group));
 }
 
 static int mfs_statfs_volume(void *ctx, struct vfs_statfs *out)
@@ -462,5 +489,16 @@ static const struct vfs_operations g_mfs_operations = {
 
 int mfs_vfs_register(const char *point)
 {
-    return vfs_mount(point, &g_mfs_operations, NULL);
+    int rc = vfs_mount(point, &g_mfs_operations, NULL);
+
+    if (rc == 0 && point != NULL) {
+        (void)strncpy(g_vfs_point, point, sizeof(g_vfs_point) - 1u);
+        g_vfs_point[sizeof(g_vfs_point) - 1u] = '\0';
+        g_vfs_point_len = strlen(g_vfs_point);
+        while (g_vfs_point_len > 1u && g_vfs_point[g_vfs_point_len - 1u] == '/') {
+            g_vfs_point[--g_vfs_point_len] = '\0';
+        }
+    }
+
+    return rc;
 }

@@ -1,28 +1,50 @@
 /*
- * Micro OS — `install`, the dry-run skeleton of the disk installer.
+ * Micro OS — `install`, the disk installer of the x86-64 machine.
  *
  * The command reads the partition table of a disk, finds a gap large enough
- * for the requested size, and prints the plan. It writes nothing: every run
- * without an explicit confirmation is a dry-run, and in this lane even a
- * confirmed run refuses with "not implemented" until the later lanes land.
+ * for the requested size and prints the plan. A run without the exact
+ * confirmation is a dry run and writes nothing. After the confirmation the
+ * installer appends one entry, formats it, mounts it, writes the tree a boot
+ * expects and copies the running system with a SHA-256 manifest (L3 and L4).
+ * It then mounts the volume read-only and verifies every copied file before
+ * saying "installed"; --verify repeats that check without writing anything.
  *
- * The safety contract is the one of docs/plan-install.md: one appended entry
- * in a gap the installer verified, no whole-disk format, no silent ESP
- * rewrite, the other OS stays bootable, and dry-run is the default.
+ * The safety contract is the one of the plan: one appended entry in a gap the
+ * installer verified, no whole-disk format, no silent ESP rewrite, the other
+ * OS stays bootable, and dry-run is the default. An error after the table
+ * write is reported honestly: the entry stays, and removing it is a separate
+ * decision of the person at the console.
  */
 #include "kshell/kshell.h"
 
 #include <stdio.h>
 #include <string.h>
 
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+#include "fs_ext2/ext2.h"
+#endif
 #include "kernel/blockdev.h"
 #include "kernel/errno.h"
+#include "kernel/install.h"
 #include "kernel/partition.h"
 #include "kernel/vfs.h"
+#include "mfs/mfs.h"
 #include "port_x86_64.h"
+#include "port_x86_64_install.h"
+#include "port_x86_64_install_copy.h"
 
 #define INSTALL_GIB (1024ULL * 1024ULL * 1024ULL)
 #define INSTALL_MIB (1024ULL * 1024ULL)
+#define INSTALL_POINT "/mnt/target"
+#define INSTALL_LABEL "MICROOS_ROOT"
+#define INSTALL_VOLUME_NAME "installvol"
+#define INSTALL_MFS_RECORDS 256u
+
+/* The type GUID of a Linux data partition, the one the appended entry uses. */
+static const k_u8_t g_guid_linux[PARTITION_GUID_SIZE] = {
+    0xAFu, 0x3Du, 0xC6u, 0x0Fu, 0x83u, 0x84u, 0x72u, 0x47u,
+    0x8Eu, 0x79u, 0x3Du, 0x69u, 0xD8u, 0x47u, 0x7Du, 0xE4u,
+};
 
 static bool streq(const char *a, const char *b)
 {
@@ -140,12 +162,307 @@ static void print_size_gib(k_u64_t sectors)
                   (unsigned long long)(gib10 % 10u));
 }
 
+/*
+ * MicroFS asks for sectors of one kilobyte. A disk whose sectors are smaller
+ * gets a view of the new partition at that grain; the view is registered only
+ * for the install and leaves the table with it. Ext2 opens its own view when
+ * it mounts, so it needs none here.
+ */
+struct install_volume {
+    struct k_blockdev_view view;
+    const char *name;
+    bool opened;
+};
+
+static int install_volume_open(const struct k_blockdev *part, k_u32_t grain,
+                               struct install_volume *out)
+{
+    memset(out, 0, sizeof(*out));
+    out->name = part->name;
+
+    if (part->sector_size == grain) {
+        return 0;
+    }
+
+    if (k_blockdev_view_open(&out->view, part, grain) != 0) {
+        return KERR_NOTSUP;
+    }
+    out->view.dev.name = INSTALL_VOLUME_NAME;
+    if (k_blockdev_register(&out->view.dev) != 0) {
+        k_blockdev_view_close(&out->view);
+        return KERR_BUSY;
+    }
+    out->opened = true;
+    out->name = out->view.dev.name;
+
+    return 0;
+}
+
+static void install_volume_close(struct install_volume *out)
+{
+    if (out->opened) {
+        (void)k_blockdev_unregister(&out->view.dev);
+        k_blockdev_view_close(&out->view);
+        out->opened = false;
+    }
+}
+
+/* The entry the append made, found again after the table was re-read. */
+static int find_new_partition(const struct k_blockdev *disk, struct partition_inventory *after,
+                              k_u64_t first_lba, const char **name)
+{
+    k_u32_t i;
+
+    for (i = 0; i < after->entry_count; i++) {
+        const struct partition_entry_info *entry = &after->entries[i];
+
+        if (entry->first_lba == first_lba && streq(entry->label, INSTALL_LABEL)) {
+            *name = partition_name(disk, entry->index - 1u);
+            return *name != NULL ? 0 : KERR_NOENT;
+        }
+    }
+
+    return KERR_NOENT;
+}
+
+/*
+ * The honest ending of a failure after the table was written. The GPT entry
+ * is deliberately left in place: a silent rollback of a table a person
+ * watched being written is a worse surprise than a partition to remove.
+ */
+static int install_after_gpt_error(const char *step, int rc, const char *disk_name)
+{
+    kshell_printf("install: %s failed (%d)\n", step, rc);
+    kshell_printf("install: the GPT entry \"%s\" is still on %s; it was not removed\n",
+                  INSTALL_LABEL, disk_name);
+    kshell_printf("install: the volume may hold a formatted, partly copied tree; this is not an "
+                  "installed, verified system\n");
+    kshell_printf("install: inspect it with 'cat /proc/blockdev'; to start over, remove the "
+                  "entry on purpose with a partitioning tool, then format again\n");
+
+    return KSHELL_ERROR;
+}
+
+static int install_write(const struct k_blockdev *disk, struct partition_inventory *inv,
+                         k_u64_t need_sectors, const char *fs, const struct partition_gap *gap)
+{
+    struct install_volume volume;
+    struct install_record rec;
+    const char *part_name = NULL;
+    const struct k_blockdev *part;
+    bool writes_open = false;
+    bool mounted = false;
+    k_u64_t start_lba = gap->first_lba; /* the plan's gap, before inv is re-read */
+    k_u32_t files = 0u;
+    int rc;
+
+    /* The rule of ADR 0041 guards mounts. An install the operator confirmed
+     * is the act that creates the volume, so this one time the table area and
+     * the new partition are writable. */
+    (void)port_x86_64_install_writes(disk, true);
+    writes_open = true;
+
+    rc = partition_append(disk, start_lba, need_sectors, g_guid_linux, INSTALL_LABEL);
+    if (rc != 0) {
+        (void)port_x86_64_install_writes(disk, false);
+        kshell_printf("install: the GPT entry was not written (%d); the disk is unchanged\n", rc);
+        return KSHELL_ERROR;
+    }
+    kshell_printf("install: GPT entry \"%s\" appended and verified\n", INSTALL_LABEL);
+
+    rc = partition_scan(disk);
+    if (rc < 0) {
+        rc = KERR_IO;
+        goto fail;
+    }
+    rc = partition_inventory(disk, inv);
+    if (rc != 0) {
+        goto fail;
+    }
+    rc = find_new_partition(disk, inv, start_lba, &part_name);
+    if (rc != 0) {
+        goto fail;
+    }
+    part = k_blockdev_find(part_name);
+    if (part == NULL) {
+        rc = KERR_NOENT;
+        goto fail;
+    }
+    kshell_printf("install: new partition %s, %llu sector(s)\n", part_name,
+                  (unsigned long long)need_sectors);
+
+    rc = install_volume_open(part, streq(fs, "ext2") ? part->sector_size : 1024u, &volume);
+    if (rc != 0) {
+        goto fail;
+    }
+
+    if (streq(fs, "ext2")) {
+#if defined(MICRO_OS_FS_EXT2) && MICRO_OS_FS_EXT2
+        rc = ext2_format(part);
+#else
+        kshell_printf("install: this image has no ext2 support\n");
+        rc = KERR_NOTSUP;
+#endif
+    } else {
+        const struct k_blockdev *medium = volume.opened ? &volume.view.dev : part;
+
+        rc = mfs_format(medium, INSTALL_MFS_RECORDS);
+    }
+    if (rc != 0) {
+        install_volume_close(&volume);
+        goto fail;
+    }
+    kshell_printf("install: %s filesystem created on %s\n", fs, volume.name);
+
+    rc = vfs_mkdir_p(INSTALL_POINT);
+    if (rc != 0 && rc != KERR_EXIST) {
+        install_volume_close(&volume);
+        goto fail;
+    }
+    rc = vfs_mount_type(INSTALL_POINT, streq(fs, "ext2") ? "ext2" : "mfs", volume.name);
+    if (rc != 0) {
+        install_volume_close(&volume);
+        goto fail;
+    }
+    mounted = true;
+
+    rec.volume = part_name;
+    rec.fs = fs;
+    rec.boot_mode = "uefi";
+    rec.start_lba = start_lba;
+    rec.sector_count = need_sectors;
+    rc = install_tree_create(INSTALL_POINT, &rec);
+    if (rc != 0) {
+        goto fail;
+    }
+    kshell_printf("install: tree written: /etc/volumes, /etc/install, /dev, /proc, /tmp, /mnt\n");
+
+    rc = port_x86_64_install_copy(INSTALL_POINT, &files);
+    if (rc != 0) {
+        goto fail;
+    }
+    kshell_printf("install: copied %u file(s): the kernel module, /bin and /etc defaults\n",
+                  (unsigned)files);
+
+    rc = vfs_umount(INSTALL_POINT);
+    mounted = false;
+    if (rc != 0) {
+        goto fail;
+    }
+
+    (void)port_x86_64_install_writes(disk, false);
+    writes_open = false;
+
+    /*
+     * The second mount asks for no writes: the bytes are read back through the
+     * same VFS, but nothing in this pass can change the volume. The check is
+     * the gate; only after it does the command say "installed".
+     */
+    rc = vfs_mount_type(INSTALL_POINT, streq(fs, "ext2") ? "ext2" : "mfs", volume.name);
+    if (rc != 0) {
+        install_volume_close(&volume);
+        return install_after_gpt_error("the read-only mount", rc, disk->name);
+    }
+    mounted = true;
+
+    rc = port_x86_64_install_verify(INSTALL_POINT, &files);
+    (void)vfs_umount(INSTALL_POINT);
+    mounted = false;
+    install_volume_close(&volume);
+
+    if (rc != 0) {
+        return install_after_gpt_error("verification", rc, disk->name);
+    }
+
+    kshell_printf("installed, verified: %u file(s) on %s; boot files and NVRAM were not touched\n",
+                  (unsigned)files, part_name);
+
+    return KSHELL_OK;
+
+fail:
+    if (mounted) {
+        (void)vfs_umount(INSTALL_POINT);
+    }
+    install_volume_close(&volume);
+    if (writes_open) {
+        (void)port_x86_64_install_writes(disk, false);
+    }
+
+    return install_after_gpt_error("install", rc, disk->name);
+}
+
+/* The entry L4 appended, found again by its label for a later check. */
+static int find_installed_partition(const struct k_blockdev *disk,
+                                    const struct partition_inventory *inv, const char **name)
+{
+    k_u32_t i;
+
+    for (i = 0u; i < inv->entry_count; i++) {
+        if (streq(inv->entries[i].label, INSTALL_LABEL)) {
+            *name = partition_name(disk, inv->entries[i].index - 1u);
+            return *name != NULL ? 0 : KERR_NOENT;
+        }
+    }
+
+    return KERR_NOENT;
+}
+
+/* A second, read-only pass over a volume that was installed earlier. It opens
+ * no write door and appends nothing: a failed check changes no bytes. */
+static int install_verify_volume(const struct k_blockdev *disk, const char *fs,
+                                 const char *part_name)
+{
+    struct install_volume volume;
+    const struct k_blockdev *part = k_blockdev_find(part_name);
+    k_u32_t files = 0u;
+    bool mounted = false;
+    int rc;
+
+    if (part == NULL) {
+        kshell_printf("install: %s has no partition %s\n", disk->name, part_name);
+        return KSHELL_ERROR;
+    }
+
+    rc = install_volume_open(part, streq(fs, "mfs") ? 1024u : part->sector_size, &volume);
+    if (rc != 0) {
+        kshell_printf("install: %s: cannot open %s for verification (%d)\n", disk->name, part_name,
+                      rc);
+        return KSHELL_ERROR;
+    }
+
+    rc = vfs_mkdir_p(INSTALL_POINT);
+    if (rc == KERR_EXIST) {
+        rc = 0;
+    }
+    if (rc == 0) {
+        rc = vfs_mount_type(INSTALL_POINT, streq(fs, "ext2") ? "ext2" : "mfs", volume.name);
+        if (rc == 0) {
+            mounted = true;
+            rc = port_x86_64_install_verify(INSTALL_POINT, &files);
+        }
+    }
+    if (mounted) {
+        (void)vfs_umount(INSTALL_POINT);
+    }
+    install_volume_close(&volume);
+
+    if (rc != 0) {
+        kshell_printf("install: verification failed (%d); the volume is left as it is\n", rc);
+        return KSHELL_ERROR;
+    }
+
+    kshell_printf("installed, verified: %u file(s) on %s\n", (unsigned)files, part_name);
+    return KSHELL_OK;
+}
+
 static int install_main(int argc, char **argv)
 {
     const char *disk_name = NULL;
     const char *size_text = NULL;
     const char *fs = NULL;
     const char *confirm = NULL;
+    const char *part_name = NULL;
+    bool verify_mode = false;
     bool dry_run = true;
     k_u64_t size_bytes = 0;
     char size_label[32];
@@ -172,25 +489,18 @@ static int install_main(int argc, char **argv)
             dry_run = false;
         } else if (streq(argv[i], "--dry-run")) {
             dry_run = true;
+        } else if (streq(argv[i], "--verify")) {
+            verify_mode = true;
         } else if (streq(argv[i], "--help") || streq(argv[i], "-h")) {
             kshell_printf("usage: install --disk NAME --size N{G|M} --fs {ext2|mfs} [--confirm "
                           "\"INSTALL NAME SIZE\"]\n");
+            kshell_printf("       install --disk NAME --fs {ext2|mfs} --verify\n");
             kshell_printf("  dry-run by default: prints the plan, writes nothing\n");
             return KSHELL_OK;
         } else {
             kshell_printf("install: unknown argument: %s\n", argv[i]);
             return KSHELL_USAGE;
         }
-    }
-
-    if (disk_name == NULL || size_text == NULL) {
-        kshell_printf("install: --disk and --size are required\n");
-        return KSHELL_USAGE;
-    }
-
-    if (!parse_size(size_text, &size_bytes, size_label, sizeof(size_label))) {
-        kshell_printf("install: bad size: %s (use N{G|M})\n", size_text);
-        return KSHELL_USAGE;
     }
 
     if (fs == NULL) {
@@ -200,6 +510,47 @@ static int install_main(int argc, char **argv)
 
     if (!streq(fs, "ext2") && !streq(fs, "mfs")) {
         kshell_printf("install: unsupported --fs: %s (use ext2 or mfs)\n", fs);
+        return KSHELL_USAGE;
+    }
+
+    if (verify_mode) {
+        if (size_text != NULL || confirm != NULL || disk_name == NULL) {
+            kshell_printf("install: --verify takes --disk NAME and --fs only\n");
+            return KSHELL_USAGE;
+        }
+
+        disk = k_blockdev_find(disk_name);
+        if (disk == NULL) {
+            kshell_printf("install: no such disk: %s\n", disk_name);
+            return KSHELL_ERROR;
+        }
+        if (disk_is_busy(disk)) {
+            kshell_printf("install: %s is busy (live medium or mounted)\n", disk_name);
+            return KSHELL_ERROR;
+        }
+
+        rc = partition_inventory(disk, &inv);
+        if (rc != 0) {
+            kshell_printf("install: cannot read the partition table of %s (%d)\n", disk_name, rc);
+            return KSHELL_ERROR;
+        }
+
+        rc = find_installed_partition(disk, &inv, &part_name);
+        if (rc != 0) {
+            kshell_printf("install: no \"%s\" entry on %s\n", INSTALL_LABEL, disk_name);
+            return KSHELL_ERROR;
+        }
+
+        return install_verify_volume(disk, fs, part_name);
+    }
+
+    if (disk_name == NULL || size_text == NULL) {
+        kshell_printf("install: --disk and --size are required\n");
+        return KSHELL_USAGE;
+    }
+
+    if (!parse_size(size_text, &size_bytes, size_label, sizeof(size_label))) {
+        kshell_printf("install: bad size: %s (use N{G|M})\n", size_text);
         return KSHELL_USAGE;
     }
 
@@ -251,8 +602,9 @@ static int install_main(int argc, char **argv)
     print_size_gib(gap->sectors);
     kshell_printf(" free, aligned, unclaimed by any entry\n");
 
-    kshell_printf("action: append entry \"MICROOS_ROOT\" (Linux data GUID) of %s,\n", size_label);
-    kshell_printf("        format as %s, mount as /, install Micro OS 2.3\n", fs);
+    kshell_printf("action: append entry \"%s\" (Linux data GUID) of %s,\n", INSTALL_LABEL,
+                  size_label);
+    kshell_printf("        format as %s, mount as /, install Micro OS 2.4\n", fs);
 
     kshell_printf("boot:   copy \\EFI\\MICROOS\\BOOTX64.EFI to ESP p%u; the NVRAM entry is asked\n",
                   (unsigned)esp->index);
@@ -273,20 +625,37 @@ static int install_main(int argc, char **argv)
         return KSHELL_ERROR;
     }
 
-    kshell_printf("install: not implemented (this lane is dry-run only)\n");
-    return KSHELL_ERROR;
+    return install_write(disk, &inv, need_sectors, fs, gap);
+}
+
+int port_x86_64_install_writes(const struct k_blockdev *disk, bool open)
+{
+    if (disk != NULL && disk->name != NULL) {
+        if (strcmp(disk->name, "nvme0") == 0) {
+            nvme_install_writes(open);
+            return 0;
+        }
+        if (strcmp(disk->name, "ahci0") == 0) {
+            ahci_install_writes(open);
+            return 0;
+        }
+    }
+
+    return k_blockdev_gated(disk) ? KERR_NOTSUP : 0;
 }
 
 int port_x86_64_install_register(void)
 {
     static const struct kshell_help help = {
-        .summary = "install Micro OS to a disk (dry-run skeleton)",
-        .usage =
-            "install --disk NAME --size N{G|M} --fs {ext2|mfs} [--confirm \"INSTALL NAME SIZE\"]",
+        .summary = "install Micro OS to a disk (dry-run by default)",
+        .usage = "install --disk NAME --size N{G|M} --fs {ext2|mfs} "
+                 "[--confirm \"INSTALL NAME SIZE\"] | install --disk NAME --fs {ext2|mfs} --verify",
         .detail = "  --disk NAME     target disk (whole disk, not a partition)\n"
                   "  --size N{G|M}   size of the partition to create\n"
                   "  --fs ext2|mfs   filesystem (required, no silent default)\n"
-                  "  --confirm STR   exact confirmation; at this stage: not implemented\n"
+                  "  --confirm STR   exact confirmation; with it: append, format, copy the\n"
+                  "                  system, then mount read-only and verify it\n"
+                  "  --verify        check the copy of an earlier install, read-only\n"
                   "  --dry-run       print the plan, write nothing (default)\n",
         .owns_short_h = false,
     };

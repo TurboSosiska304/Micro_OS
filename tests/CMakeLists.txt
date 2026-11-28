@@ -27,6 +27,7 @@ if(NOT ESP_PLATFORM)
         cases/test_root.c
         cases/test_volume.c
         cases/test_install.c
+        cases/test_install_fs.c
         cases/test_power.c
         cases/test_render.c
         cases/test_boot.c
@@ -607,6 +608,7 @@ if(NOT ESP_PLATFORM)
     # an image links (ADR 0019).
     if(NOT MICRO_OS_FS_EXT2)
         target_sources(microos_tests PRIVATE
+            "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_format.c"
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_core.c"
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_dir.c"
             "${CMAKE_SOURCE_DIR}/components/fs_ext2/src/ext2_write.c"

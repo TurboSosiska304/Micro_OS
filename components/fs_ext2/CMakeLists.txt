@@ -6,6 +6,7 @@
 # the tests are the place where every path of it is exercised (ADR 0019).
 
 set(MICRO_OS_EXT2_SRCS
+    "src/ext2_format.c"
     "src/ext2_core.c"
     "src/ext2_dir.c"
     "src/ext2_write.c"

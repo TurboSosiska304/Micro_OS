@@ -195,6 +195,7 @@ endif()
 set(EXT2_SOURCES)
 if(MICRO_OS_FS_EXT2)
     set(EXT2_SOURCES
+        "${EXT2_DIR}/src/ext2_format.c"
         "${EXT2_DIR}/src/ext2_core.c"
         "${EXT2_DIR}/src/ext2_dir.c"
         "${EXT2_DIR}/src/ext2_write.c"
@@ -1632,6 +1633,7 @@ add_executable(microos64
     src/port_x86_64_task.c
     src/stack.c
     src/install.c
+    src/install_copy.c
     src/blockdev_ram.c
     src/blockdev_module.c
     src/ata.c

@@ -1340,7 +1340,7 @@ static void gpt_header_update_crc(k_u8_t *header)
     write_le32(header + PARTITION_GPT_HEADER_CRC, crc32(header, size));
 }
 
-static void gpt_make_partition_guid(k_u8_t guid[16], k_u64_t start_lba, k_u64_t sector_count)
+void partition_guid(k_u64_t start_lba, k_u64_t sector_count, k_u8_t guid[16])
 {
     /* A deterministic, unique-enough GUID: not random, but stable for the
      * same place on the disk. The installer makes one partition at a time
@@ -1612,7 +1612,7 @@ int partition_append(const struct k_blockdev *disk, k_u64_t start_lba, k_u64_t s
         mem_copy(pe + PARTITION_GPT_ENTRY_TYPE, type_guid, 16u);
         mem_copy(be + PARTITION_GPT_ENTRY_TYPE, type_guid, 16u);
 
-        gpt_make_partition_guid(pguid, start_lba, sector_count);
+        partition_guid(start_lba, sector_count, pguid);
         mem_copy(pe + 16u, pguid, 16u);
         mem_copy(be + 16u, pguid, 16u);
 

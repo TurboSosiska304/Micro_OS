@@ -172,4 +172,11 @@ int partition_inventory(const struct k_blockdev *disk, struct partition_inventor
 int partition_append(const struct k_blockdev *disk, k_u64_t start_lba, k_u64_t sector_count,
                      const k_u8_t type_guid[PARTITION_GUID_SIZE], const char *label);
 
+/*
+ * The partition GUID the append writes for a range: the same place and size
+ * always give the same bytes. The install record prints them so a person can
+ * name the volume by something other than a device name a boot may renumber.
+ */
+void partition_guid(k_u64_t start_lba, k_u64_t sector_count, k_u8_t out[PARTITION_GUID_SIZE]);
+
 #endif /* MICRO_OS_KERNEL_PARTITION_H */
